@@ -1,0 +1,6 @@
+{
+  "phrases": [
+    "private viewing ticket"
+  ],
+  "_note": "如果客户的 WhatsApp 开场白里出现这些短语(不分大小写),Live Reply Tracker 就把这个人当作『广告 lead』,自动建到 Notion 的 Ads Leads 数据库(Lead Received At = 当下)。可以加多个短语,例如不同 project 的关键字。"
+}

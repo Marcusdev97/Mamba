@@ -1,0 +1,48 @@
+{
+  "project": "Mid Valley",
+  "projectAlias": {
+    "Mid Valley": "Gen Starz"
+  },
+  "databases": {
+    "blastLeads": "64b439a288c1415fa36ac890e17c88e6",
+    "adsLeads": "fcfe32f817244929b89085f4af59ade9",
+    "templates": "d8a1bf9c5fdd4c1198f50b91ee41079c",
+    "images": "b8978f28aa004e22a21ff4b95aa00790",
+    "recycleLeads": "fd7bba6715434c5f820a36ead4a582c8",
+    "campaignRuns": "38358de2161380e28f19f7587f3fa932"
+  },
+  "dataSources": {
+    "blastLeads": "b7f288ef-c2dc-4dbd-8071-5e4914e7648c",
+    "adsLeads": "519ee6a3-06f8-43e1-a19d-ea61e0b53181",
+    "templates": "778879c7-fc76-4b0b-b27f-d3b20917dbf1",
+    "images": "90ab9ce5-70c9-4513-8e73-f0c0b1159e96",
+    "recycleLeads": "dd1d3c52-ed37-4fc6-a444-cb12506bd106",
+    "campaignRuns": "38358de2-1613-8045-b4d1-000b4e6a4a11"
+  },
+  "templates": {
+    "en_part1_full": {
+      "pageId": "38858de21613819d9dedf6927b7d54ee",
+      "imagePageId": "38858de216138142881acf5ca5a41f62"
+    },
+    "en_part1_still_looking": {
+      "pageId": "38858de2161381f79b71d7a0ce861f31",
+      "imagePageId": "38858de216138142881acf5ca5a41f62"
+    },
+    "en_part1_quick_update": {
+      "pageId": "38858de2161381cdb81ad8a8b383ac14",
+      "imagePageId": "38858de216138142881acf5ca5a41f62"
+    },
+    "zh_part1_full": {
+      "pageId": "38858de21613810cbb4fd81492ae5a7f",
+      "imagePageId": "38858de216138142881acf5ca5a41f62"
+    },
+    "en_part2_floorplans": {
+      "pageId": "38858de21613816684a4ca03645894a5",
+      "imagePageId": "38858de21613812fba0fc5372fbe888b"
+    },
+    "zh_part2_floorplans": {
+      "pageId": "38858de21613812da02ce610b5c4003b",
+      "imagePageId": "38858de21613812fba0fc5372fbe888b"
+    }
+  }
+}

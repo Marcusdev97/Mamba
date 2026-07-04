@@ -1,0 +1,62 @@
+{
+  "campaignId": "radium_arena",
+  "campaignName": "Radium Arena",
+  "languageSelection": {
+    "mode": "random",
+    "weights": {
+      "en": 50,
+      "zh": 50
+    },
+    "keepPartsInSameLanguage": true
+  },
+  "delivery": {
+    "partGapSeconds": 45,
+    "contactGapSeconds": {
+      "min": 45,
+      "max": 75
+    },
+    "globalSerialSending": true,
+    "cancelPart2WhenCustomerReplies": true,
+    "preventDuplicateContact": true,
+    "requireOpenInstance": true
+  },
+  "personalization": {
+    "sourceColumn": "Name",
+    "placeholders": [
+      "[Name]",
+      "[名字]"
+    ]
+  },
+  "part1": {
+    "variants": [
+      {
+        "id": "ra_zh_price_p1",
+        "language": "zh",
+        "text": "Hi [Name] 👋\nOld Klang Road 有个新 Freehold 项目，刚开放新一批单位。\n💰 RM4XXk 起 🏡 2房 / 3房 / Dual Key 🎁 Developer 帮付律师费 + 家电全送\n老实说，这个价位的 KL Freehold 现在越来越少见 — 也是这一区相对最好入手的新项目之一。\n如果你最近有在看 KL Property，蛮值得了解一下 👌\n折扣 + rebate 后价 · 不想收信息回 STOP",
+        "media": "images/radium_hero_price_navy_en_v1.png"
+      },
+      {
+        "id": "ra_en_price_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\nGot a new Freehold project at Old Klang Road, just released a new batch of units.\n💰 From RM4XXk 🏡 2BR / 3BR / Dual Key 🎁 Developer pays legal fee + free furnishing\nHonestly, this kind of price for KL Freehold is getting quite rare already — and it's one of the easier-entry new projects around this area now.\nIf you're looking at KL property, quite worth to check out 👌\nAfter discount & rebate · reply STOP to opt out",
+        "media": "images/radium_hero_price_navy_en_v1.png"
+      }
+    ]
+  },
+  "part2": {
+    "variants": [
+      {
+        "id": "ra_zh_price_p2",
+        "language": "zh",
+        "text": "顺便发你户型图参考 👇\n📐 Type A — 658 sqft 🛏️ 2 Bedroom 🚿 2 Bathroom\n📐 Type B — 716 sqft 🛏️ 3 Bedroom 🚿 2 Bathroom\n📐 Type C — 920 sqft 🛏️ 3 Bedroom + Dual Key 🚿 2 Bathroom\n我发现很多客户最后都是比较关注这几种 👇\n🔘 2房自住 🔘 3房家庭用 🔘 Dual Key 投资出租\n你比较想了解哪一种呢？ 😊",
+        "media": "images/radium_floorplans_abc_en_v1.png"
+      },
+      {
+        "id": "ra_en_price_p2",
+        "language": "en",
+        "text": "Here's the layout for your reference 👇\n📐 Type A — 658 sqft 🛏️ 2 Bedroom 🚿 2 Bathroom\n📐 Type B — 716 sqft 🛏️ 3 Bedroom 🚿 2 Bathroom\n📐 Type C — 920 sqft 🛏️ 3 Bedroom + Dual Key 🚿 2 Bathroom\nMost people usually end up looking at one of these 👇\n🔘 2BR own stay 🔘 3BR for family 🔘 Dual Key for rental/investment\nWhich one you more keen to know? 😊",
+        "media": "images/radium_floorplans_abc_en_v1.png"
+      }
+    ]
+  }
+}

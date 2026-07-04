@@ -1,0 +1,517 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(appDir, "..");
+const paths = {
+  dataDir: path.join(rootDir, "campaign-data"),
+};
+
+const NOTION_VERSION = "2022-06-28";
+const configPath = path.join(paths.dataDir, "notion_config.json");
+const statePath = path.join(paths.dataDir, "notion_state.json");
+
+const defaultConfig = {
+  project: "Mid Valley",
+  databases: {
+    blastLeads: "64b439a288c1415fa36ac890e17c88e6",
+    adsLeads: "fcfe32f817244929b89085f4af59ade9",
+    templates: "d8a1bf9c5fdd4c1198f50b91ee41079c",
+    images: "b8978f28aa004e22a21ff4b95aa00790",
+    recycleLeads: "fd7bba6715434c5f820a36ead4a582c8",
+    campaignRuns: "38358de2161380e28f19f7587f3fa932",
+  },
+  dataSources: {
+    blastLeads: "b7f288ef-c2dc-4dbd-8071-5e4914e7648c",
+    adsLeads: "519ee6a3-06f8-43e1-a19d-ea61e0b53181",
+    templates: "778879c7-fc76-4b0b-b27f-d3b20917dbf1",
+    images: "90ab9ce5-70c9-4513-8e73-f0c0b1159e96",
+    recycleLeads: "dd1d3c52-ed37-4fc6-a444-cb12506bd106",
+    campaignRuns: "38358de2-1613-8045-b4d1-000b4e6a4a11",
+  },
+  templates: {
+    en_part1_full: {
+      pageId: "38858de21613819d9dedf6927b7d54ee",
+      imagePageId: "38858de216138142881acf5ca5a41f62",
+    },
+    en_part1_still_looking: {
+      pageId: "38858de2161381f79b71d7a0ce861f31",
+      imagePageId: "38858de216138142881acf5ca5a41f62",
+    },
+    en_part1_quick_update: {
+      pageId: "38858de2161381cdb81ad8a8b383ac14",
+      imagePageId: "38858de216138142881acf5ca5a41f62",
+    },
+    zh_part1_full: {
+      pageId: "38858de21613810cbb4fd81492ae5a7f",
+      imagePageId: "38858de216138142881acf5ca5a41f62",
+    },
+    en_part2_floorplans: {
+      pageId: "38858de21613816684a4ca03645894a5",
+      imagePageId: "38858de21613812fba0fc5372fbe888b",
+    },
+    zh_part2_floorplans: {
+      pageId: "38858de21613812da02ce610b5c4003b",
+      imagePageId: "38858de21613812fba0fc5372fbe888b",
+    },
+  },
+};
+
+async function readJson(filePath, fallback) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+async function atomicWrite(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`);
+  await fs.rename(tempPath, filePath);
+}
+
+function cleanId(value) {
+  return String(value ?? "").replace(/[^a-fA-F0-9]/g, "");
+}
+
+function title(value) {
+  return { title: [{ text: { content: String(value ?? "") } }] };
+}
+
+function richText(value) {
+  return { rich_text: [{ text: { content: String(value ?? "").slice(0, 1900) } }] };
+}
+
+function richTextOrEmpty(value) {
+  const text = String(value ?? "").slice(0, 1900);
+  return text ? richText(text) : { rich_text: [] };
+}
+
+function select(name) {
+  return name ? { select: { name } } : undefined;
+}
+
+function selectOrEmpty(name) {
+  return name ? { select: { name } } : { select: null };
+}
+
+function status(name) {
+  return name ? { status: { name } } : undefined;
+}
+
+function phoneNumber(value) {
+  return { phone_number: String(value ?? "") };
+}
+
+function dateValue(iso) {
+  return iso ? { date: { start: iso } } : undefined;
+}
+
+function dateValueOrEmpty(iso) {
+  return iso ? { date: { start: iso } } : { date: null };
+}
+
+function checkbox(value) {
+  return { checkbox: Boolean(value) };
+}
+
+function numberValue(value) {
+  return { number: Number(value ?? 0) };
+}
+
+function relation(ids) {
+  return { relation: [...new Set(ids.filter(Boolean).map((id) => ({ id: cleanId(id) })))] };
+}
+
+function pageRelationIds(page, propertyName) {
+  return page?.properties?.[propertyName]?.relation?.map((item) => cleanId(item.id)) ?? [];
+}
+
+function pageNumber(page, propertyName) {
+  return Number(page?.properties?.[propertyName]?.number ?? 0);
+}
+
+function pageSelectName(page, propertyName) {
+  return page?.properties?.[propertyName]?.select?.name ?? page?.properties?.[propertyName]?.status?.name ?? "";
+}
+
+function languageLabel(language) {
+  if (String(language).toLowerCase() === "zh") return "ZH";
+  if (String(language).toLowerCase() === "bm") return "BM";
+  return "EN";
+}
+
+function leadStatusFromReply(statusName) {
+  return statusName ? "Warm" : "Warm";
+}
+
+function categoryFromReply() {
+  return "Warm";
+}
+
+function nextActionFor() {
+  return "Human Takeover";
+}
+
+function blastLeadsDataSource(config) {
+  return config.dataSources.blastLeads ?? config.dataSources.leadCrm;
+}
+
+function databaseId(config, key) {
+  return config.databases?.[key] ?? config.dataSources?.[key] ?? "";
+}
+
+function blastLeadsDatabase(config) {
+  return config.databases?.blastLeads ?? config.databases?.leadCrm ?? blastLeadsDataSource(config);
+}
+
+function recycleLeadsDatabase(config) {
+  return config.databases?.recycleLeads ?? config.dataSources?.recycleLeads ?? "";
+}
+
+export async function ensureNotionConfig() {
+  const current = await readJson(configPath, null);
+  if (!current) await atomicWrite(configPath, defaultConfig);
+  return current ?? defaultConfig;
+}
+
+export class NotionSync {
+  constructor({ token, config, onLog } = {}) {
+    this.token = token;
+    this.config = config ?? defaultConfig;
+    this.onLog = onLog;
+    this.enabled = Boolean(token);
+    this.state = null;
+  }
+
+  log(message) {
+    if (this.onLog) this.onLog(message);
+  }
+
+  async init() {
+    await ensureNotionConfig();
+    this.state = await readJson(statePath, {
+      leadPages: {},
+      recycleLeadPages: {},
+      creditedSends: {},
+      creditedResponses: {},
+      syncedReplyIds: {},
+    });
+    this.state.leadPages = this.state.leadPages ?? {};
+    this.state.recycleLeadPages = this.state.recycleLeadPages ?? {};
+    this.state.creditedSends = this.state.creditedSends ?? {};
+    this.state.creditedResponses = this.state.creditedResponses ?? {};
+    this.state.syncedReplyIds = this.state.syncedReplyIds ?? {};
+    return this;
+  }
+
+  async saveState() {
+    await atomicWrite(statePath, this.state);
+  }
+
+  async request(method, pathname, body, attempt = 0) {
+    if (!this.enabled) return null;
+    const response = await fetch(`https://api.notion.com/v1${pathname}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/json",
+        "Notion-Version": NOTION_VERSION,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+    // Auto-retry on rate limit / transient errors.
+    if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < 5) {
+      const retryAfter = Number(response.headers.get("retry-after")) || (attempt + 1);
+      await new Promise((res) => setTimeout(res, Math.min(retryAfter + 0.5, 10) * 1000));
+      return this.request(method, pathname, body, attempt + 1);
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(`Notion ${method} ${pathname}: HTTP ${response.status} ${JSON.stringify(data)}`);
+    }
+    return data;
+  }
+
+  async queryDataSource(dataSourceId, filter, pageSize = 10) {
+    return this.request("POST", `/databases/${cleanId(dataSourceId)}/query`, { filter, page_size: pageSize });
+  }
+
+  async retrievePage(pageId) {
+    return this.request("GET", `/pages/${cleanId(pageId)}`);
+  }
+
+  async updatePage(pageId, properties) {
+    return this.request("PATCH", `/pages/${cleanId(pageId)}`, { properties });
+  }
+
+  async createLeadPage({ lead, job, sentAt, templateIds = [] }) {
+    const properties = {
+      Name: title(lead.name || lead.phone),
+      Phone: phoneNumber(lead.phone),
+      Status: status("Blasted"),
+      Project: select(this.config.project),
+      Language: select(languageLabel(job.language)),
+      "Sender Instance": select(job.instanceName || "Unknown"),
+      "Last Blast At": dateValue(sentAt),
+      "Template Sent": relation(templateIds),
+      "Reply Count": numberValue(0),
+      "Stop Flag": checkbox(false),
+    };
+    const body = {
+      parent: { type: "database_id", database_id: cleanId(blastLeadsDatabase(this.config)) },
+      properties,
+    };
+    return this.request("POST", "/pages", body);
+  }
+
+  async findLeadByPhone(phone) {
+    if (this.state.leadPages[phone]) {
+      try {
+        return await this.retrievePage(this.state.leadPages[phone]);
+      } catch {
+        delete this.state.leadPages[phone];
+      }
+    }
+
+    const result = await this.queryDataSource(blastLeadsDatabase(this.config), {
+      property: "Phone",
+      phone_number: { equals: phone },
+    }, 1);
+    return result?.results?.[0] ?? null;
+  }
+
+  async findRecycleLeadByPhone(phone) {
+    if (this.state.recycleLeadPages[phone]) {
+      try {
+        return await this.retrievePage(this.state.recycleLeadPages[phone]);
+      } catch {
+        delete this.state.recycleLeadPages[phone];
+      }
+    }
+
+    const database = recycleLeadsDatabase(this.config);
+    if (!database) throw new Error("Notion config is missing recycleLeads database.");
+    const result = await this.queryDataSource(database, {
+      property: "Phone",
+      phone_number: { equals: phone },
+    }, 1);
+    return result?.results?.[0] ?? null;
+  }
+
+  async findAdLeadByPhone(phone) {
+    const database = databaseId(this.config, "adsLeads");
+    if (!database) return null;
+    const result = await this.queryDataSource(database, { property: "Phone", phone_number: { equals: phone } }, 1);
+    return result?.results?.[0] ?? null;
+  }
+
+  // Create (or update) a lead in the Ads Leads database. Used when a customer
+  // messages in from a click-to-WhatsApp ad (detected by the opening phrase).
+  // Property names/types mirror what morning_followup already writes to Ads.
+  async upsertAdLead(event) {
+    if (!this.enabled || !event?.phone) return { action: "skipped" };
+    const database = databaseId(this.config, "adsLeads");
+    if (!database) throw new Error("Notion config is missing adsLeads database.");
+
+    const existing = await this.findAdLeadByPhone(event.phone);
+    const now = event.receivedAt || new Date().toISOString();
+    const properties = {
+      Name: title(event.name || event.phone),
+      Phone: phoneNumber(event.phone),
+      "Lead Status": select("Warm"),
+      "Last Touch Type": select("Customer Replied"),
+      "Last Message Text": richTextOrEmpty(event.text || ""),
+      "Last Touch At": dateValue(now),
+      "Next Action": select("Send Details"),
+    };
+    // Only stamp "received" the first time we see them, so it stays the ad date.
+    if (!existing) properties["Lead Received At"] = dateValue(now);
+
+    if (existing) {
+      await this.updatePage(existing.id, properties);
+    } else {
+      await this.request("POST", "/pages", {
+        parent: { type: "database_id", database_id: cleanId(database) },
+        properties,
+      });
+    }
+    return { action: existing ? "updated" : "created" };
+  }
+
+  async upsertRecycleLead(record) {
+    if (!this.enabled || !record?.phone) return { action: "skipped" };
+    const database = recycleLeadsDatabase(this.config);
+    if (!database) throw new Error("Notion config is missing recycleLeads database.");
+
+    const existing = await this.findRecycleLeadByPhone(record.phone);
+    const protectedDoNotCall = pageSelectName(existing, "Lead Status") === "Do Not Call";
+    const leadStatus = protectedDoNotCall ? "Do Not Call" : record.leadStatus;
+    const recycleCategory = protectedDoNotCall ? "Do Not Call" : record.recycleCategory;
+    const nextAction = protectedDoNotCall ? "Do Not Call" : record.nextAction;
+    const blastEligible = protectedDoNotCall ? false : record.blastEligible;
+    const callIncrement = record.hasCallActivity ? 1 : 0;
+    const callCount = existing ? pageNumber(existing, "Call Count") + callIncrement : callIncrement;
+
+    const properties = {
+      Name: title(record.name || record.phone),
+      Phone: phoneNumber(record.phone),
+      "Lead Status": select(leadStatus),
+      "Recycle Category": select(recycleCategory),
+      "Blast Eligible": checkbox(blastEligible),
+      "Call Count": numberValue(callCount),
+      "Call Date": dateValueOrEmpty(record.callDate),
+      "Call Time": richTextOrEmpty(record.callTime || ""),
+      "Last Call Outcome": selectOrEmpty(record.lastCallOutcome),
+      "Follow Up Due": dateValueOrEmpty(record.followUpDue),
+      "Next Action": select(nextAction),
+      Remark: richTextOrEmpty(record.remark || ""),
+      "AI Summary": richTextOrEmpty(record.aiSummary || ""),
+      "Source Batch": richTextOrEmpty(record.sourceBatch || ""),
+      "Imported At": dateValue(record.importedAt),
+      "Import File": richTextOrEmpty(record.importFile || ""),
+    };
+
+    let page;
+    if (existing) {
+      page = await this.updatePage(existing.id, properties);
+    } else {
+      page = await this.request("POST", "/pages", {
+        parent: { type: "database_id", database_id: cleanId(database) },
+        properties,
+      });
+    }
+
+    this.state.recycleLeadPages[record.phone] = cleanId(page.id);
+    await this.saveState();
+    return { action: existing ? "updated" : "created", protectedDoNotCall };
+  }
+
+  async upsertLeadBlast({ job, part, sentAt }) {
+    if (!this.enabled || !job?.lead?.phone) return;
+    const variantId = part === 2 ? job.part2Variant : job.part1Variant;
+    const template = this.config.templates[variantId];
+    if (!template?.pageId) return;
+
+    const phone = job.lead.phone;
+    const existing = await this.findLeadByPhone(phone);
+    const existingTemplates = existing ? pageRelationIds(existing, "Template Sent") : [];
+    const templateIds = [...existingTemplates, template.pageId];
+
+    let page;
+    if (existing) {
+      page = await this.updatePage(existing.id, {
+        Status: status("Blasted"),
+        Project: select(this.config.project),
+        Language: select(languageLabel(job.language)),
+        "Sender Instance": select(job.instanceName || "Unknown"),
+        "Last Blast At": dateValue(sentAt),
+        "Template Sent": relation(templateIds),
+      });
+    } else {
+      page = await this.createLeadPage({ lead: job.lead, job, sentAt, templateIds });
+    }
+
+    this.state.leadPages[phone] = cleanId(page.id);
+    await this.creditSend({ phone, template });
+    await this.saveState();
+  }
+
+  async creditSend({ phone, template }) {
+    const key = `${phone}:${cleanId(template.pageId)}:sent`;
+    if (this.state.creditedSends[key]) return;
+    this.state.creditedSends[key] = true;
+    await this.incrementPageNumber(template.pageId, "Sent Count", 1);
+    if (template.imagePageId) await this.incrementPageNumber(template.imagePageId, "Sent Count", 1);
+  }
+
+  async incrementPageNumber(pageId, propertyName, amount = 1) {
+    const page = await this.retrievePage(pageId);
+    const next = pageNumber(page, propertyName) + amount;
+    await this.updatePage(pageId, { [propertyName]: numberValue(next) });
+  }
+
+  async upsertLeadReply(event) {
+    if (!this.enabled || !event?.phone || !event?.id) return;
+    if (this.state.syncedReplyIds[event.id]) return;
+
+    const existing = await this.findLeadByPhone(event.phone);
+    // Stop Flag ticked -> customer asked to stop. Leave their Notion row alone
+    // (don't reset status / re-engage); just remember we've seen this reply.
+    if (existing?.properties?.["Stop Flag"]?.checkbox === true) {
+      this.state.syncedReplyIds[event.id] = true;
+      await this.saveState();
+      return;
+    }
+    const replyCount = existing ? pageNumber(existing, "Reply Count") + 1 : 1;
+    const existingTemplates = existing ? pageRelationIds(existing, "Template Sent") : [];
+    const properties = {
+      Name: title(event.name || event.phone),
+      Phone: phoneNumber(event.phone),
+      Status: status(leadStatusFromReply(event.status)),
+      Project: select(this.config.project),
+      "Last Reply At": dateValue(event.receivedAt),
+      "Last Reply Text": richText(event.text),
+      "AI Category": select(categoryFromReply(event.category)),
+      "Next Action": select(nextActionFor(event.status, event.category)),
+      "Reply Count": numberValue(replyCount),
+      "AI Summary": richText(`Latest reply: ${event.text}`),
+    };
+
+    let page;
+    if (existing) {
+      // Note: Stop Flag is intentionally NOT in `properties`, so an update never
+      // un-ticks a customer you've stopped.
+      page = await this.updatePage(existing.id, properties);
+    } else {
+      page = await this.request("POST", "/pages", {
+        parent: { type: "database_id", database_id: cleanId(blastLeadsDatabase(this.config)) },
+        properties: { ...properties, "Stop Flag": checkbox(false) },
+      });
+    }
+
+    this.state.leadPages[event.phone] = cleanId(page.id);
+    await this.creditResponse({ event, templatePageIds: existingTemplates });
+    this.state.syncedReplyIds[event.id] = true;
+    await this.saveState();
+  }
+
+  templateByPageId(pageId) {
+    const cleaned = cleanId(pageId);
+    return Object.values(this.config.templates).find((template) => cleanId(template.pageId) === cleaned);
+  }
+
+  async creditResponse({ event, templatePageIds }) {
+    for (const templatePageId of templatePageIds) {
+      const template = this.templateByPageId(templatePageId);
+      const responseKey = `${event.phone}:${cleanId(templatePageId)}:response`;
+      if (!this.state.creditedResponses[responseKey]) {
+        this.state.creditedResponses[responseKey] = true;
+        await this.incrementPageNumber(templatePageId, "Response Count", 1);
+        if (template?.imagePageId) await this.incrementPageNumber(template.imagePageId, "Response Count", 1);
+      }
+
+      const warmKey = `${event.phone}:${cleanId(templatePageId)}:warm`;
+      if (!this.state.creditedResponses[warmKey]) {
+        this.state.creditedResponses[warmKey] = true;
+        await this.incrementPageNumber(templatePageId, "Warm Count", 1);
+        if (template?.imagePageId) await this.incrementPageNumber(template.imagePageId, "Warm Count", 1);
+      }
+    }
+  }
+}
+
+export async function createNotionSync({ env = {}, onLog } = {}) {
+  const config = await ensureNotionConfig();
+  // Prefer the token saved in evolution-pilot/.env (managed by "Set Notion Token")
+  // over any stale NOTION_API_KEY exported in the shell — otherwise a leftover
+  // shell export can shadow the good token and cause 401 "API token is invalid".
+  const token = env.NOTION_API_KEY || env.NOTION_TOKEN || process.env.NOTION_API_KEY || process.env.NOTION_TOKEN;
+  const sync = new NotionSync({ token, config, onLog });
+  await sync.init();
+  return sync;
+}

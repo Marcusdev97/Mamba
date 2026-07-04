@@ -1,0 +1,74 @@
+{
+  "campaignId": "mid_valley",
+  "campaignName": "Mid Valley",
+  "languageSelection": {
+    "mode": "random",
+    "weights": {
+      "en": 50,
+      "zh": 50
+    },
+    "keepPartsInSameLanguage": true
+  },
+  "delivery": {
+    "partGapSeconds": 45,
+    "contactGapSeconds": {
+      "min": 45,
+      "max": 75
+    },
+    "globalSerialSending": true,
+    "cancelPart2WhenCustomerReplies": true,
+    "preventDuplicateContact": true,
+    "requireOpenInstance": true
+  },
+  "personalization": {
+    "sourceColumn": "Name",
+    "placeholders": [
+      "[Name]",
+      "[名字]"
+    ]
+  },
+  "part1": {
+    "variants": [
+      {
+        "id": "mv_zh_fulldetails_p1",
+        "language": "zh",
+        "text": "Hi [名字] 👋\n\n刚收到一个 Mid Valley 旁边新楼盘的消息，觉得还不错，顺便分享给你。\n🎊 月供约 RM2,100 起\n✅ Freehold 永久地契\n🚆 MRT 步行可达\n🏡 全屋装修家具\n🌳 低密度社区\n🔑 2027 Q1 交房\n\n有兴趣的话，我发资料给你看看 😊",
+        "media": "images/mid_valley_project.JPG"
+      },
+      {
+        "id": "mv_en_fulldetails_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nI just received details of a newly launched project beside Mid Valley.\nRm2,100 in Mid Valley 🎊Freehold 🎉Low Density 🤩Doorstep MRT 🔑2027Q1\n\n✅ Freehold\n❣️ Low Density\n❤️ Doorstep Mrt\n🌈 Full Furnished\n🌟 2027 Q1 move in\n📝 2-3 Rooms\n💰 High Rental Demand\n✅ Zero Downpayment",
+        "media": "images/mid_valley_project.JPG"
+      },
+      {
+        "id": "mv_en_quickupdate_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nQuick update — new launch beside Mid Valley just released.\nFrom RM2,100/month 🎊\n2-3 rooms, fully furnished, freehold & MRT doorstep.\nSuitable for own stay or rental investment.\n\nWould you like me to share the e-brochure?",
+        "media": "images/mid_valley_project.JPG"
+      },
+      {
+        "id": "mv_en_stilllooking_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nAre you still looking for a property around KL / Mid Valley area?\nThere’s a new launch beside Mid Valley:\nFreehold, low density, doorstep MRT & fully furnished.\nEstimated move-in: 2027 Q1 🔑\n\nI can send you the details if you’re interested.",
+        "media": "images/mid_valley_project.JPG"
+      }
+    ]
+  },
+  "part2": {
+    "variants": [
+      {
+        "id": "mv_zh_floorplans_p2",
+        "language": "zh",
+        "text": "🏠 A户型｜2房1卫（650平方尺）\n🏠 B户型｜2房2卫（756平方尺）\n🏠 C户型｜3房2卫（874平方尺）\n\n✨ 所有示范单位现已开放参观 ☺️\n您想了解户型图和价格表吗？我可以发给您参考 😊",
+        "media": "images/floor_plans.JPG"
+      },
+      {
+        "id": "mv_en_floorplans_p2",
+        "language": "en",
+        "text": "🏠Type A - 2R 1B (650sf)\n🏠Type B - 2R 2B (756sf)\n🏠Type C - 3R 2B (874sf)\n\nAll unit is ready viewing☺️\nWould you like me to send you the floor plans and price list?",
+        "media": "images/floor_plans.JPG"
+      }
+    ]
+  }
+}

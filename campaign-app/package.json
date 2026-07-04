@@ -1,0 +1,10 @@
+{
+  "name": "campaign-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mamba campaign automation scripts",
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模板 & Flow 面板 · Mamba</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 18px 80px; }
+  h1 { margin: 0 0 2px; font-size: 22px; }
+  .sub { color: #94a3b8; margin-bottom: 16px; font-size: 13px; }
+  a { color: #7dd3fc; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  select, button { font: inherit; }
+  select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 7px 10px; }
+  button { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: #38bdf8; }
+  .pill { background: #1e293b; border: 1px solid #334155; border-radius: 999px; padding: 4px 10px; font-size: 12px; color: #94a3b8; }
+  .note { background: #0b1322; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; font-size: 13px; color: #cbd5e1; margin-bottom: 14px; }
+  .flow { border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; margin: 0 0 4px; background: #141d31; }
+  .flow.ok { border-left: 4px solid #16a34a; }
+  .flow.warn { border-left: 4px solid #d97706; }
+  .flow.miss { border-left: 4px solid #dc2626; }
+  .fhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .fname { font-weight: 700; font-size: 15px; }
+  .fday { color: #94a3b8; font-size: 12px; }
+  .badge { font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; margin-left: auto; }
+  .badge.ok { background: #14321f; color: #4ade80; }
+  .badge.warn { background: #3a2a08; color: #fbbf24; }
+  .badge.miss { background: #3a1212; color: #f87171; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12px; border: 1px solid #334155; border-radius: 8px; padding: 3px 8px; cursor: pointer; background: #0b1322; }
+  .chip:hover { border-color: #38bdf8; }
+  .chip.active { color: #4ade80; border-color: #14532d; }
+  .chip.testing { color: #fbbf24; border-color: #4a2f08; }
+  .chip.other { color: #94a3b8; }
+  .tpl { border: 1px solid #1f2a3d; border-radius: 10px; padding: 10px 12px; margin-top: 8px; cursor: pointer; background: #0f1728; }
+  .tpl:hover { border-color: #38bdf8; }
+  .tptext { white-space: pre-wrap; word-break: break-word; color: #e2e8f0; font-size: 13px; margin-top: 6px; line-height: 1.55; }
+  .tptext.empty { color: #64748b; }
+  .thumb { max-width: 240px; max-height: 170px; border-radius: 8px; margin-top: 8px; display: block; border: 1px solid #334155; }
+  .imgwarn { color: #fbbf24; font-size: 12px; margin-top: 6px; }
+  .imgok { color: #4ade80; font-size: 12px; margin-top: 6px; }
+  .wa { background: #0b141a; background-image: linear-gradient(rgba(11,20,26,.94), rgba(11,20,26,.94)); padding: 16px; border-radius: 10px; }
+  .wa-bubble { background: #005c4b; color: #e9edef; border-radius: 8px; padding: 6px 7px 6px; max-width: 88%; margin: 0 0 10px auto; box-shadow: 0 1px 1px rgba(0,0,0,.4); }
+  .wa-bubble img { max-width: 100%; border-radius: 6px; display: block; margin-bottom: 5px; }
+  .wa-text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.42; padding: 0 3px; }
+  .wa-time { font-size: 11px; color: rgba(255,255,255,.6); text-align: right; margin: 2px 3px 0; }
+  .wa-noimg { background: #0a3d33; border-radius: 6px; padding: 18px; text-align: center; color: #7f9c94; margin-bottom: 5px; font-size: 12px; }
+  .thumb { cursor: zoom-in; }
+  .lb { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: flex; align-items: center; justify-content: center; z-index: 60; cursor: zoom-out; }
+  .lb.hidden { display: none; }
+  .lb img { max-width: 92%; max-height: 92%; border-radius: 8px; }
+  .connector { text-align: center; color: #64748b; font-size: 12px; margin: 4px 0; }
+  .img { color: #94a3b8; font-size: 12px; margin-top: 6px; }
+  .empty { color: #94a3b8; padding: 8px 0; font-size: 13px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #16a34a; color: white; padding: 10px 18px; border-radius: 10px; font-weight: 700; opacity: 0; transition: .2s; pointer-events: none; max-width: 90%; }
+  .toast.show { opacity: 1; } .toast.err { background: #dc2626; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal.hidden { display: none; }
+  .modal-box { background: #0f172a; border: 1px solid #334155; border-radius: 14px; max-width: 640px; width: 92%; max-height: 82vh; display: flex; flex-direction: column; }
+  .modal-head { padding: 14px 18px; font-weight: 700; border-bottom: 1px solid #334155; }
+  .modal-content { padding: 14px 18px; overflow: auto; }
+  .modal-content pre { white-space: pre-wrap; word-break: break-word; background: #0b1322; border: 1px solid #1f2a3d; border-radius: 8px; padding: 10px; font: inherit; }
+  .modal-content textarea { width: 100%; min-height: 200px; background: #0b1322; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 10px; font: inherit; box-sizing: border-box; }
+  .modal-content .lbl { display: block; color: #7dd3fc; font-size: 12px; margin: 10px 0 4px; }
+  .modal-content .erow { display: flex; gap: 10px; align-items: center; }
+  .modal-actions { padding: 12px 18px; border-top: 1px solid #334155; display: flex; gap: 10px; justify-content: flex-end; }
+  .primary { background: #16a34a; border-color: #16a34a; font-weight: 700; color: #fff; }
+  .primary:hover { background: #15803d; }
+  .danger { background: transparent; border-color: #7f1d1d; color: #f87171; margin-right: auto; }
+  .danger:hover { background: #7f1d1d; color: #fff; }
+  .tinp { background: #0b1322; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; font: inherit; }
+  .addbtn { border-color: #38bdf8; color: #7dd3fc; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🗂 模板 & Flow 面板</h1>
+  <div class="sub">整个自动序列一览 · 直接拉 Notion · 一眼看出哪个 flow 缺模板 · <a href="/">← 回主控制台</a></div>
+
+  <div class="bar">
+    <span class="pill">项目</span>
+    <select id="projectSel"></select>
+    <button class="addbtn" onclick="addProject()">+ 新项目</button>
+    <button onclick="load()">↻ 刷新</button>
+    <span id="summary" class="pill"></span>
+  </div>
+
+  <div class="note">流程:客户 <b>没回复</b> 就按天数继续下一轮;<b>一旦回复</b>就自动退出序列、转人工。绿色=有 Active 模板可发,黄色=只有 Testing,红色=缺模板要补。点每个小标签看内容。</div>
+
+  <div id="flows"><div class="empty">加载中…</div></div>
+</div>
+
+<div class="modal hidden" id="tplModal">
+  <div class="modal-box">
+    <div class="modal-head" id="tplHead">模板内容</div>
+    <div id="tplContent" class="modal-content"></div>
+    <div class="modal-actions"><button class="danger" id="tplDeleteBtn" style="display:none;">🗑 删除</button><button onclick="closeModal()">取消</button><button class="primary" id="tplSaveBtn">保存到 Notion</button></div>
+  </div>
+</div>
+<div class="lb hidden" id="lightbox" onclick="closeLightbox()"><img id="lbImg" src="" alt=""></div>
+<div class="toast" id="toast"></div>
+
+<script>
+function openLightbox(url) { document.getElementById("lbImg").src = url; document.getElementById("lightbox").classList.remove("hidden"); }
+function closeLightbox() { document.getElementById("lightbox").classList.add("hidden"); }
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+let toastTimer;
+function toast(msg, isErr) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 2600);
+}
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+// The automatic sequence. topic must match the Notion "Flow Topic" values.
+const FLOWS = [
+  { flow: "Flow 1", topic: "Project Template", day: "Day 0" },
+  { flow: "Flow 2", topic: "Layout", day: "Day 2" },
+  { flow: "Flow 3", topic: "Location", day: "Day 4" },
+  { flow: "Flow 4", topic: "Package", day: "Day 6" },
+  { flow: "Flow 5", topic: "Furnished List", day: "条件" },
+  { flow: "Flow 6", topic: "Price", day: "Day 9" },
+  { flow: "Flow 7", topic: "Facilities", day: "Day 12" },
+  { flow: "Flow 8", topic: "Invitation", day: "Day 15" },
+  { flow: "Flow 9", topic: "Rental", day: "条件(投资客)" },
+  { flow: "Flow 10", topic: "Surrounding", day: "Day 12+" },
+];
+
+let TEMPLATES = [];
+let CURRENT_PROJECT = "";
+
+// Build a unique alias key from a template's metadata, so uploading a file works
+// without the user typing an "Image Name". pageId8 keeps it unique per template
+// (so variants sharing flow/lang/part don't collide on the same image).
+function autoImageKey(project, flowTopic, language, part, pageId) {
+  const meta = [project, flowTopic, language, part].filter(Boolean).join("][");
+  const uid = String(pageId || "").replace(/-/g, "").slice(0, 8) || Date.now().toString(36);
+  return `[${meta}][${uid}]`;
+}
+
+function closeModal() { document.getElementById("tplModal").classList.add("hidden"); }
+const STATUSES = ["Active", "Testing", "Paused", "Retired"];
+const LANGS = ["EN", "ZH", "BM"];
+const PARTS = ["Part 1", "Part 2", "Follow Up"];
+
+function editTemplate(pageId) {
+  const t = TEMPLATES.find((x) => x.pageId === pageId);
+  if (!t) return;
+  document.getElementById("tplHead").textContent = `${t.name || (t.language + " " + t.part)}`;
+  document.getElementById("tplContent").innerHTML =
+    `<div class="sub">${esc(t.language || "?")} · ${esc(t.part || "?")} · Flow Topic: ${esc(t.flowTopic || "?")}</div>` +
+    `<label class="lbl">Message Text(发送内容;[Name] / [名字] 发送时换成客户名字)</label>` +
+    `<textarea id="edText">${esc(t.text || "")}</textarea>` +
+    `<div class="erow"><label class="lbl" style="margin:10px 8px 0 0;">状态</label>` +
+    `<select id="edStatus">${STATUSES.map((s) => `<option${s === t.status ? " selected" : ""}>${s}</option>`).join("")}</select></div>` +
+    `<label class="lbl">图片名(别名 key,留空=不带图)</label>` +
+    `<input id="edImage" class="tinp" style="width:100%; box-sizing:border-box;" value="${esc(t.imageName || "")}" placeholder="例如 [Gen Starz][Location Highlights][EN][v1]">` +
+    (t.mediaUrl ? `<img class="thumb" src="${esc(t.mediaUrl)}" alt="" onclick="openLightbox('${esc(t.mediaUrl)}')"><div class="imgok">✅ 本地有图(点看大图)</div>`
+      : t.imageName ? `<div class="imgwarn">⚠️ 本地没有这张图,发送不带图 — 在下面上传</div>` : "") +
+    (t.imageName || t.mediaUrl ? `<button class="chip" style="border-color:#ef4444;color:#f87171;margin-top:8px;" onclick="removeImage('${esc(t.pageId)}')">🗑 移除这张图(改纯文字)</button>` : "") +
+    `<label class="lbl">换/上传图片(png/jpg,选了会存本地并配好别名)</label>` +
+    `<input id="edFile" type="file" accept="image/*,video/mp4,video/quicktime">` +
+    `<div class="img" style="margin-top:6px;"><a href="${esc(t.url)}" target="_blank">在 Notion 打开 →</a></div>`;
+  const del = document.getElementById("tplDeleteBtn");
+  del.style.display = ""; del.onclick = () => deleteTemplate(pageId);
+  const save = document.getElementById("tplSaveBtn");
+  save.style.display = ""; save.textContent = "保存到 Notion"; save.onclick = () => saveTemplate(pageId);
+  document.getElementById("tplModal").classList.remove("hidden");
+}
+function fileToBase64(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+}
+async function uploadImage(pageId, imageName, file) {
+  const dataUrl = await fileToBase64(file);
+  await api("/api/templates/upload-image", { pageId, imageName, filename: file.name, base64: dataUrl });
+}
+// Clear a template's Image Name so this part sends as text only (not every part needs an image).
+async function removeImage(pageId) {
+  if (!confirm("移除这条模板的图片?这一条会变成纯文字发送(不影响图片文件本身)。")) return;
+  try { await api("/api/templates/update", { pageId, imageName: "" }); toast("✅ 已移除图片,这条改为纯文字"); closeModal(); load(); }
+  catch (e) { toast("移除失败:" + e.message, true); }
+}
+async function saveTemplate(pageId) {
+  try {
+    let imageName = document.getElementById("edImage").value.trim();
+    const f = document.getElementById("edFile").files[0];
+    // Picked a file but didn't type an Image Name → auto-generate one from the template.
+    if (f && !imageName) {
+      const t = TEMPLATES.find((x) => x.pageId === pageId) || {};
+      imageName = autoImageKey(CURRENT_PROJECT, t.flowTopic, t.language, t.part, pageId);
+    }
+    await api("/api/templates/update", {
+      pageId,
+      messageText: document.getElementById("edText").value,
+      status: document.getElementById("edStatus").value,
+      imageName,
+    });
+    if (f) { toast("上传图片中…"); await uploadImage(pageId, imageName, f); }
+    toast("✅ 已保存到 Notion"); closeModal(); load();
+  } catch (e) { toast("保存失败:" + e.message, true); }
+}
+async function deleteTemplate(pageId) {
+  if (!confirm("确定删除这条模板?会移到 Notion 垃圾桶(可在 Notion 恢复)。")) return;
+  try { await api("/api/templates/delete", { pageId }); toast("已删除"); closeModal(); load(); }
+  catch (e) { toast("删除失败:" + e.message, true); }
+}
+
+// ---- WhatsApp-style preview ----
+function waRender(text) {
+  let s = esc(text || "");
+  s = s.replace(/\*([^*\n]+)\*/g, "<b>$1</b>")
+       .replace(/_([^_\n]+)_/g, "<i>$1</i>")
+       .replace(/~([^~\n]+)~/g, "<s>$1</s>")
+       .replace(/```([^`]+)```/g, "<code>$1</code>");
+  s = s.replace(/\[Name\]/gi, "Sam").replace(/\[名字\]/g, "阿明");
+  return s;
+}
+function waBubble(t) {
+  const img = t.mediaUrl ? `<img src="${esc(t.mediaUrl)}" alt="">`
+    : (t.imageName ? `<div class="wa-noimg">🖼 图片待上传(现在发不带图)</div>` : "");
+  const text = (t.text || "").trim();
+  return `<div class="wa-bubble">${img}<div class="wa-text">${text ? waRender(text) : "<i style='color:#8aa'>(空文案)</i>"}</div><div class="wa-time">14:05 ✓✓</div></div>`;
+}
+let waState = { flowTopic: "", langs: [], lang: "" };
+function waPreview(flowTopic) {
+  const items = TEMPLATES.filter((t) => t.flowTopic === flowTopic);
+  if (!items.length) return toast("这一轮还没模板", true);
+  waState.flowTopic = flowTopic;
+  waState.langs = [...new Set(items.map((t) => t.language).filter(Boolean))];
+  waState.lang = waState.langs[0] || "EN";
+  document.getElementById("tplHead").textContent = "📱 WhatsApp 预览 · " + flowTopic;
+  document.getElementById("tplDeleteBtn").style.display = "none";
+  document.getElementById("tplSaveBtn").style.display = "none";
+  drawWa();
+  document.getElementById("tplModal").classList.remove("hidden");
+}
+function setWaLang(l) { waState.lang = l; drawWa(); }
+function drawWa() {
+  const items = TEMPLATES.filter((t) => t.flowTopic === waState.flowTopic && t.language === waState.lang)
+    .sort((a, b) => (a.part || "").localeCompare(b.part || ""));
+  const langBtns = waState.langs.length > 1
+    ? `<div style="margin-bottom:10px;">语言:${waState.langs.map((l) => `<button class="chip ${l === waState.lang ? "active" : ""}" onclick="setWaLang('${esc(l)}')">${esc(l)}</button>`).join(" ")}</div>`
+    : "";
+  const bubbles = items.length ? items.map(waBubble).join("") : `<div class="empty">这个语言没有模板</div>`;
+  document.getElementById("tplContent").innerHTML = langBtns + `<div class="wa">${bubbles}</div>`;
+}
+
+function createTemplate(topic) {
+  document.getElementById("tplSaveBtn").style.display = "";
+  document.getElementById("tplHead").textContent = `新模板 · Flow Topic: ${topic}`;
+  document.getElementById("tplContent").innerHTML =
+    `<div class="erow" style="flex-wrap:wrap; gap:8px;">` +
+    `<span class="lbl" style="margin:0;">语言</span><select id="ncLang">${LANGS.map((l) => `<option>${l}</option>`).join("")}</select>` +
+    `<span class="lbl" style="margin:0 0 0 8px;">Part</span><select id="ncPart">${PARTS.map((p) => `<option>${p}</option>`).join("")}</select>` +
+    `<span class="lbl" style="margin:0 0 0 8px;">状态</span><select id="ncStatus">${STATUSES.map((s) => `<option${s === "Testing" ? " selected" : ""}>${s}</option>`).join("")}</select></div>` +
+    `<label class="lbl">Message Text</label>` +
+    `<textarea id="ncText" placeholder="发送内容;[Name] / [名字] 会换成客户名字"></textarea>` +
+    `<label class="lbl">图片名(可留空;填了就能配图)</label>` +
+    `<input id="ncImage" class="tinp" style="width:100%; box-sizing:border-box;" placeholder="例如 [Gen Starz][Location Highlights][EN][v1]">` +
+    `<label class="lbl">上传图片(可选,png/jpg;要填了上面图片名才会带图)</label>` +
+    `<input id="ncFile" type="file" accept="image/*,video/mp4,video/quicktime">`;
+  document.getElementById("tplDeleteBtn").style.display = "none";
+  document.getElementById("tplSaveBtn").textContent = "创建";
+  document.getElementById("tplSaveBtn").onclick = () => saveNewTemplate(topic);
+  document.getElementById("tplModal").classList.remove("hidden");
+}
+async function saveNewTemplate(topic) {
+  try {
+    let imageName = document.getElementById("ncImage").value.trim();
+    const lang = document.getElementById("ncLang").value;
+    const part = document.getElementById("ncPart").value;
+    const project = document.getElementById("projectSel").value;
+    const r = await api("/api/templates/create", {
+      project, flowTopic: topic, language: lang, part,
+      status: document.getElementById("ncStatus").value,
+      messageText: document.getElementById("ncText").value,
+      imageName,
+    });
+    const f = document.getElementById("ncFile").files[0];
+    if (f) {
+      // Auto-generate an Image Name if none typed, so the upload always attaches.
+      if (!imageName) imageName = autoImageKey(project, topic, lang, part, r.pageId);
+      toast("上传图片中…"); await uploadImage(r.pageId, imageName, f);
+    }
+    toast("✅ 已创建新模板"); closeModal(); load();
+  } catch (e) { toast("创建失败:" + e.message, true); }
+}
+
+function render() {
+  const root = document.getElementById("flows");
+  let missing = 0, ok = 0;
+  const html = FLOWS.map((f, i) => {
+    const items = TEMPLATES.filter((t) => t.flowTopic === f.topic);
+    const active = items.filter((t) => t.status === "Active");
+    const testing = items.filter((t) => t.status === "Testing");
+    let cls = "miss", badge = `<span class="badge miss">❌ 缺模板</span>`;
+    if (active.length) { cls = "ok"; ok += 1; badge = `<span class="badge ok">✅ Active ${active.length} 条</span>`; }
+    else if (testing.length) { cls = "warn"; badge = `<span class="badge warn">⚠️ 只有 Testing</span>`; }
+    if (!active.length) missing += 1;
+
+    const rows = items.length
+      ? items
+          .sort((a, b) => (a.language + a.part).localeCompare(b.language + b.part))
+          .map((t) => {
+            const sc = t.status === "Active" ? "active" : t.status === "Testing" ? "testing" : "other";
+            const text = (t.text || "").trim();
+            const textHtml = text
+              ? `<div class="tptext">${esc(text.length > 300 ? text.slice(0, 300) + "…" : text)}</div>`
+              : `<div class="tptext empty">(还没有文案 — 点开填)</div>`;
+            let imgHtml = "";
+            const rmBtn = `<button class="chip" style="border-color:#ef4444;color:#f87171;margin-top:6px;" onclick="event.stopPropagation(); removeImage('${esc(t.pageId)}')">🗑 移除图(改纯文字)</button>`;
+            if (t.mediaUrl) imgHtml = `<img class="thumb" src="${esc(t.mediaUrl)}" alt="" onclick="event.stopPropagation(); openLightbox('${esc(t.mediaUrl)}')">` + `<div class="imgok">✅ 本地有图(点图看大图),发送会带图</div>` + rmBtn;
+            else if (t.imageName) imgHtml = `<div class="imgwarn">⚠️ 有图片名「${esc(t.imageName)}」但<b>本地没有图片文件</b> → 发送不带图,点开上传</div>` + rmBtn;
+            return `<div class="tpl" onclick="editTemplate('${esc(t.pageId)}')">
+                <div><span class="chip ${sc}">${esc(t.language || "?")} · ${esc(t.part || "?")} · ${esc(t.status || "")}</span></div>
+                ${textHtml}
+                ${imgHtml}
+              </div>`;
+          }).join("")
+      : `<div class="empty">这一轮还没有任何模板 —— 点 + 加模板。</div>`;
+
+    return `<div class="flow ${cls}">
+        <div class="fhead"><span class="fname">${esc(f.flow)} · ${esc(f.topic)}</span><span class="fday">${esc(f.day)}</span>${badge}</div>
+        ${rows}
+        <div style="margin-top:8px; display:flex; gap:8px;">
+          <button class="chip addbtn" onclick="createTemplate('${esc(f.topic)}')">+ 加模板</button>
+          ${items.length ? `<button class="chip" style="border-color:#22c55e;color:#4ade80;" onclick="waPreview('${esc(f.topic)}')">📱 WhatsApp 预览</button>` : ""}
+        </div>
+      </div>` +
+      (i < FLOWS.length - 1 ? `<div class="connector">↓ 没回复,${FLOWS[i + 1].day} 继续</div>` : "");
+  }).join("");
+  root.innerHTML = html;
+  document.getElementById("summary").textContent = `${ok}/${FLOWS.length} 轮有 Active · 缺 ${missing} 轮`;
+}
+
+async function addProject() {
+  const name = (prompt("新项目名字(会加进 Notion 的 Project 选项:模板库 / Blast 名单 / campaign runs):") || "").trim();
+  if (!name) return;
+  try {
+    const r = await api("/api/templates/add-project", { name });
+    toast("✅ 已加项目:" + name);
+    const sel = document.getElementById("projectSel");
+    if (![...sel.options].some((o) => o.value === name)) { const o = document.createElement("option"); o.text = name; sel.add(o); }
+    sel.value = name;
+    load();
+  } catch (e) { toast("加项目失败:" + e.message, true); }
+}
+
+async function load() {
+  document.getElementById("flows").innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const sel = document.getElementById("projectSel");
+    const chosen = sel.value || "";
+    const data = await api("/api/templates/list" + (chosen ? "?project=" + encodeURIComponent(chosen) : ""));
+    TEMPLATES = data.templates || [];
+    CURRENT_PROJECT = data.project || chosen || "";
+    // populate project dropdown once (or keep selection)
+    if (!sel.options.length || !chosen) {
+      sel.innerHTML = (data.projects || []).map((p) => `<option${p === data.project ? " selected" : ""}>${esc(p)}</option>`).join("");
+    }
+    sel.onchange = load;
+    render();
+  } catch (e) {
+    document.getElementById("flows").innerHTML = `<div class="empty">加载失败:${esc(e.message)}</div>`;
+  }
+}
+load();
+</script>
+</body>
+</html>

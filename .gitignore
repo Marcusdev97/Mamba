@@ -1,0 +1,26 @@
+# ─── 机密:绝对不要提交 ───────────────────────────────
+.env
+**/.env
+evolution-pilot/.env
+
+# ─── 客户数据 / PII(电话、名字、回复):不提交 ──────────
+*.xlsx
+*.xls
+*.csv
+recycle-import/
+# campaign-data 里全是运行时数据/名单/缓存,只保留配置文件
+campaign-data/*
+!campaign-data/notion_config.json
+
+# ─── WhatsApp 会话 / 二维码(能被盗号,绝不提交)──────────
+**/qr/
+**/*session*/
+**/instances/
+
+# ─── 运行时 / 生成物 ─────────────────────────────────
+**/node_modules/
+*.log
+.DS_Store
+
+# ─── 原始素材大文件夹(图片已经接到 campaign-assets/images)──
+Binastra_Cochrane_Exact_Notion_Template_Names_2026-07-04_v1/

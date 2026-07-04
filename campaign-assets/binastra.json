@@ -1,0 +1,98 @@
+{
+  "campaignId": "binastra",
+  "campaignName": "Binastra Cochrane",
+  "languageSelection": {
+    "mode": "random",
+    "weights": {
+      "en": 100,
+      "zh": 0
+    },
+    "keepPartsInSameLanguage": true
+  },
+  "delivery": {
+    "partGapSeconds": 45,
+    "contactGapSeconds": {
+      "min": 45,
+      "max": 75
+    },
+    "globalSerialSending": true,
+    "cancelPart2WhenCustomerReplies": true,
+    "preventDuplicateContact": true,
+    "requireOpenInstance": true
+  },
+  "personalization": {
+    "sourceColumn": "Name",
+    "placeholders": [
+      "[Name]",
+      "[名字]"
+    ]
+  },
+  "part1": {
+    "variants": [
+      {
+        "id": "binastra_en_f1_p1_v1",
+        "language": "en",
+        "text": "Harlow [Name] 👋 ! Good news share with you ! \n\n🚆 MRT • TRX • FREEHOLD\nGot one new launch at Cochrane side, beside MyTown / IKEA.\n\n✅ 0% DownPayment\n✅ Partial Furnished\n✅ Walk to MRT Cochrane\n✅ 1 stop to TRX\n✅ Freehold\n\nQuite interesting if you’re looking around KL city.",
+        "media": "images/binastra_f01_project.jpg"
+      },
+      {
+        "id": "binastra_en_f1_p1_v2",
+        "language": "en",
+        "text": "Hi [Name] 😊\n\nJust saw a new freehold launch at Cochrane (beside MyTown & IKEA) — thought of you since you look around KL.\n\n🚇 Walk to MRT Cochrane\n🏙️ 1 stop to TRX\n💸 0% downpayment\n🛋️ Partially furnished\n🔑 Freehold\n\nWant me to send you more?",
+        "media": "images/binastra_f01_project.jpg"
+      },
+      {
+        "id": "binastra_en_f1_p1_v3",
+        "language": "en",
+        "text": "Hey [Name] 👋\n\nNew launch just dropped beside MyTown / IKEA in Cochrane — and it’s freehold 🔑\n\n• MRT Cochrane at your doorstep\n• 1 stop to TRX, 2 to Bukit Bintang\n• 0% downpayment, partial furnished\n\nGood for own stay or investment. Interested to know more?",
+        "media": "images/binastra_f01_project.jpg"
+      }
+    ]
+  },
+  "part2": {
+    "variants": [
+      {
+        "id": "binastra_en_f1_p2_v1",
+        "language": "en",
+        "text": "Why I think this one can look:\n\nThis is last Freehold in this area liaw.\nPlus the location is quite convenient:\n\n📍 Walk to MRT Cochrane\n📍 Beside MyTown & IKEA\n📍 1 stop to TRX\n📍 2 stops to Bukit Bintang\n📍 Easy access to KLCC / Velocity\n\nFor own stay, convenient.\nFor investment, tenant pool should be strong because of MRT + TRX.",
+        "media": ""
+      },
+      {
+        "id": "binastra_en_f1_p2_v2",
+        "language": "en",
+        "text": "Quick reason why this one is worth a look:\n\nIt’s the last freehold left around here.\nAnd the connectivity is 🔥\n📍 Walk to MRT Cochrane\n📍 Beside MyTown & IKEA\n📍 1 stop TRX, 2 stops Bukit Bintang\n📍 Easy to KLCC / Velocity\n\nOwn stay = super convenient. Invest = strong tenant pool (MRT + TRX).",
+        "media": ""
+      },
+      {
+        "id": "binastra_en_f1_p2_v3",
+        "language": "en",
+        "text": "Why I rate this one:\n\nLast freehold in the area, and location damn strategic:\n📍 MRT Cochrane walking distance\n📍 Next to MyTown & IKEA\n📍 1 stop to TRX\n📍 Easy KLCC / Bukit Bintang / Velocity\n\nStay or rent both also can — tenant demand strong here.",
+        "media": ""
+      }
+    ]
+  },
+  "extraParts": [
+    {
+      "variants": [
+        {
+          "id": "binastra_en_f1_p3_v1",
+          "language": "en",
+          "text": "Do you want me to send you which one first?\n\n1. Layout\n2. Price package\n3. Rental estimate\n\nJust reply 1 / 2 / 3 can already liaw.",
+          "media": ""
+        },
+        {
+          "id": "binastra_en_f1_p3_v2",
+          "language": "en",
+          "text": "Which one you want first?\n\n1. Layout\n2. Price\n3. Rental estimate\n\nJust reply the number 😊",
+          "media": ""
+        },
+        {
+          "id": "binastra_en_f1_p3_v3",
+          "language": "en",
+          "text": "Want me to send layout, price, or rental first?\n\n1. Layout\n2. Price package\n3. Rental\n\nReply 1 / 2 / 3 can already 👍",
+          "media": ""
+        }
+      ]
+    }
+  ]
+}

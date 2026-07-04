@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>选人发下一轮 · Mamba</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px 18px 120px; }
+  h1 { margin: 0 0 2px; font-size: 22px; }
+  .sub { color: #94a3b8; margin-bottom: 16px; font-size: 13px; }
+  a { color: #7dd3fc; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  select, button { font: inherit; }
+  select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 7px 10px; }
+  button { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: #38bdf8; }
+  button.primary { background: #16a34a; border-color: #16a34a; font-weight: 700; }
+  button.primary:hover { background: #15803d; }
+  button.ghost { background: transparent; }
+  .pill { background: #1e293b; border: 1px solid #334155; border-radius: 999px; padding: 4px 10px; font-size: 12px; color: #94a3b8; }
+  .insts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .insts label { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 5px 9px; font-size: 13px; cursor: pointer; }
+  .group { margin: 18px 0; border: 1px solid #334155; border-radius: 12px; overflow: hidden; }
+  .ghead { background: #172033; padding: 10px 14px; display: flex; align-items: center; gap: 10px; font-weight: 700; }
+  .ghead .cnt { color: #94a3b8; font-weight: 400; font-size: 13px; }
+  .gmove { margin-left: auto; font-weight: 400; font-size: 13px; color: #94a3b8; display: flex; gap: 6px; align-items: center; }
+  .gmove select { padding: 4px 8px; }
+  .gmove button { padding: 4px 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 14px; border-top: 1px solid #1f2a3d; font-size: 14px; vertical-align: top; }
+  th { color: #7dd3fc; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.reply { color: #94a3b8; font-size: 12px; max-width: 320px; }
+  .noflag { color: #f87171; background: transparent; border: 1px solid #7f1d1d; border-radius: 6px; padding: 2px 8px; font-size: 12px; }
+  .noflag:hover { background: #7f1d1d; color: #fff; }
+  .footer { position: fixed; left: 0; right: 0; bottom: 0; background: #0b1322; border-top: 1px solid #334155; padding: 12px 18px; }
+  .footer .inner { max-width: 1000px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  .muted { color: #94a3b8; font-size: 13px; }
+  .toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); background: #16a34a; color: white; padding: 10px 18px; border-radius: 10px; font-weight: 700; opacity: 0; transition: .2s; pointer-events: none; max-width: 90%; }
+  .toast.show { opacity: 1; } .toast.err { background: #dc2626; }
+  .empty { color: #94a3b8; padding: 30px 0; }
+  .warn { background: #422006; border: 1px solid #854d0e; color: #fde68a; padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+  .setflow { background: #141d31; border: 1px solid #334155; border-radius: 10px; padding: 8px 14px; margin-bottom: 14px; }
+  .setflow summary { cursor: pointer; color: #7dd3fc; font-weight: 600; }
+  .setflow-body { margin-top: 10px; }
+  .setflow textarea { width: 100%; min-height: 90px; background: #0b1322; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 8px; font: inherit; box-sizing: border-box; }
+  .setflow-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal.hidden { display: none; }
+  .modal-box { background: #0f172a; border: 1px solid #334155; border-radius: 14px; max-width: 680px; width: 92%; max-height: 82vh; display: flex; flex-direction: column; }
+  .modal-head { padding: 14px 18px; font-weight: 700; border-bottom: 1px solid #334155; }
+  .modal-content { padding: 14px 18px; overflow: auto; }
+  .modal-actions { padding: 12px 18px; border-top: 1px solid #334155; display: flex; gap: 10px; justify-content: flex-end; }
+  .tpl-lang { border: 1px solid #334155; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+  .tpl-tag { display: inline-block; font-size: 11px; color: #7dd3fc; text-transform: uppercase; letter-spacing: .04em; margin: 6px 0 2px; }
+  .tpl-part pre { white-space: pre-wrap; word-break: break-word; background: #0b1322; border: 1px solid #1f2a3d; border-radius: 8px; padding: 8px 10px; margin: 2px 0; font: inherit; }
+  .tinp { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 7px 9px; width: 74px; font: inherit; }
+  .statusbox { background: #0b1322; border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
+  .statushead { font-weight: 700; }
+  .loglist { margin-top: 6px; max-height: 190px; overflow: auto; font-size: 12px; }
+  .logline { padding: 1px 0; color: #cbd5e1; }
+  .rep { padding: 3px 0; font-size: 13px; }
+  .rep.red { color: #f87171; } .rep.green { color: #4ade80; } .rep.grey { color: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📥 选人发下一轮</h1>
+  <div class="sub">列出今天该发下一条的人 · 勾选后直接发 · <a href="/">← 回主控制台</a></div>
+
+  <div class="warn">发送会<b>自动按 Cohort Day 取模板</b>(Templates 库里 Status=Active、对应 Day 的那条)。一次只发一组(同一个 Next Flow)。请先把那一轮的模板放好并设 Active。</div>
+
+  <div class="bar">
+    <span class="pill">项目</span>
+    <select id="projectSel"></select>
+    <button class="ghost" onclick="load()">↻ 刷新</button>
+    <span id="instWrap" class="insts"></span>
+    <span class="pill">发送时间</span>
+    <input id="startTime" class="tinp" placeholder="现在" title="开始时间,如 14:00,留空=现在">
+    <span class="muted">→</span>
+    <input id="endTime" class="tinp" placeholder="21:00" title="结束时间,如 21:00,留空=今晚21:00">
+  </div>
+
+  <div id="statusPanel" class="statusbox" style="display:none;"></div>
+  <div id="replyPanel" class="statusbox" style="display:none;"></div>
+
+  <details class="setflow">
+    <summary>🔧 批量改轮次(贴电话清单) — 已经发过某一轮的人,改成下一个 Flow</summary>
+    <div class="setflow-body">
+      <textarea id="phonesBox" placeholder="把电话号码贴这里,每行一个或用逗号/空格分隔。&#10;例:&#10;60123456789&#10;0138025439"></textarea>
+      <div class="setflow-row">
+        <span class="pill">设为下一轮</span>
+        <select id="setFlowSel"></select>
+        <button class="primary" onclick="applySetFlow()">应用</button>
+      </div>
+      <div class="muted" style="margin-top:6px;">改完这批人会移到对应分组、到期日设为今天;已标「不发」的人会被跳过。</div>
+    </div>
+  </details>
+
+  <div id="list"><div class="empty">加载中…</div></div>
+</div>
+
+<div class="footer"><div class="inner">
+  <div class="muted">已选 <b id="selCount">0</b> 人 · <span id="dueInfo"></span></div>
+  <div style="display:flex; gap:10px; align-items:center;">
+    <span class="muted">本批只发前</span>
+    <input id="limitN" class="tinp" placeholder="全部" style="width:64px" title="本批只发前几个(按每日量),留空=全部选中的">
+    <span class="muted">个</span>
+    <button onclick="startBlast('TEST')">🧪 测试(发给自己)</button>
+    <button class="primary" onclick="startBlast('LIVE')">🚀 开始发 (LIVE)</button>
+  </div>
+</div></div>
+
+<div class="modal hidden" id="tplModal">
+  <div class="modal-box">
+    <div class="modal-head">📄 发送前预览 — 实际会发的模板</div>
+    <div id="tplContent" class="modal-content"></div>
+    <div class="modal-actions">
+      <button onclick="closeModal()">取消</button>
+      <button class="primary" id="tplConfirmBtn">确认发送</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+let toastTimer;
+function toast(msg, isErr) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 3000);
+}
+async function api(path, body, method) {
+  const res = await fetch(path, body ? { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+                                     : { method: method || "GET" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+let ALL = [];          // all due leads from Notion
+let PROJECTS = [];      // console projects [{id,name}]
+let currentProject = "";
+
+// Which Cohort Day's templates to send for each Next Flow (mirrors FLOW_SEQUENCE).
+// Flow 5 / 9 / 10 are conditional and not auto-mapped.
+const FLOW_DAY = {
+  "Flow 2 - Layout": "Day 2",
+  "Flow 3 - Location": "Day 4",
+  "Flow 4 - Package": "Day 6",
+  "Flow 6 - Price": "Day 9",
+  "Flow 7 - Facilities": "Day 12",
+  "Flow 8 - Invitation": "Day 15",
+};
+
+function selectedRows() { return [...document.querySelectorAll(".rowchk:checked")]; }
+function refreshCount() { document.getElementById("selCount").textContent = selectedRows().length; }
+
+function visibleLeads() { return ALL.filter((l) => l.project === currentProject); }
+
+function render() {
+  const leads = visibleLeads();
+  const root = document.getElementById("list");
+  if (!leads.length) { root.innerHTML = '<div class="empty">这个项目今天没有到期要发的人。</div>'; refreshCount(); return; }
+  // group by Next Flow
+  const groups = {};
+  for (const l of leads) (groups[l.nextFlow] = groups[l.nextFlow] || []).push(l);
+  const order = Object.keys(groups).sort();
+  root.innerHTML = order.map((flow) => {
+    const rows = groups[flow].map((l) => `
+      <tr>
+        <td><input type="checkbox" class="rowchk" data-id="${esc(l.pageId)}" data-name="${esc(l.name)}" data-phone="${esc(l.phone)}" data-flow="${esc(l.nextFlow)}" onchange="refreshCount()"></td>
+        <td>${esc(l.name)}</td>
+        <td>${esc(l.phone)}</td>
+        <td>${esc(l.cohortDay || "")}</td>
+        <td class="reply">${esc((l.lastReply || "").slice(0, 80))}</td>
+        <td><button class="noflag" onclick="redflag('${esc(l.pageId)}', this)">不发</button></td>
+      </tr>`).join("");
+    // Default the "整组改为" dropdown to the NEXT flow (so the Flow 2 group
+    // defaults to Flow 3), which is the usual intent.
+    const flowKeys = Object.keys(FLOW_DAY);
+    const curIdx = flowKeys.indexOf(flow);
+    const defIdx = curIdx >= 0 && curIdx + 1 < flowKeys.length ? curIdx + 1 : curIdx;
+    const flowOpts = flowKeys.map((f, i) => `<option${i === defIdx ? " selected" : ""}>${esc(f)}</option>`).join("");
+    return `<div class="group">
+      <div class="ghead">
+        <input type="checkbox" onchange="toggleGroup(this)">
+        <span>${esc(flow)}</span><span class="cnt">${groups[flow].length} 人</span>
+        <button class="ghost" style="padding:4px 10px; margin-left:8px;" onclick="previewGroup('${esc(flow)}')">👁 预览模板</button>
+        <span class="gmove">整组改为 <select class="gflow">${flowOpts}</select>
+          <button class="ghost" onclick="setGroup('${esc(flow)}', this)">应用</button></span>
+      </div>
+      <table>
+        <thead><tr><th></th><th>名字</th><th>电话</th><th>Cohort</th><th>上次回复</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+  refreshCount();
+}
+
+function toggleGroup(box) {
+  const checks = box.closest(".group").querySelectorAll(".rowchk");
+  checks.forEach((c) => (c.checked = box.checked));
+  refreshCount();
+}
+
+async function redflag(pageId, btn) {
+  if (!confirm("把这个人标成「不发」(退订)?以后不再拉出来。")) return;
+  try {
+    await api("/api/next-flow/redflag", { pageIds: [pageId] });
+    ALL = ALL.filter((l) => l.pageId !== pageId);
+    render();
+    toast("已标记不发");
+  } catch (e) { toast("失败:" + e.message, true); }
+}
+
+function selectedLeads() {
+  return selectedRows().map((c) => ({ pageId: c.dataset.id, name: c.dataset.name, phone: c.dataset.phone }));
+}
+function checkedInstances() {
+  return [...document.querySelectorAll(".instchk:checked")].map((c) => c.value);
+}
+
+async function setGroup(fromFlow, btn) {
+  const sel = btn.parentElement.querySelector(".gflow");
+  const toFlow = sel.value;
+  if (toFlow === fromFlow) return toast("目标和当前一样,不用改。", true);
+  if (!confirm(`把「${currentProject}」里整组「${fromFlow}」的人全部改成「${toFlow}」?`)) return;
+  try {
+    const r = await api("/api/next-flow/set-group", { projectName: currentProject, fromFlow, toFlow });
+    let msg = `已把 ${r.set} 人 ${r.from} → ${r.to}`;
+    if (r.skippedStop) msg += ` · ${r.skippedStop} 退订跳过`;
+    toast(msg);
+    await load();
+  } catch (e) { toast("失败:" + e.message, true); }
+}
+
+async function applySetFlow() {
+  const nextFlow = document.getElementById("setFlowSel").value;
+  const phones = document.getElementById("phonesBox").value.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+  if (!phones.length) return toast("先贴电话号码。", true);
+  if (!nextFlow) return toast("先选一个 Flow。", true);
+  if (!confirm(`把这 ${phones.length} 个号码设为「${nextFlow}」?`)) return;
+  try {
+    const r = await api("/api/next-flow/set-flow", { phones, nextFlow });
+    let msg = `已设 ${r.set} 人 → ${r.nextFlow}`;
+    if (r.notFound) msg += ` · ${r.notFound} 个没找到`;
+    if (r.skippedStop) msg += ` · ${r.skippedStop} 个已退订跳过`;
+    toast(msg);
+    document.getElementById("phonesBox").value = "";
+    await load();
+  } catch (e) { toast("失败:" + e.message, true); }
+}
+
+function closeModal() { document.getElementById("tplModal").classList.add("hidden"); }
+
+function renderPreviewHtml(p, flow, tailNote) {
+  const langs = Object.keys(p.languages || {});
+  let h = `<div class="muted" style="margin-bottom:10px;">项目 ${esc(currentProject)} · ${esc(flow)}</div>`;
+  if (!langs.length) {
+    h += `<div class="warn">⚠️ 没有对得上的 Active 模板。去 Templates 库确认有一条 Flow Topic = ${esc(flow.split(" - ").slice(1).join(" - "))}、Status = Active 的模板。</div>`;
+    return h;
+  }
+  for (const L of langs) {
+    const t = p.languages[L];
+    // Build ordered [partNumber, variants[]] entries (supports Part 1..N).
+    let entries = [];
+    if (t.parts) {
+      Object.keys(t.parts).map(Number).sort((a, b) => a - b).forEach((n) => {
+        if ((t.parts[n] || []).length) entries.push([n, t.parts[n]]);
+      });
+    } else {
+      const p1s = Array.isArray(t.p1) ? t.p1 : (t.p1 ? [t.p1] : []);
+      const p2s = Array.isArray(t.p2) ? t.p2 : (t.p2 ? [t.p2] : []);
+      if (p1s.length) entries.push([1, p1s]);
+      if (p2s.length) entries.push([2, p2s]);
+    }
+    h += `<div class="tpl-lang"><b>${esc(L)}</b>`;
+    if (entries.some(([, arr]) => arr.length > 1)) h += `<div class="muted">🔀 有多个版本,发送时每个客户随机抽一条</div>`;
+    entries.forEach(([n, arr]) => {
+      arr.forEach((v, i) => {
+        h += `<div class="tpl-part"><div class="tpl-tag">Part ${n}${arr.length > 1 ? ` · 版本 ${i + 1}` : ""}</div><pre>${esc(v.text || "(无文字)")}</pre>${v.media ? `<div class="muted">🖼 ${esc(v.media)}</div>` : ""}</div>`;
+      });
+    });
+    h += `</div>`;
+  }
+  h += `<div class="muted">发送时 [Name] / [名字] 会换成每个客户的名字。</div>`;
+  if (tailNote) h += `<div class="muted" style="margin-top:8px;">${esc(tailNote)}</div>`;
+  return h;
+}
+
+function openTemplateModal(html, onConfirm, confirmLabel) {
+  document.getElementById("tplContent").innerHTML = html;
+  const btn = document.getElementById("tplConfirmBtn");
+  if (onConfirm) {
+    btn.style.display = "";
+    btn.textContent = confirmLabel || "确认发送";
+    btn.onclick = () => { closeModal(); onConfirm(); };
+  } else {
+    btn.style.display = "none";
+    btn.onclick = null;
+  }
+  document.getElementById("tplModal").classList.remove("hidden");
+}
+
+// Just look at the template for a group — no sending.
+async function previewGroup(flow) {
+  if (!FLOW_DAY[flow]) return toast(`「${flow}」不是可自动发的轮次。`, true);
+  try {
+    const p = await api("/api/next-flow/preview-template", { projectName: currentProject, flow });
+    openTemplateModal(renderPreviewHtml(p, flow, null), null);
+  } catch (e) { toast("预览失败:" + e.message, true); }
+}
+
+async function startBlast(mode) {
+  const proj = PROJECTS.find((p) => p.name === currentProject);
+  if (!proj) return toast("Console 里找不到对应 project:" + currentProject, true);
+  const rows = selectedRows();
+  if (!rows.length) return toast("先勾选(决定发哪一轮的模板)。", true);
+  const flows = [...new Set(rows.map((r) => r.dataset.flow))];
+  if (flows.length > 1) return toast("一次只发一个 Next Flow,请只勾同一组。", true);
+  const flow = flows[0];
+  if (!FLOW_DAY[flow]) return toast(`「${flow}」不是可自动发的轮次,先手动设模板再发。`, true);
+
+  let p;
+  try { p = await api("/api/next-flow/preview-template", { projectName: currentProject, flow }); }
+  catch (e) { return toast("取模板失败:" + e.message, true); }
+  const hasTpl = Object.keys(p.languages || {}).length > 0;
+  const limitN = parseInt(document.getElementById("limitN").value, 10);
+  const willSend = (Number.isInteger(limitN) && limitN > 0 && limitN < rows.length) ? limitN : rows.length;
+  const tail = mode === "LIVE"
+    ? `确认后发前 ${willSend} 人(共选 ${rows.length})· 发完自动推进,剩下的留到下次。`
+    : "确认后只发给你自己(测试)。";
+  const label = mode === "LIVE" ? `确认发送 ${willSend} 人 🚀` : "确认测试(发给自己)🧪";
+  // Only show the confirm button when there's actually a template to send.
+  openTemplateModal(renderPreviewHtml(p, flow, tail), hasTpl ? (() => doSend(mode, proj, rows, flow, willSend)) : null, label);
+}
+
+async function doSend(mode, proj, rows, flow, limitCount) {
+  try {
+    if (mode === "LIVE") {
+      const sel = rows.map((r) => ({ pageId: r.dataset.id, name: r.dataset.name, phone: r.dataset.phone }));
+      await api("/api/next-flow/load", { project: proj.id, leads: sel });
+    }
+    const instances = checkedInstances();
+    const startTime = document.getElementById("startTime").value.trim();
+    const endTime = document.getElementById("endTime").value.trim();
+    const prep = { project: proj.id, mode, instances, startTime, endTime };
+    if (mode === "LIVE" && limitCount && limitCount < rows.length) prep.leadCount = limitCount;
+    await api("/api/prepare", prep);
+    const ap = await api("/api/next-flow/apply-templates", { projectName: currentProject, flow });
+    toast(`套用模板 ${flow} · ${ap.languages.join("/")} · ${ap.overridden} 人`);
+    await api("/api/start", { optIn: true, overrides: {}, autoAdvance: mode === "LIVE" });
+    setTimeout(() => toast(mode === "LIVE" ? `已开始发送 ${flow} 🚀 发完自动推进到下一轮` : "已发测试给自己 🧪"), 800);
+    setTimeout(pollStatus, 1800);
+  } catch (e) { toast("发送失败:" + e.message, true); }
+}
+
+function hhmmss(iso) {
+  try { return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
+  catch { return ""; }
+}
+async function stopSend() {
+  if (!confirm("确定停止这批发送?已经发出去的会自动推进到下一轮,没发的留着下次再发。")) return;
+  try {
+    await api("/api/stop", {});
+    toast("已发停止指令,正在收尾并更新 Notion…");
+  } catch (e) { toast("停止失败:" + e.message, true); }
+}
+
+// Real-time reply routing during a blast: scan Evolution, colour repliers red/green.
+async function scanReplies() {
+  try {
+    const r = await api("/api/next-flow/scan-replies", {});
+    const box = document.getElementById("replyPanel");
+    const reps = r.replies || [];
+    if (!reps.length) { box.style.display = "none"; return; }
+    box.style.display = "";
+    const red = reps.filter((x) => x.signal === "RED").length;
+    const green = reps.filter((x) => x.signal === "GREEN").length;
+    box.innerHTML = `<div class="statushead">🎯 本批实时回复 · 🔴 ${red} 停/拒 · 🟢 ${green} 有意向</div>` +
+      reps.slice().reverse().map((x) => {
+        const c = x.signal === "RED" ? "red" : x.signal === "GREEN" ? "green" : "grey";
+        const dot = x.signal === "RED" ? "🔴" : x.signal === "GREEN" ? "🟢" : "⚪️";
+        return `<div class="rep ${c}">${dot} <b>${esc(x.name)}</b> · ${esc(x.route)} · 「${esc(x.text || "")}」</div>`;
+      }).join("");
+  } catch { /* ignore */ }
+}
+
+let wasRunning = false;      // was the run active on the previous poll?
+let postDoneChecks = 0;      // how many times we've polled after it stopped
+let scanTick = 0;            // throttle Evolution scans (~every 3rd poll)
+async function pollStatus() {
+  const box = document.getElementById("statusPanel");
+  try {
+    const s = await api("/api/status");
+    if (!s || !s.state) { box.style.display = "none"; return; }
+    box.style.display = "";
+    const a = s.state.assignments || [];
+    const sent = a.filter((j) => j.part1At).length;
+    const failed = a.filter((j) => j.status === "FAILED").length;
+    const sum = s.state.summary || {};
+    const sumStr = Object.entries(sum).map(([k, v]) => `${k}:${v}`).join(" · ");
+    const log = s.log || [];
+    const running = !!s.running;
+    const isFlowRun = !!s.state.flowLabel;   // a picker flow send (has auto-advance)
+    const advanceDone = !!s.state.advanceDone; // server says the Notion update finished
+    const recent = log.slice(-10).reverse()
+      .map((e) => `<div class="logline"><span class="muted">${esc(hhmmss(e.time))}</span> ${esc(e.message)}</div>`).join("");
+    const head = running ? "🟢 发送中"
+      : !isFlowRun ? "✅ 完成"
+      : advanceDone ? "✅ 已更新完毕,可以继续"
+      : "⚪️ Notion 更新中…(正在推进已发的人)";
+    const stopBtn = running
+      ? ` <button class="ghost" style="padding:3px 12px; margin-left:10px; border-color:#dc2626; color:#f87171;" onclick="stopSend()">⏸ 停止发送</button>`
+      : "";
+    box.innerHTML =
+      `<div class="statushead">${head} · ${sent}/${a.length} 已发${failed ? ` · ❌ ${failed} 失败` : ""}${stopBtn}</div>` +
+      `<div class="muted" style="margin:4px 0;">${esc(sumStr)}</div>` +
+      `<div class="loglist">${recent}</div>`;
+
+    if (running) {
+      wasRunning = true; postDoneChecks = 0;
+      if (scanTick++ % 3 === 0) scanReplies(); // real-time reply routing (~every 9s)
+      setTimeout(pollStatus, 3000);
+    } else if (wasRunning) {
+      scanReplies(); // one final scan to catch last replies
+      // Run finished — wait until the server says the Notion auto-advance is done,
+      // then refresh the list so sent people drop out of their group.
+      if (!isFlowRun || advanceDone) {
+        wasRunning = false;
+        toast(isFlowRun ? "✅ 已更新完毕,列表已刷新" : "✅ 完成");
+        load();
+      } else if (postDoneChecks < 80) { // wait up to ~4 min (Notion can be slow)
+        postDoneChecks += 1;
+        setTimeout(pollStatus, 3000);
+      } else {
+        wasRunning = false;
+        toast("已结束,已刷新列表(如仍在推进,稍后再刷新)");
+        load();
+      }
+    }
+  } catch { if (wasRunning) setTimeout(pollStatus, 3000); }
+}
+
+async function load() {
+  document.getElementById("list").innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const [proj, inst, data] = await Promise.all([
+      api("/api/projects"), api("/api/instances"), api("/api/next-flow/list"),
+    ]);
+    PROJECTS = proj.projects || [];
+    ALL = data.leads || [];
+    // project dropdown from the projects that actually have due leads
+    const present = [...new Set(ALL.map((l) => l.project))];
+    const sel = document.getElementById("projectSel");
+    sel.innerHTML = (present.length ? present : ["(无)"]).map((p) => `<option>${esc(p)}</option>`).join("");
+    currentProject = present[0] || "";
+    sel.onchange = () => { currentProject = sel.value; render(); };
+    // populate the "set flow" dropdown (only flows we can auto-template)
+    document.getElementById("setFlowSel").innerHTML = Object.keys(FLOW_DAY).map((f) => `<option>${esc(f)}</option>`).join("");
+    // instances
+    const iw = document.getElementById("instWrap");
+    if (inst.online && (inst.instances || []).length) {
+      iw.innerHTML = '<span class="pill">号码</span>' + inst.instances.map((i) =>
+        `<label><input type="checkbox" class="instchk" value="${esc(i.name)}" checked> ${esc(i.name)}</label>`).join("");
+    } else {
+      iw.innerHTML = '<span class="pill" style="color:#f87171">WhatsApp 未在线</span>';
+    }
+    document.getElementById("dueInfo").textContent = `共 ${ALL.length} 人到期 · ${data.today || ""}`;
+    render();
+    pollStatus(); // show a run already in progress, if any
+  } catch (e) {
+    document.getElementById("list").innerHTML = `<div class="empty">加载失败:${esc(e.message)}</div>`;
+  }
+}
+load();
+</script>
+</body>
+</html>

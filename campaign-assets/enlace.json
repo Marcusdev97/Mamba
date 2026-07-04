@@ -1,0 +1,86 @@
+{
+  "campaignId": "enlace",
+  "campaignName": "Enlace",
+  "languageSelection": {
+    "mode": "random",
+    "weights": {
+      "en": 50,
+      "zh": 50
+    },
+    "keepPartsInSameLanguage": true
+  },
+  "delivery": {
+    "partGapSeconds": 45,
+    "contactGapSeconds": {
+      "min": 45,
+      "max": 75
+    },
+    "globalSerialSending": true,
+    "cancelPart2WhenCustomerReplies": true,
+    "preventDuplicateContact": true,
+    "requireOpenInstance": true
+  },
+  "personalization": {
+    "sourceColumn": "Name",
+    "placeholders": [
+      "[Name]",
+      "[名字]"
+    ]
+  },
+  "part1": {
+    "variants": [
+      {
+        "id": "enl_en_connect_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\n*Right beside Bangsar South* 👇\n🚆 Walk to MRT linked bridge (2–3 min)\n🚗 4 min Mid Valley · 8 min PJ/Sunway · 10 min KLCC/TRX\n🌳 Next to *200-acre forest reserve*\n🏡 *Fully furnished*\n🎁 Developer pays legal fee + package",
+        "media": "images/enlace_MRT_nearby_en.png"
+      },
+      {
+        "id": "enl_en_township_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\n*New launch @ Pantai Sentral Park, beside Bangsar South* 👇\n🌳 *200-acre forest reserve*\n🚆 MRT walking distance\n🛒 Retail, park, wellness centre in the township\n🏡 *Fully furnished*\n🏢 Low density — only 290 units",
+        "media": "images/enlace_township_en.png"
+      },
+      {
+        "id": "enl_en_forest_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\n*New launch beside Bangsar South* 👇\n🌳 *200-acre forest reserve* next door\n🚆 Walk to MRT\n📍 4 min to Mid Valley\n🏡 *Fully furnished*\n🏢 Low density — only 290 units\n🎁 Developer pays legal fee + package",
+        "media": "images/enlace_MRT_nearby_en.png"
+      },
+      {
+        "id": "enl_en_invest_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\n*New launch beside Bangsar South* 👇\n💼 Surrounded by offices — *Axiata, Accenture, TNG*\n🚆 Walk to MRT, tenants love this side\n🌳 200-acre forest, low density 290 units\n🏡 *Fully furnished, ready to rent*\n🔑 *Dual Key* — two rental incomes",
+        "media": "images/enlace_invest_surround_en.png"
+      }
+    ]
+  },
+  "part2": {
+    "variants": [
+      {
+        "id": "enl_en_connect_p2",
+        "language": "en",
+        "text": "Got from studio entry all the way up 👇\n\n✅ *Studio / 1BR* — 474 to 613 sqft\n✅ *2BR / Dual Key* — 797 to 979 sqft\n✅ *3BR / 4BR / Duplex* — got also\n\n*which size you looking at? I send you that one*",
+        "media": ""
+      },
+      {
+        "id": "enl_en_township_p2",
+        "language": "en",
+        "text": "Layout quite a range, something for most people 👇\n\n✅ Studio / 1BR — 474 to 613 sqft\n✅ *2BR / Dual Key* — 797 to 979 sqft\n✅ 3BR — 1227 to 1249 sqft\n✅ *4BR + Duplex* — got also\n\n*which one sound like you? I send that layout*",
+        "media": ""
+      },
+      {
+        "id": "enl_en_forest_p2",
+        "language": "en",
+        "text": "Layout here got quite a range 👇\n\n✅ *Studio / 1BR* — 474 to 613 sqft\n✅ *2BR / Dual Key* — 797 to 979 sqft\n✅ *3BR* — 1227 to 1249 sqft\n✅ *4BR* — 1485 to 1593 sqft\n✅ *Duplex* also got\n\n*which one suit you? I send you that one*",
+        "media": ""
+      },
+      {
+        "id": "enl_en_invest_p2",
+        "language": "en",
+        "text": "Few layout here, but the *Dual Key* is the one investors grab 👇\n\n✅ Studio / 1BR — 474 to 613 sqft\n✅ *2BR / Dual Key* — 797 to 979 sqft (split into two, two rental)\n✅ 3BR / 4BR — bigger ones also got\n\n*you want for rental or own stay? I send you the right one*",
+        "media": ""
+      }
+    ]
+  }
+}

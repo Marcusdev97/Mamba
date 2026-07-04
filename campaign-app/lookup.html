@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>查找客户 · Lead Lookup</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0b1220; color: #e2e8f0; font: 15px/1.5 -apple-system, "SF Pro", "PingFang SC", system-ui, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .sub { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+  .nav a { color: #60a5fa; text-decoration: none; font-size: 13px; margin-right: 14px; }
+  .card { background: #0f1729; border: 1px solid #263349; border-radius: 14px; padding: 18px 18px; margin-bottom: 18px; }
+  .syncbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; background: #111a2e; border: 1px solid #263349; border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; }
+  .syncinfo { font-size: 13px; color: #cbd5e1; flex: 1; }
+  .syncinfo b { color: #e2e8f0; }
+  .stale { color: #fbbf24; }
+  button { padding: 10px 16px; border-radius: 10px; border: 0; background: #22c55e; color: #04120a; font-weight: 700; font-size: 14px; cursor: pointer; }
+  button.ghost { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
+  button:disabled { opacity: .5; cursor: default; }
+  input#q { flex: 1; padding: 12px 14px; border-radius: 10px; border: 1px solid #334155; background: #111a2e; color: #e2e8f0; font-size: 16px; }
+  input#q:focus { outline: none; border-color: #22c55e; }
+  .searchbar { display: flex; gap: 10px; }
+  .hint { color: #64748b; font-size: 12px; margin-top: 8px; }
+  .drop { border: 2px dashed #334155; border-radius: 12px; padding: 26px; text-align: center; color: #94a3b8; cursor: pointer; transition: .15s; }
+  .drop.hot { border-color: #22c55e; background: #0d1c12; color: #86efac; }
+  .drop b { color: #e2e8f0; }
+  .summary { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .pill { padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: #1e293b; border: 1px solid #334155; }
+  .pill.blasted { background: #3f1d1d; color: #fca5a5; border-color: #7f1d1d; }
+  .pill.fresh { background: #14351f; color: #86efac; border-color: #166534; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 6px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #1e293b; vertical-align: top; }
+  th { color: #64748b; font-weight: 600; font-size: 12px; }
+  tr.blasted td:first-child { border-left: 3px solid #ef4444; }
+  tr.fresh td:first-child { border-left: 3px solid #22c55e; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+  .tag.new { background: #14351f; color: #86efac; }
+  .tag.old { background: #3f1d1d; color: #fca5a5; }
+  .rec { font-size: 12.5px; color: #cbd5e1; margin-bottom: 3px; }
+  .rec .proj { color: #bfdbfe; font-weight: 600; }
+  .rec .stopx { color: #fca5a5; }
+  a.nl { color: #60a5fa; text-decoration: none; }
+  /* single-search cards */
+  .rescard { background: #111a2e; border: 1px solid #263349; border-left: 4px solid #3b82f6; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+  .rescard.stop { border-left-color: #ef4444; }
+  .rescard.warm { border-left-color: #22c55e; }
+  .chead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .cname { font-size: 16px; font-weight: 700; }
+  .cphone { color: #94a3b8; font-size: 13px; }
+  .badge { padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #1e293b; color: #93c5fd; border: 1px solid #334155; }
+  .badge.proj { background: #1e3a5f; color: #bfdbfe; }
+  .badge.stopb { background: #3f1d1d; color: #fca5a5; }
+  .grid2 { display: grid; grid-template-columns: 120px 1fr; gap: 3px 12px; font-size: 13px; margin-top: 4px; }
+  .k { color: #64748b; }
+  .empty { color: #64748b; padding: 22px 0; text-align: center; }
+  .err { color: #fca5a5; margin-top: 8px; }
+  .muted { color: #94a3b8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="/">← Campaign Console</a><a href="/next-flow">选人发下一轮</a><a href="/templates">模板 & Flow</a></div>
+  <h1>🔎 查找客户 · Lead Lookup</h1>
+  <div class="sub">先把 Notion 存成<b>本地快照</b>,之后拖 Excel 进来批量对比(哪些已 blast、哪些是新客户),或单个查号码/名字 —— 都走本地,秒出结果。</div>
+
+  <div class="syncbar">
+    <div class="syncinfo" id="syncInfo">本地快照:加载中…</div>
+    <button id="btnSync">🔄 同步 Notion 到本地</button>
+  </div>
+
+  <div class="card">
+    <h2>① 批量对比 Excel</h2>
+    <div class="drop" id="drop">
+      把 <b>Excel(.xlsx)</b> 拖到这里,或点这里选文件<br>
+      <span class="muted" style="font-size:12px">需要 Name / Phone 两列。对比的是本地快照,记得先同步。</span>
+    </div>
+    <input type="file" id="file" accept=".xlsx,.xls" style="display:none" />
+    <div id="matchSummary" class="summary"></div>
+    <div id="matchResult"></div>
+  </div>
+
+  <div class="card">
+    <h2>② 单个查找</h2>
+    <div class="searchbar">
+      <input id="q" placeholder="60163101024 / 0163101024 / Sam" />
+      <button id="btn">查找</button>
+    </div>
+    <div class="hint">号码可只输后几位;名字可输一部分。跨所有项目。</div>
+    <div id="summary" class="summary"></div>
+    <div id="results"></div>
+  </div>
+
+  <div id="err" class="err"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function fmtDate(iso, withTime) {
+  if (!iso) return "—";
+  try { const d = new Date(iso); return d.toLocaleString("zh-CN", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) }); }
+  catch { return iso; }
+}
+function ago(iso) {
+  if (!iso) return "从未";
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "刚刚"; if (mins < 60) return mins + " 分钟前";
+  const h = Math.floor(mins / 60); if (h < 24) return h + " 小时前";
+  return Math.floor(h / 24) + " 天前";
+}
+
+// ---- sync ----
+async function loadCacheInfo() {
+  try {
+    const d = await (await fetch("/api/lookup/cache-info")).json();
+    if (!d.count) { $("syncInfo").innerHTML = `<span class="stale">本地快照:空 —— 先点右边同步一次。</span>`; return; }
+    const stale = d.syncedAt && (Date.now() - new Date(d.syncedAt).getTime()) > 12 * 3600 * 1000;
+    $("syncInfo").innerHTML = `本地快照:<b>${d.count}</b> 条 · 同步于 <span class="${stale ? "stale" : ""}">${esc(fmtDate(d.syncedAt, true))}(${ago(d.syncedAt)})</span>${stale ? " ⚠️ 有点旧了,建议重新同步" : ""}`;
+  } catch { $("syncInfo").textContent = "本地快照:读取失败"; }
+}
+async function doSync() {
+  $("btnSync").disabled = true; $("btnSync").textContent = "同步中…(几秒到几十秒)"; $("err").textContent = "";
+  try {
+    const d = await (await fetch("/api/lookup/sync", { method: "POST" })).json();
+    if (!d.ok) throw new Error(d.error || "同步失败");
+    await loadCacheInfo();
+  } catch (e) { $("err").textContent = "同步错误:" + e.message; }
+  finally { $("btnSync").disabled = false; $("btnSync").textContent = "🔄 同步 Notion 到本地"; }
+}
+
+// ---- batch match ----
+function fileToBase64(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); }); }
+function recLine(r) {
+  const bits = [`<span class="proj">${esc(r.project || "?")}</span>`];
+  bits.push(fmtDate(r.lastBlastAt || r.firstBlastAt));
+  if (r.lastFlowSent) bits.push(esc(r.lastFlowSent));
+  if (r.stopFlag) bits.push(`<span class="stopx">🔴 STOP</span>`);
+  else if (r.sequenceStatus) bits.push(esc(r.sequenceStatus));
+  return `<div class="rec">${bits.join(" · ")} <a class="nl" href="${esc(r.url)}" target="_blank">↗</a></div>`;
+}
+async function matchFile(file) {
+  $("err").textContent = ""; $("matchResult").innerHTML = ""; $("matchSummary").innerHTML = "";
+  if (!/\.xlsx?$/i.test(file.name)) { $("err").textContent = "请选 .xlsx 文件"; return; }
+  $("matchSummary").innerHTML = `<span class="pill">对比中…</span>`;
+  try {
+    const base64 = await fileToBase64(file);
+    const d = await (await fetch("/api/lookup/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base64 }) })).json();
+    if (!d.ok) throw new Error(d.error || "对比失败");
+    if (!d.cacheCount) { $("matchSummary").innerHTML = `<span class="pill stale" style="color:#fbbf24">本地快照是空的 —— 先点上面「同步」再对比。</span>`; return; }
+    $("matchSummary").innerHTML =
+      `<span class="pill">共 <b>${d.total}</b> 行</span>` +
+      `<span class="pill blasted">已 blast <b>${d.matched}</b></span>` +
+      `<span class="pill fresh">新客户 <b>${d.fresh}</b></span>` +
+      (d.rejected ? `<span class="pill">重复/无效 ${d.rejected}</span>` : "");
+    $("matchResult").innerHTML =
+      `<table><thead><tr><th>姓名</th><th>号码</th><th>结果</th><th>跑过的项目 & 时间</th></tr></thead><tbody>` +
+      d.rows.map((r) => `<tr class="${r.matched ? "blasted" : "fresh"}"><td>${esc(r.name)}</td><td>${esc(r.phone)}</td><td>${r.matched ? '<span class="tag old">已 blast</span>' : '<span class="tag new">🆕 新客户</span>'}</td><td>${r.matched ? r.records.map(recLine).join("") : '<span class="muted">—</span>'}</td></tr>`).join("") +
+      `</tbody></table>`;
+  } catch (e) { $("err").textContent = "对比错误:" + e.message; $("matchSummary").innerHTML = ""; }
+}
+
+// ---- single search ----
+function searchCard(r) {
+  const cls = r.stopFlag ? "stop" : (r.aiCategory && /warm|interest/i.test(r.aiCategory) ? "warm" : "");
+  const badges = [`<span class="badge proj">${esc(r.project || "?")}</span>`];
+  if (r.stopFlag) badges.push(`<span class="badge stopb">🔴 STOP</span>`);
+  if (r.sequenceStatus) badges.push(`<span class="badge">${esc(r.sequenceStatus)}</span>`);
+  const flow = [r.lastFlowSent && `已发到 ${esc(r.lastFlowSent)}`, r.nextFlow && `下一轮 ${esc(r.nextFlow)}`, r.cohortDay && `(${esc(r.cohortDay)})`].filter(Boolean).join(" · ") || "—";
+  const reply = (r.replyCount || r.lastReplyAt || r.lastReplyText) ? `<div class="rec" style="margin-top:6px">💬 回复 ${r.replyCount ?? 0} 次${r.lastReplyAt ? " · " + esc(fmtDate(r.lastReplyAt, true)) : ""}${r.aiCategory ? " · " + esc(r.aiCategory) : ""}${r.lastReplyText ? `<br>「${esc(r.lastReplyText.slice(0, 140))}」` : ""}</div>` : "";
+  return `<div class="rescard ${cls}"><div class="chead"><span class="cname">${esc(r.name || "(无名)")}</span><span class="cphone">${esc(r.phone || "")}</span>${badges.join("")}</div>
+    <div class="grid2"><span class="k">首次 blast</span><span>${esc(fmtDate(r.firstBlastAt, true))}</span><span class="k">最近 blast</span><span>${esc(fmtDate(r.lastBlastAt, true))}</span><span class="k">Flow 进度</span><span>${flow}</span></div>
+    ${r.stopFlag && r.stopReason ? `<div class="rec" style="margin-top:6px">⛔ ${esc(r.stopReason)}</div>` : ""}${reply}
+    <a class="nl" href="${esc(r.url)}" target="_blank" style="display:inline-block;margin-top:6px">在 Notion 打开 →</a></div>`;
+}
+async function search() {
+  const q = $("q").value.trim(); $("err").textContent = ""; $("results").innerHTML = ""; $("summary").innerHTML = "";
+  if (!q) return;
+  $("btn").disabled = true; $("btn").textContent = "查找中…";
+  try {
+    const d = await (await fetch("/api/lookup?q=" + encodeURIComponent(q))).json();
+    if (!d.ok) throw new Error(d.error || "查找失败");
+    const rows = d.results || [];
+    if (!rows.length) { $("results").innerHTML = `<div class="empty">没找到「${esc(q)}」的记录。</div>`; return; }
+    const projects = [...new Set(rows.map((r) => r.project).filter(Boolean))];
+    $("summary").innerHTML = `<span class="pill">找到 <b>${rows.length}</b> 条 · 跑过 <b>${projects.length}</b> 个项目:${projects.map(esc).join("、")}</span>`;
+    $("results").innerHTML = rows.map(searchCard).join("");
+  } catch (e) { $("err").textContent = "错误:" + e.message; }
+  finally { $("btn").disabled = false; $("btn").textContent = "查找"; }
+}
+
+// wiring
+$("btnSync").onclick = doSync;
+$("btn").onclick = search;
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+const drop = $("drop"), fileInput = $("file");
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => { if (fileInput.files[0]) matchFile(fileInput.files[0]); };
+["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) matchFile(f); });
+loadCacheInfo();
+</script>
+</body>
+</html>

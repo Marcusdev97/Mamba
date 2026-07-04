@@ -1,0 +1,185 @@
+// Mamba | Control Center
+//
+// A tiny local web dashboard so you never have to hunt for .command files.
+// It lists every launcher in the Mamba folder as a button; clicking a button
+// opens that command for you (in Terminal, just like double-clicking it).
+//
+// A browser page can't run local commands by itself, so this small Node server
+// does it: the page calls back here, and here we run macOS `open` on the file.
+
+import http from "node:http";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+
+const appDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(appDir, ".."); // the Mamba folder
+const PORT = Number(process.env.CONTROL_PORT ?? 8810);
+const HOST = "127.0.0.1";
+const LOCAL_URL = `http://${HOST}:${PORT}`;
+const SELF = "Mamba Control Center.command"; // don't list the launcher that started us
+
+// Nice labels/descriptions for the known launchers. Anything else found in the
+// folder still shows up (under "其他"), so the panel always reflects reality.
+// `order` sets the click-through sequence within a group (lower = earlier), so
+// the daily flow reads top-to-bottom in the order you actually run it.
+const KNOWN = {
+  "Campaign Console.command":          { emoji: "📣", label: "① 发送 Blast(主控制台)", desc: "导入名单、设定时间、开始群发", group: "日常", order: 1 },
+  "Morning Follow-up Check.command":   { emoji: "☀️", label: "② 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 2 },
+  "选人发下一轮.command":               { emoji: "📥", label: "③ 选人发下一轮", desc: "网页列出该发下一轮的人,勾选后直接发(发完自动推进到下一轮),还能顺手标「不发」", group: "日常", order: 3 },
+  "更新最新一批到 Notion.command":       { emoji: "🔄", label: "③.5 补推进最新一批(保险)", desc: "万一发完自动推进没跑完,点这个补上。可重复点、不会重复推进", group: "日常", order: 3.5 },
+  "Update Notion Blast Leads.command": { emoji: "⬆️", label: "④ 上传 Blast 名单到 Notion", desc: "Flow 1 群发后,把当天 blast 的 leads 写进 Notion", group: "日常", order: 4 },
+  "Upload Blaster.command":            { emoji: "⬆️", label: "④ Upload Blaster(同上)", desc: "和「上传 Blast 名单」是同一个功能", group: "日常", order: 4 },
+  "Live Reply Tracker.command":        { emoji: "💬", label: "实时回复追踪", desc: "实时接住客户回复并更新 Notion", group: "日常", order: 6 },
+  "Nightly Summary.command":           { emoji: "🌙", label: "今日总结", desc: "数今天的电话/blast/回复,发 Telegram", group: "日常", order: 7 },
+  "Start Evolution.command":           { emoji: "🐳", label: "启动 Evolution(WhatsApp 引擎)", desc: "一键开 Docker + 拉起 Evolution 容器,号码上线后才能发送", group: "设置 & 工具", order: 20 },
+  "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
+  "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
+  "Backfill Old Leads.command":        { emoji: "🧬", label: "回填老客户到 Flow 系统", desc: "一次性:把升级前的老 leads 扫一遍回复后,补上 flow 状态进 Flow 2 序列", group: "设置 & 工具", order: 40 },
+  "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },
+  "Sync Templates.command":            { emoji: "🔄", label: "同步模板到 Notion", desc: "把话术模板同步到 Notion", group: "设置 & 工具", order: 50 },
+  "Test Notion Sync.command":          { emoji: "✅", label: "测试 Notion 连接", desc: "检查 token 和数据库是否连得上", group: "设置 & 工具", order: 50 },
+  "Set Notion Token.command":          { emoji: "🔑", label: "设置 Notion Token", desc: "填入 / 更新 Notion API key", group: "设置 & 工具", order: 50 },
+  "Setup Telegram.command":            { emoji: "📲", label: "设置 Telegram", desc: "连接 Telegram 推送", group: "设置 & 工具", order: 50 },
+  "Fix Mac Block.command":             { emoji: "🛠", label: "修复 Mac 拦截", desc: "解除「unidentified developer」限制", group: "设置 & 工具", order: 50 },
+};
+const GROUP_ORDER = ["日常", "设置 & 工具", "其他"];
+
+async function listTasks() {
+  const files = (await fs.readdir(rootDir).catch(() => []))
+    .filter((f) => f.endsWith(".command") && f !== SELF);
+  return files
+    .map((file) => {
+      const meta = KNOWN[file] ?? { emoji: "▶️", label: file.replace(/\.command$/, ""), desc: "", group: "其他", order: 100 };
+      return { file, order: 100, ...meta };
+    })
+    .sort((a, b) => {
+      const g = GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group);
+      if (g !== 0) return g;
+      if (a.order !== b.order) return a.order - b.order;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+function json(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(data));
+}
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return {}; }
+}
+
+function page() {
+  return `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mamba 控制台</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  .sub { color: #94a3b8; margin-bottom: 26px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: #7dd3fc; margin: 28px 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 16px; cursor: pointer; transition: .12s; text-align: left; color: inherit; }
+  .card:hover { border-color: #38bdf8; transform: translateY(-2px); }
+  .card:active { transform: translateY(0); }
+  .emoji { font-size: 22px; }
+  .label { font-weight: 700; margin: 8px 0 4px; font-size: 15px; }
+  .desc { color: #94a3b8; font-size: 13px; line-height: 1.4; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #16a34a; color: white; padding: 12px 20px; border-radius: 10px; font-weight: 700; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .toast.err { background: #dc2626; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🐍 Mamba 控制台</h1>
+  <div class="sub">点一下就能开,不用再找文件。每个按钮会帮你打开对应的程序窗口。</div>
+  <div id="groups"></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  let toastTimer;
+  function toast(msg, isErr) {
+    const t = document.getElementById("toast");
+    t.textContent = msg; t.className = "toast show" + (isErr ? " err" : "");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 2600);
+  }
+  async function run(file, label) {
+    try {
+      const res = await fetch("/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file }) });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) throw new Error(data.error || ("HTTP " + res.status));
+      toast("已打开:" + label);
+    } catch (e) { toast("打开失败:" + e.message, true); }
+  }
+  async function load() {
+    const res = await fetch("/api/tasks");
+    const data = await res.json();
+    const groups = {};
+    for (const t of data.tasks) (groups[t.group] = groups[t.group] || []).push(t);
+    const order = ["日常", "设置 & 工具", "其他"];
+    const root = document.getElementById("groups");
+    root.innerHTML = order.filter((g) => groups[g]).map((g) => \`
+      <h2>\${esc(g)}</h2>
+      <div class="grid">\${groups[g].map((t) => \`
+        <button class="card" onclick='run(\${JSON.stringify(t.file)}, \${JSON.stringify(t.label)})'>
+          <div class="emoji">\${t.emoji}</div>
+          <div class="label">\${esc(t.label)}</div>
+          <div class="desc">\${esc(t.desc)}</div>
+        </button>\`).join("")}</div>\`).join("");
+  }
+  load();
+</script>
+</body>
+</html>`;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, LOCAL_URL);
+    if (req.method === "GET" && url.pathname === "/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(page());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/tasks") {
+      json(res, 200, { ok: true, tasks: await listTasks() });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/run") {
+      const body = await readBody(req);
+      const file = String(body.file ?? "");
+      // Safety: only allow launching a .command that actually exists in this folder.
+      const allowed = (await listTasks()).some((t) => t.file === file);
+      if (!allowed) { json(res, 400, { ok: false, error: "未知的命令文件。" }); return; }
+      const fullPath = path.join(rootDir, file);
+      execFile("/usr/bin/open", [fullPath], (error) => {
+        if (error) console.log(`Failed to open ${file}: ${error.message}`);
+      });
+      console.log(`Opened: ${file}`);
+      json(res, 200, { ok: true });
+      return;
+    }
+    json(res, 404, { ok: false, error: "Not found" });
+  } catch (error) {
+    json(res, 400, { ok: false, error: error.message });
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log("Mamba | Control Center");
+  console.log("======================");
+  console.log(`Dashboard: ${LOCAL_URL}`);
+  console.log("Keep this window open while you use the panel. Close it to stop.");
+  execFile("/usr/bin/open", [LOCAL_URL], () => {});
+});
