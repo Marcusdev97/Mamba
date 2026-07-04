@@ -212,11 +212,25 @@ export function chooseLanguage(config) {
   return Math.random() * 100 < threshold ? "en" : "zh";
 }
 
+// Fix (2026-07): test numbers moved out of source into TEST_LEADS env var.
+// Format: "Name:phone:lang:templateId,Name:phone:lang:templateId"
+// e.g. TEST_LEADS="Alice:60123456789:en:en_part1_quick_update,Bob:60123456780:en:en_part1_still_looking"
 export function getTestLeads() {
-  return [
-    { id: "test_mark", name: "Mark", phone: "60168568756", language: "en", templateId: "en_part1_quick_update" },
-    { id: "test_ccliu", name: "CC Liu", phone: "60179978682", language: "en", templateId: "en_part1_still_looking" },
-  ];
+  const raw = process.env.TEST_LEADS || "";
+  const leads = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry, i) => {
+      const [name, phone, language, templateId] = entry.split(":").map((s) => (s || "").trim());
+      if (!name || !phone) return null;
+      return { id: `test_${i}_${name.toLowerCase().replace(/\s+/g, "_")}`, name, phone, language: language || "en", templateId: templateId || "" };
+    })
+    .filter(Boolean);
+  if (!leads.length) {
+    console.warn("[TEST MODE] TEST_LEADS env var is empty — add it to your .env (see comment above getTestLeads).");
+  }
+  return leads;
 }
 
 // Per-lead manual template override. overrides: [{ id, part1Variant }].

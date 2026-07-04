@@ -65,11 +65,19 @@ export function classifyReplyText(text) {
   // signal drives the row color the operator sees: "RED" (stop) / "GREEN" (warm) / "GREY" (neutral).
 
   // 1) STOP_DNC — always highest priority.
-  if (/(stop|remove|unsubscribe|do ?not ?contact|don'?t ?contact|block|不要再发|不要联系|别再发|停止|jangan mesej|jangan contact)/i.test(cleaned)) {
+  // Fix (2026-07): bare /stop|remove|block/ false-positived on normal questions
+  // like "how many stops to TRX?" or "2 blocks away?". Now: explicit stop PHRASES
+  // always match; bare keywords only count when the whole message is short (<= 20
+  // chars), i.e. a standalone "stop" / "别发了", not a word inside a real question.
+  const stopPhrase = /(please ?stop|stop (messaging|sending|texting|contacting)|\bunsubscribe\b|do ?not ?contact|don'?t ?contact( me)?|\bremove me\b|\bblock me\b|不要再发|不要联系|别再发|请停止|停止发|jangan mesej|jangan contact|jangan hantar)/i;
+  const stopBareShort = cleaned.length <= 20 && /(\bstop\b|\bremove\b|\bblock\b|停止|别发|勿扰)/i.test(cleaned);
+  if (stopPhrase.test(cleaned) || stopBareShort) {
     return { route: "STOP_DNC", status: "Stop", sequenceStatus: "Stopped", nextAction: "No Action", aiCategory: "Stop", stopFlag: true, signal: "RED", suggestedReply: "明白，不会再发信息给你。不好意思打扰了。" };
   }
   // 2) COMPLAINT — angry / scam / report -> stop + human takeover.
-  if (/(scam|spam|report|harass|annoying|骗人|垃圾信息|投诉|骚扰|烦|tipu)/i.test(cleaned)) {
+  // Fix (2026-07): bare 烦 matched inside 麻烦 ("麻烦 send 价格给我" is a HOT lead,
+  // was being stop-flagged as a complaint). Only explicit complaint phrases now.
+  if (/(scam|spam|\breport\b|harass|annoying|骗人|垃圾信息|投诉|骚扰|很烦|太烦|烦死|好烦|别烦|烦不烦|tipu)/i.test(cleaned)) {
     return { route: "COMPLAINT", status: "Stop", sequenceStatus: "Human Takeover", nextAction: "Human Takeover", aiCategory: "Stop", stopFlag: true, signal: "RED", suggestedReply: "不好意思打扰你了。我这边会停止联系。" };
   }
   // 3) Actionable requests — these WIN over a soft "not interested" (rule 2).
@@ -85,7 +93,7 @@ export function classifyReplyText(text) {
   if (/(size|layout|floor ?plan|sqft|bedroom|room|2房|3房|户型|面积|平方尺|keluasan|bilik)/i.test(cleaned)) {
     return { route: "LAYOUT_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Warm", stopFlag: false, signal: "GREEN", suggestedReply: "有 2房和 3房选择，我 send layout 给你看，你比较偏小单位还是家庭型？" };
   }
-  if (/(location|where|address|map|nearby|distance|地点|位置|地址|在哪里|靠近|dekat mana|lokasi)/i.test(cleaned)) {
+  if (/(location|where|address|map|nearby|distance|\bmrt\b|\blrt\b|\btrx\b|\bklcc\b|station|地点|位置|地址|在哪里|靠近|车站|地铁|dekat mana|lokasi|stesen)/i.test(cleaned)) {
     return { route: "LOCATION_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Warm", stopFlag: false, signal: "GREEN", suggestedReply: "这个在 Old Klang Road / Mid Valley 一带。我可以 send map location 给你参考。" };
   }
   if (/(details|info|brochure|send ?me|can ?send|share|资料|详情|发来看|可以send|可以发|boleh share|boleh send)/i.test(cleaned)) {
