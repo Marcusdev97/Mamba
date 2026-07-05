@@ -134,23 +134,33 @@ async function fetchBlastedPhones(projectName) {
   return phones;
 }
 
-async function fetchFlowTemplates(projectName, flowLabel) {
+async function fetchFlowTemplates(projectName, flowLabel, { includeTesting = false } = {}) {
   // The 2022-06-28 API's /databases/{id}/query wants the DATABASE id, not the
   // data source (collection) id — using the collection id 404s.
   const tplDbId = String(notionConfig?.databases?.templates ?? "").replace(/[^a-fA-F0-9]/g, "");
   if (!tplDbId) throw new Error("notion_config 里没有 templates database。");
   const topic = flowTopicOf(flowLabel);
   const proj = resolveTemplateProject(projectName);
+  // Normal sending only pulls Active. Mobile Preview can opt into Testing drafts
+  // too (includeTesting) so half-built flows can still be previewed — Active is
+  // always preferred over Testing when both exist for the same part.
+  const statusFilter = includeTesting
+    ? { or: [
+        { property: "Status", select: { equals: "Active" } },
+        { property: "Status", select: { equals: "Testing" } },
+      ] }
+    : { property: "Status", select: { equals: "Active" } };
   // Match by Flow Topic (which the templates are tagged with), not Cohort Day.
   const data = await notion("POST", `/databases/${tplDbId}/query`, { filter: { and: [
     { property: "Flow Topic", select: { equals: topic } },
     { property: "Project", select: { equals: proj } },
-    { property: "Status", select: { equals: "Active" } },
+    statusFilter,
   ] }, page_size: 100 });
   const byLang = {};
   for (const row of data?.results ?? []) {
     const lang = (nfSelect(row, "Language") || "EN").toUpperCase();
     const part = nfSelect(row, "Part");
+    const status = (nfSelect(row, "Status") || "").trim();
     const text = nfText(row, "Message Text");
     const imageName = nfText(row, "Image Name");
     const media = resolveMedia(imageName);
@@ -158,13 +168,27 @@ async function fetchFlowTemplates(projectName, flowLabel) {
     const pageId = row.id;
     const imagePageId = row.properties?.["Images"]?.relation?.[0]?.id || null;
     // Key by part NUMBER (Part 1/2/3/...), so templates can have any number of
-    // parts. "Follow Up" / blank -> part 1 (main message). Each part holds all its
-    // active variants so the sender can rotate between them (anti-spam).
+    // parts. Each part holds all its active variants so the sender can rotate
+    // between them (anti-spam). Ordering rules:
+    //   "Part N"    -> N
+    //   "Follow Up" -> 900, a sentinel that always sorts LAST, so the follow-up
+    //                  re-prompt goes out after every numbered part in the flow.
+    //                  (You can write the Follow Up content later; until then the
+    //                  flow just sends its numbered parts.)
+    //   blank/other -> 1  (the main message)
     const m = /(\d+)/.exec(part || "");
-    const pn = m ? Number(m[1]) : 1;
+    const pn = m ? Number(m[1]) : (/follow\s*up/i.test(part || "") ? 900 : 1);
     byLang[lang] = byLang[lang] || { parts: {} };
     byLang[lang].parts[pn] = byLang[lang].parts[pn] || [];
-    byLang[lang].parts[pn].push({ text, media, pageId, imagePageId });
+    byLang[lang].parts[pn].push({ text, media, pageId, imagePageId, status });
+  }
+  // Prefer Active variants first within each part so preview picks a live
+  // template over a Testing draft whenever one exists.
+  for (const lang of Object.keys(byLang)) {
+    for (const pn of Object.keys(byLang[lang].parts)) {
+      byLang[lang].parts[pn].sort((a, b) =>
+        (a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1));
+    }
   }
   // Legacy accessors so older readers (credit fallbacks, twoPart) still work.
   for (const lang of Object.keys(byLang)) {
@@ -172,6 +196,25 @@ async function fetchFlowTemplates(projectName, flowLabel) {
     byLang[lang].p2 = byLang[lang].parts[2] || [];
   }
   return byLang;
+}
+
+function pickPreviewLanguage(byLang, requestedLanguage) {
+  const languages = Object.keys(byLang || {});
+  if (!languages.length) return { language: "", parts: [] };
+  const preferred = String(requestedLanguage || "EN").trim().toUpperCase();
+  const language = byLang[preferred] ? preferred : (byLang.EN ? "EN" : languages[0]);
+  const parts = Object.keys(byLang[language]?.parts || {})
+    .map(Number)
+    .filter((n) => (byLang[language].parts[n] || []).length)
+    .sort((a, b) => a - b)
+    .map((n) => byLang[language].parts[n][0])
+    .filter(Boolean);
+  const usedTesting = parts.some((p) => p && p.status === "Testing");
+  return { language, parts, usedTesting };
+}
+
+async function shortPause(ms = 650) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // After a picker LIVE run finishes, push each sent lead's flow state forward in
@@ -883,6 +926,79 @@ const handlers = {
     });
   },
 
+  // Mobile Preview: send the automatic sequence to one test phone only.
+  // It does not create leads, update Notion, advance flow state, or credit counts.
+  "POST /api/templates/mobile-preview": async (req, res) => {
+    const body = await readBody(req);
+    const projectName = String(body.projectName ?? "").trim();
+    const phone = nfNormalizePhone(body.phone);
+    const name = String(body.name ?? "").trim() || "there";
+    const requestedLanguage = String(body.language ?? "EN").trim().toUpperCase();
+    const requestedInstance = String(body.instanceName ?? "").trim();
+    const includeTesting = body.includeTesting === true;
+    if (!projectName) throw new Error("请选择项目。");
+    if (!phone) throw new Error("电话号码格式不对。例子: 60123456789。");
+
+    const opened = await openInstances(api);
+    const sender = requestedInstance
+      ? opened.find((item) => item.name === requestedInstance)
+      : opened[0];
+    if (!sender) throw new Error("没有已连接的 WhatsApp sender。先去主控制台扫码连接一个 sender。");
+
+    const previewRunner = new CampaignRunner({ env });
+    const flowResults = [];
+    let sentMessages = 0;
+
+    await previewRunner.sendText(
+      sender.name,
+      phone,
+      `Mamba Mobile Preview\nProject: ${projectName}\nLanguage: ${requestedLanguage}\nSender: ${sender.name}\n\n下面会发送自动序列的真实模板。这个测试不会更新 Notion。`,
+    );
+    sentMessages += 1;
+    await shortPause();
+
+    for (const flow of FLOW_SEQUENCE) {
+      const byLang = await fetchFlowTemplates(projectName, flow.label, { includeTesting });
+      const picked = pickPreviewLanguage(byLang, requestedLanguage);
+      if (!picked.parts.length) {
+        flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: 0, skipped: true, draft: false });
+        continue;
+      }
+
+      const draftTag = picked.usedTesting ? " · Testing 草稿" : "";
+      await previewRunner.sendText(sender.name, phone, `${flow.label} (${flow.cohortDay})${draftTag}`);
+      sentMessages += 1;
+      await shortPause();
+
+      let flowSent = 0;
+      for (const part of picked.parts) {
+        await previewRunner.sendMediaWithRetry(
+          sender.name,
+          phone,
+          personalize(part.text || "", name),
+          part.media || "",
+        );
+        sentMessages += 1;
+        flowSent += 1;
+        await shortPause();
+      }
+      flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: flowSent, skipped: false, draft: picked.usedTesting });
+    }
+
+    json(res, 200, {
+      ok: true,
+      projectName,
+      phone,
+      instanceName: sender.name,
+      requestedLanguage,
+      sentMessages,
+      flows: flowResults,
+      skippedFlows: flowResults.filter((f) => f.skipped).length,
+      draftFlows: flowResults.filter((f) => f.draft).length,
+      includeTesting,
+    });
+  },
+
   // Template & Flow dashboard: pull all templates for a project from Notion so the
   // page can show the flow map + which flow is missing an Active template.
   "GET /api/templates/list": async (req, res) => {
@@ -948,6 +1064,10 @@ const handlers = {
     if (typeof body.messageText === "string") props["Message Text"] = { rich_text: [{ text: { content: body.messageText.slice(0, 1900) } }] };
     if (body.status) props["Status"] = { select: { name: String(body.status) } };
     if (typeof body.imageName === "string") props["Image Name"] = { rich_text: [{ text: { content: String(body.imageName).slice(0, 300) } }] };
+    if (body.flowTopic) props["Flow Topic"] = { select: { name: String(body.flowTopic).slice(0, 100) } };
+    if (body.flowNo !== undefined && body.flowNo !== null && body.flowNo !== "") props["Flow No"] = { number: Number(body.flowNo) };
+    if (body.part) props["Part"] = { select: { name: String(body.part).slice(0, 100) } };
+    if (body.language) props["Language"] = { select: { name: String(body.language).slice(0, 20).toUpperCase() } };
     if (!Object.keys(props).length) throw new Error("没有要更新的内容。");
     await notion("PATCH", `/pages/${pageId}`, { properties: props });
     json(res, 200, { ok: true });

@@ -7,6 +7,8 @@
 // Flow 5 (Furnished List) and Flow 9 (Rental) are intentionally NOT in the
 // automatic chain — they are conditional and only sent when a lead is manually
 // tagged as suitable. The chain skips 4 -> 6 on purpose.
+// Flow 10 (Surrounding) runs as the final touch AFTER Flow 8 (Invitation), so the
+// day-by-day drip is: 1 -> 2 -> 3 -> 4 -> 6 -> 7 -> 8 -> 10 (Day 0 ... Day 18).
 
 export const FLOW_SEQUENCE = [
   { key: "flow_1", label: "Flow 1 - Project Template", next: "flow_2", dueDays: 2, cohortDay: "Day 0" },
@@ -15,7 +17,8 @@ export const FLOW_SEQUENCE = [
   { key: "flow_4", label: "Flow 4 - Package", next: "flow_6", dueDays: 3, cohortDay: "Day 6" },
   { key: "flow_6", label: "Flow 6 - Price", next: "flow_7", dueDays: 3, cohortDay: "Day 9" },
   { key: "flow_7", label: "Flow 7 - Facilities", next: "flow_8", dueDays: 3, cohortDay: "Day 12" },
-  { key: "flow_8", label: "Flow 8 - Invitation", next: null, dueDays: null, cohortDay: "Day 15" },
+  { key: "flow_8", label: "Flow 8 - Invitation", next: "flow_10", dueDays: 3, cohortDay: "Day 15" },
+  { key: "flow_10", label: "Flow 10 - Surrounding", next: null, dueDays: null, cohortDay: "Day 18" },
 ];
 
 const BY_KEY = new Map(FLOW_SEQUENCE.map((f) => [f.key, f]));

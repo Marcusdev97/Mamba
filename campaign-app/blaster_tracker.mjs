@@ -1,5 +1,11 @@
 // Mamba | Blaster Tracker
 // Listens for Evolution API WhatsApp replies and writes a simple local CRM feed.
+//
+// SINGLE-RESPONDER RULE (缺口 4, 2026-07-05): the tracker RECORDS ONLY — stats,
+// dashboard, Notion lead sync. It never sends a WhatsApp reply. The one and only
+// module allowed to reply to a customer is brain_service.mjs. When the brain
+// service owns the Evolution webhook, run this tracker with --no-webhook and the
+// brain will forward every payload here so the dashboard keeps working.
 
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -7,6 +13,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
+import { normalizePhone, describeMessage, resolvePhone, collectMessages, senderFromPayload } from "./reply_intake.mjs";
 
 const HOST = process.env.TRACKER_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TRACKER_PORT ?? 8798);
@@ -80,79 +87,9 @@ async function atomicWrite(filePath, value) {
   await fs.rename(tempPath, filePath);
 }
 
-function normalizePhone(value) {
-  let digits = String(value ?? "").replace(/\D/g, "");
-  if (digits.startsWith("0")) digits = `60${digits.slice(1)}`;
-  return digits || null;
-}
-
 function csvCell(value) {
   const text = String(value ?? "");
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
-function extractText(message) {
-  const body = message?.message ?? message;
-  if (!body || typeof body !== "object") return "";
-  return [
-    body.conversation,
-    body.extendedTextMessage?.text,
-    body.imageMessage?.caption,
-    body.videoMessage?.caption,
-    body.documentMessage?.caption,
-    body.buttonsResponseMessage?.selectedDisplayText,
-    body.listResponseMessage?.title,
-    body.templateButtonReplyMessage?.selectedDisplayText,
-  ].find((value) => typeof value === "string" && value.trim())?.trim() ?? "";
-}
-
-// Never empty for a real inbound message: media replies get a readable label
-// instead of being dropped (voice notes, images, stickers, reactions, etc.).
-function describeMessage(message) {
-  const text = extractText(message);
-  if (text) return text;
-  const body = message?.message ?? message;
-  if (!body || typeof body !== "object") return "[reply]";
-  if (body.audioMessage) return body.audioMessage.ptt ? "[voice note]" : "[audio]";
-  if (body.imageMessage) return "[image]";
-  if (body.videoMessage) return "[video]";
-  if (body.stickerMessage) return "[sticker]";
-  if (body.documentMessage) return "[document]";
-  if (body.locationMessage || body.liveLocationMessage) return "[location]";
-  if (body.contactMessage || body.contactsArrayMessage) return "[contact]";
-  if (body.reactionMessage) return `[reaction ${body.reactionMessage.text ?? ""}]`.trim();
-  if (body.pollCreationMessage || body.pollUpdateMessage) return "[poll]";
-  return "[reply]";
-}
-
-// Extract a usable phone from a JID, ignoring device suffix (":12"). Returns
-// null for @lid / @g.us / anything that isn't a real phone JID.
-function jidPhone(jid) {
-  const value = String(jid ?? "");
-  if (!value.includes("@s.whatsapp.net")) return null;
-  return normalizePhone(value.split("@")[0].split(":")[0]);
-}
-
-// Resolve the customer's phone even when the primary JID is a privacy id (@lid):
-// WhatsApp/Baileys often carry the real number in an alternate field.
-function resolvePhone(message) {
-  const key = message?.key ?? {};
-  return (
-    jidPhone(key.remoteJid) ||
-    jidPhone(key.remoteJidAlt) ||
-    jidPhone(message?.senderPn) ||
-    jidPhone(key.participantPn) ||
-    jidPhone(key.participant) ||
-    jidPhone(message?.participant) ||
-    null
-  );
-}
-
-function collectMessages(value, found = []) {
-  if (!value || typeof value !== "object") return found;
-  if (value.key && (value.message || value.messageTimestamp || value.pushName)) found.push(value);
-  for (const child of Object.values(value)) collectMessages(child, found);
-  return found;
 }
 
 function classifyReply() {
@@ -262,10 +199,6 @@ async function saveEvent(event) {
       console.log(`Notion sync failed for reply ${event.phone}: ${error.message}`);
     });
   }
-}
-
-function senderFromPayload(payload) {
-  return payload?.instance ?? payload?.instanceName ?? payload?.data?.instance ?? "unknown";
 }
 
 function eventFromMessage(payload, message) {

@@ -27,6 +27,31 @@ export function personalize(text, name) {
   return text.replaceAll("[Name]", name).replaceAll("[名字]", name);
 }
 
+// A template becomes a WhatsApp POLL (tappable options) when its Message Text
+// contains a [[POLL]] marker on its own line. Everything ABOVE the marker is the
+// poll question; each non-empty line BELOW is one option. This lives entirely in
+// the Notion "Message Text" field — no schema change — so polls are authored and
+// edited in Notion exactly like normal templates. Any leading "1/1️⃣/-/•" bullet
+// on an option line is stripped so "1️⃣ Layout" becomes the option "Layout".
+// If there is no marker (or fewer than 2 options) it is a normal text message.
+export function parsePoll(text) {
+  const raw = String(text ?? "");
+  const marker = /^\s*\[\[?\s*poll\s*\]?\]\s*$/im;
+  const m = raw.match(marker);
+  if (!m) return { isPoll: false, question: raw, options: [] };
+  const idx = raw.search(marker);
+  const question = raw.slice(0, idx).trim();
+  const options = raw.slice(idx + m[0].length)
+    .split(/\r?\n/)
+    // Strip a leading bullet: keycap emoji (1️⃣ = digit+VS16+U+20E3), "1." / "2)" /
+    // "3、", a circled number, or -/*/• — but NOT a bare "3 Bedroom" (no separator).
+    .map((line) => line.replace(/^\s*(?:[0-9]️?⃣|\d+[.)、]|[①-⓿]|[-*•])\s*/u, "").trim())
+    .filter(Boolean)
+    .slice(0, 12); // WhatsApp allows up to 12 poll options
+  if (options.length < 2) return { isPoll: false, question: raw, options: [] };
+  return { isPoll: true, question: question || "?", options };
+}
+
 export function formatTime(date) {
   return date.toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
@@ -393,7 +418,46 @@ export class CampaignRunner {
     return media;
   }
 
+  // Resolve an instance's OWN WhatsApp number (the connected sender), cached for
+  // 60s so a blast doesn't hammer Evolution. Used to fill [Phone_Number] with the
+  // number that is actually sending, so the customer sees/saves the right contact.
+  async resolveSenderPhone(instanceName) {
+    this._senderPhones ??= new Map();
+    if (!this._senderPhones.has(instanceName) || Date.now() - (this._senderPhonesAt || 0) > 60000) {
+      try {
+        const items = await this.api("/instance/fetchInstances");
+        for (const item of Array.isArray(items) ? items : []) {
+          const name = item.name ?? item?.instance?.instanceName;
+          const owner = String(item.ownerJid ?? item?.instance?.owner ?? "").split("@")[0].split(":")[0];
+          if (name) this._senderPhones.set(name, owner);
+        }
+        this._senderPhonesAt = Date.now();
+      } catch { /* keep whatever we had */ }
+    }
+    return this._senderPhones.get(instanceName) || "";
+  }
+
+  // Fill [Phone_Number] / [电话号码] with the sending instance's own number (+<intl>).
+  // No-op (and no API call) when the placeholder isn't present.
+  async applySenderPhone(text, instanceName) {
+    const s = String(text ?? "");
+    if (!/\[Phone_Number\]|\[电话号码\]/i.test(s)) return s;
+    const phone = await this.resolveSenderPhone(instanceName);
+    const formatted = phone ? `+${phone}` : "";
+    return s.replace(/\[Phone_Number\]/gi, formatted).replaceAll("[电话号码]", formatted);
+  }
+
   async sendMediaWithRetry(instanceName, number, text, relativeMediaPath, attempts = 3) {
+    // Substitute the sender's own number first, so [Phone_Number] is filled whether
+    // the message ends up going out as text, media, or a poll.
+    text = await this.applySenderPhone(text, instanceName);
+    // Poll templates ([[POLL]] marker in the text) send as a native WhatsApp poll
+    // regardless of any attached media — a poll can't carry an image, so the
+    // media is intentionally ignored here. Every send path (preview, Flow-1
+    // blast, per-flow follow-up) goes through this method, so this one check
+    // makes polls work everywhere.
+    const poll = parsePoll(text);
+    if (poll.isPoll) return this.sendPoll(instanceName, number, poll.question, poll.options);
     // If a media file is configured but not on disk, don't fail the whole
     // message — send text-only and warn. One missing image never blocks a blast.
     if (relativeMediaPath) {
@@ -454,9 +518,32 @@ export class CampaignRunner {
   }
 
   async sendText(instanceName, number, text) {
+    // Direct callers (e.g. a template sent straight as text) also get [Phone_Number]
+    // substitution + poll routing.
+    text = await this.applySenderPhone(text, instanceName);
+    const poll = parsePoll(text);
+    if (poll.isPoll) return this.sendPoll(instanceName, number, poll.question, poll.options);
     const result = await this.api(`/message/sendText/${encodeURIComponent(instanceName)}`, {
       method: "POST",
       body: JSON.stringify({ number, text, delay: 1000 }),
+    });
+    return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
+  }
+
+  // Native WhatsApp poll — the customer taps an option instead of typing. Works on
+  // regular WhatsApp (unlike tap-buttons, which don't render on personal numbers).
+  // selectableCount 1 = single choice. The vote comes back as a pollUpdate webhook,
+  // which reply_intake decodes into the chosen option text so it flows through the
+  // same reply classifier as a typed answer.
+  async sendPoll(instanceName, number, question, options) {
+    const values = (options || []).map((o) => String(o).slice(0, 100)).filter(Boolean).slice(0, 12);
+    if (values.length < 2) {
+      // Not enough options to be a real poll — fall back to plain text so nothing is lost.
+      return this.sendText(instanceName, number, [question, ...values].filter(Boolean).join("\n"));
+    }
+    const result = await this.api(`/message/sendPoll/${encodeURIComponent(instanceName)}`, {
+      method: "POST",
+      body: JSON.stringify({ number, name: String(question || "?").slice(0, 255), selectableCount: 1, values, delay: 1000 }),
     });
     return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
   }

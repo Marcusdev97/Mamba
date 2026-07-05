@@ -18,6 +18,16 @@
   button:hover { border-color: #38bdf8; }
   .pill { background: #1e293b; border: 1px solid #334155; border-radius: 999px; padding: 4px 10px; font-size: 12px; color: #94a3b8; }
   .note { background: #0b1322; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; font-size: 13px; color: #cbd5e1; margin-bottom: 14px; }
+  .mobile-preview { background: #111827; border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+  .mp-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 10px; }
+  .mp-title { font-weight: 800; }
+  .mp-safe { color: #94a3b8; font-size: 12px; }
+  .mp-grid { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(120px, .9fr) 90px minmax(130px, 1fr) auto auto; gap: 8px; align-items: center; }
+  .mp-testing { color: #cbd5e1; font-size: 12px; display: flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; user-select: none; }
+  .mp-testing input { cursor: pointer; }
+  .mp-status { color: #94a3b8; font-size: 12px; margin-top: 9px; min-height: 16px; }
+  .mp-status.ok { color: #4ade80; }
+  .mp-status.err { color: #f87171; }
   .flow { border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; margin: 0 0 4px; background: #141d31; }
   .flow.ok { border-left: 4px solid #16a34a; }
   .flow.warn { border-left: 4px solid #d97706; }
@@ -37,6 +47,10 @@
   .chip.other { color: #94a3b8; }
   .tpl { border: 1px solid #1f2a3d; border-radius: 10px; padding: 10px 12px; margin-top: 8px; cursor: pointer; background: #0f1728; }
   .tpl:hover { border-color: #38bdf8; }
+  .tpl.dragging { opacity: .45; border-color: #38bdf8; }
+  .flow.drop-ready { outline: 2px dashed #38bdf8; outline-offset: 4px; background: #17233a; }
+  .flow.drop-ready .drop-hint { color: #7dd3fc; border-color: #38bdf8; }
+  .drop-hint { display: inline-flex; align-items: center; min-height: 22px; color: #64748b; border: 1px dashed #334155; border-radius: 8px; padding: 3px 8px; font-size: 12px; }
   .tptext { white-space: pre-wrap; word-break: break-word; color: #e2e8f0; font-size: 13px; margin-top: 6px; line-height: 1.55; }
   .tptext.empty { color: #64748b; }
   .thumb { max-width: 240px; max-height: 170px; border-radius: 8px; margin-top: 8px; display: block; border: 1px solid #334155; }
@@ -73,6 +87,8 @@
   .danger:hover { background: #7f1d1d; color: #fff; }
   .tinp { background: #0b1322; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; font: inherit; }
   .addbtn { border-color: #38bdf8; color: #7dd3fc; }
+  @media (max-width: 780px) { .mp-grid { grid-template-columns: 1fr 1fr; } .mp-grid button { grid-column: 1 / -1; } }
+  @media (max-width: 520px) { .mp-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -88,7 +104,23 @@
     <span id="summary" class="pill"></span>
   </div>
 
-  <div class="note">流程:客户 <b>没回复</b> 就按天数继续下一轮;<b>一旦回复</b>就自动退出序列、转人工。绿色=有 Active 模板可发,黄色=只有 Testing,红色=缺模板要补。点每个小标签看内容。</div>
+  <div class="note">流程:客户 <b>没回复</b> 就按天数继续下一轮;<b>一旦回复</b>就自动退出序列、转人工。绿色=有 Active 模板可发,黄色=只有 Testing,红色=缺模板要补。点每个小标签看内容;也可以直接拖模板到另一个 Flow 移动。</div>
+
+  <div class="mobile-preview">
+    <div class="mp-head">
+      <span class="mp-title">Mobile Preview</span>
+      <span class="mp-safe">只发给测试号码 · 不更新 Notion</span>
+    </div>
+    <div class="mp-grid">
+      <input id="mpPhone" class="tinp" placeholder="60123456789">
+      <input id="mpName" class="tinp" placeholder="Preview Name" value="Sam">
+      <select id="mpLang"><option>EN</option><option>ZH</option><option>BM</option></select>
+      <select id="mpInstance"><option value="">自动 sender</option></select>
+      <label class="mp-testing" title="勾上后:只有 Testing 草稿的轮次也会一起预览(Active 优先)。真正一个模板都没有的轮次仍然发不了。"><input type="checkbox" id="mpIncludeTesting"> 包含 Testing 草稿</label>
+      <button id="mpBtn" class="primary" onclick="sendMobilePreview()">Send Full Preview</button>
+    </div>
+    <div id="mpStatus" class="mp-status"></div>
+  </div>
 
   <div id="flows"><div class="empty">加载中…</div></div>
 </div>
@@ -131,11 +163,121 @@ const FLOWS = [
   { flow: "Flow 7", topic: "Facilities", day: "Day 12" },
   { flow: "Flow 8", topic: "Invitation", day: "Day 15" },
   { flow: "Flow 9", topic: "Rental", day: "条件(投资客)" },
-  { flow: "Flow 10", topic: "Surrounding", day: "Day 12+" },
+  { flow: "Flow 10", topic: "Surrounding", day: "Day 18" },
 ];
 
 let TEMPLATES = [];
 let CURRENT_PROJECT = "";
+let INSTANCES = [];
+let DRAG_TEMPLATE_ID = "";
+
+function setMpStatus(message, kind) {
+  const el = document.getElementById("mpStatus");
+  el.textContent = message || "";
+  el.className = "mp-status" + (kind ? " " + kind : "");
+}
+
+function restoreMobilePreviewPrefs() {
+  document.getElementById("mpPhone").value = localStorage.getItem("mambaPreviewPhone") || "";
+  document.getElementById("mpName").value = localStorage.getItem("mambaPreviewName") || "Sam";
+  document.getElementById("mpLang").value = localStorage.getItem("mambaPreviewLang") || "EN";
+  document.getElementById("mpInstance").value = localStorage.getItem("mambaPreviewInstance") || "";
+}
+
+async function loadInstances() {
+  const sel = document.getElementById("mpInstance");
+  try {
+    const data = await api("/api/instances");
+    INSTANCES = data.instances || [];
+    const open = INSTANCES.filter((x) => String(x.status || "").toUpperCase() === "OPEN");
+    sel.innerHTML = `<option value="">自动 sender</option>` + open.map((x) => `<option value="${esc(x.name)}">${esc(x.name)} · ${esc(x.number || "")}</option>`).join("");
+    restoreMobilePreviewPrefs();
+    if (!open.length) setMpStatus("没有在线 sender。先去主控制台扫码连接。", "err");
+    else setMpStatus(`${open.length} 个 sender 在线，可以发送 mobile preview。`, "ok");
+  } catch (e) {
+    sel.innerHTML = `<option value="">自动 sender</option>`;
+    setMpStatus("读取 sender 失败:" + e.message, "err");
+  }
+}
+
+async function sendMobilePreview() {
+  const phone = document.getElementById("mpPhone").value.trim();
+  const name = document.getElementById("mpName").value.trim() || "Sam";
+  const language = document.getElementById("mpLang").value;
+  const instanceName = document.getElementById("mpInstance").value;
+  const includeTesting = document.getElementById("mpIncludeTesting").checked;
+  if (!CURRENT_PROJECT) return toast("先选项目", true);
+  if (!phone) return toast("先填测试电话号码", true);
+  if (!confirm(`会把自动序列发送到 ${phone}。\n\n这是测试发送,不会更新 Notion。继续?`)) return;
+
+  localStorage.setItem("mambaPreviewPhone", phone);
+  localStorage.setItem("mambaPreviewName", name);
+  localStorage.setItem("mambaPreviewLang", language);
+  localStorage.setItem("mambaPreviewInstance", instanceName);
+
+  const btn = document.getElementById("mpBtn");
+  btn.disabled = true;
+  btn.textContent = "Sending...";
+  setMpStatus("正在发送到你的手机,请保持 sender 在线...", "");
+  try {
+    const r = await api("/api/templates/mobile-preview", { projectName: CURRENT_PROJECT, phone, name, language, instanceName, includeTesting });
+    const skipped = r.skippedFlows ? ` · 跳过 ${r.skippedFlows} 轮缺模板` : "";
+    const draft = r.draftFlows ? ` · 含 ${r.draftFlows} 轮 Testing 草稿` : "";
+    setMpStatus(`已发送 ${r.sentMessages} 条 · sender ${r.instanceName}${draft}${skipped}`, "ok");
+    toast("Mobile preview 已发送");
+  } catch (e) {
+    setMpStatus("发送失败:" + e.message, "err");
+    toast("发送失败:" + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Send Full Preview";
+  }
+}
+
+function dragTemplateStart(event, pageId) {
+  DRAG_TEMPLATE_ID = pageId;
+  event.currentTarget.classList.add("dragging");
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", pageId);
+}
+
+function dragTemplateEnd(event) {
+  event.currentTarget.classList.remove("dragging");
+  document.querySelectorAll(".flow.drop-ready").forEach((el) => el.classList.remove("drop-ready"));
+  DRAG_TEMPLATE_ID = "";
+}
+
+function allowTemplateDrop(event, flowTopic) {
+  if (!DRAG_TEMPLATE_ID) return;
+  const dragged = TEMPLATES.find((t) => t.pageId === DRAG_TEMPLATE_ID);
+  if (!dragged || dragged.flowTopic === flowTopic) return;
+  event.preventDefault();
+  event.currentTarget.classList.add("drop-ready");
+  event.dataTransfer.dropEffect = "move";
+}
+
+function leaveTemplateDrop(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.classList.remove("drop-ready");
+}
+
+async function dropTemplateOnFlow(event, flowTopic) {
+  event.preventDefault();
+  event.currentTarget.classList.remove("drop-ready");
+  const pageId = event.dataTransfer.getData("text/plain") || DRAG_TEMPLATE_ID;
+  const t = TEMPLATES.find((x) => x.pageId === pageId);
+  const target = FLOWS.find((f) => f.topic === flowTopic);
+  if (!t || !target || t.flowTopic === flowTopic) return;
+  const label = `${t.language || "?"} · ${t.part || "?"}`;
+  if (!confirm(`把这条模板移动去 ${target.flow} · ${target.topic}?\n\n${label}`)) return;
+  try {
+    const flowNo = Number((target.flow.match(/\d+/) || [])[0] || "");
+    await api("/api/templates/update", { pageId, flowTopic, flowNo });
+    toast(`已移动到 ${target.flow}`);
+    load();
+  } catch (e) {
+    toast("移动失败:" + e.message, true);
+  }
+}
 
 // Build a unique alias key from a template's metadata, so uploading a file works
 // without the user typing an "Image Name". pageId8 keeps it unique per template
@@ -319,7 +461,7 @@ function render() {
             const rmBtn = `<button class="chip" style="border-color:#ef4444;color:#f87171;margin-top:6px;" onclick="event.stopPropagation(); removeImage('${esc(t.pageId)}')">🗑 移除图(改纯文字)</button>`;
             if (t.mediaUrl) imgHtml = `<img class="thumb" src="${esc(t.mediaUrl)}" alt="" onclick="event.stopPropagation(); openLightbox('${esc(t.mediaUrl)}')">` + `<div class="imgok">✅ 本地有图(点图看大图),发送会带图</div>` + rmBtn;
             else if (t.imageName) imgHtml = `<div class="imgwarn">⚠️ 有图片名「${esc(t.imageName)}」但<b>本地没有图片文件</b> → 发送不带图,点开上传</div>` + rmBtn;
-            return `<div class="tpl" onclick="editTemplate('${esc(t.pageId)}')">
+            return `<div class="tpl" draggable="true" onclick="editTemplate('${esc(t.pageId)}')" ondragstart="dragTemplateStart(event,'${esc(t.pageId)}')" ondragend="dragTemplateEnd(event)">
                 <div><span class="chip ${sc}">${esc(t.language || "?")} · ${esc(t.part || "?")} · ${esc(t.status || "")}</span></div>
                 ${textHtml}
                 ${imgHtml}
@@ -327,12 +469,13 @@ function render() {
           }).join("")
       : `<div class="empty">这一轮还没有任何模板 —— 点 + 加模板。</div>`;
 
-    return `<div class="flow ${cls}">
+    return `<div class="flow ${cls}" ondragover="allowTemplateDrop(event,'${esc(f.topic)}')" ondragleave="leaveTemplateDrop(event)" ondrop="dropTemplateOnFlow(event,'${esc(f.topic)}')">
         <div class="fhead"><span class="fname">${esc(f.flow)} · ${esc(f.topic)}</span><span class="fday">${esc(f.day)}</span>${badge}</div>
         ${rows}
         <div style="margin-top:8px; display:flex; gap:8px;">
           <button class="chip addbtn" onclick="createTemplate('${esc(f.topic)}')">+ 加模板</button>
           ${items.length ? `<button class="chip" style="border-color:#22c55e;color:#4ade80;" onclick="waPreview('${esc(f.topic)}')">📱 WhatsApp 预览</button>` : ""}
+          <span class="drop-hint">拖模板到这里移动</span>
         </div>
       </div>` +
       (i < FLOWS.length - 1 ? `<div class="connector">↓ 没回复,${FLOWS[i + 1].day} 继续</div>` : "");
@@ -372,6 +515,8 @@ async function load() {
     document.getElementById("flows").innerHTML = `<div class="empty">加载失败:${esc(e.message)}</div>`;
   }
 }
+restoreMobilePreviewPrefs();
+loadInstances();
 load();
 </script>
 </body>

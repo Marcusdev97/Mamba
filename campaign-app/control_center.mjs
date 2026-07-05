@@ -26,6 +26,7 @@ const SELF = "Mamba Control Center.command"; // don't list the launcher that sta
 // `order` sets the click-through sequence within a group (lower = earlier), so
 // the daily flow reads top-to-bottom in the order you actually run it.
 const KNOWN = {
+  "一键启动.command":                   { emoji: "🚀", label: "⓪ 一键启动(连接号码)", desc: "从零把整套跑起来:Docker → Evolution 引擎 → Console,然后打开网页扫码连接号码开始 operate", group: "日常", order: 0 },
   "Campaign Console.command":          { emoji: "📣", label: "① Mamba Campaign Console", desc: "导入名单、设定时间、开始群发", group: "日常", order: 1 },
   "Morning Follow-up Check.command":   { emoji: "☀️", label: "② 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 2 },
   "选人发下一轮.command":               { emoji: "📥", label: "③ 选人发下一轮", desc: "网页列出该发下一轮的人,勾选后直接发(发完自动推进到下一轮),还能顺手标「不发」", group: "日常", order: 3 },
