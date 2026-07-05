@@ -214,7 +214,7 @@ export function chooseLanguage(config) {
 
 // Fix (2026-07): test numbers moved out of source into TEST_LEADS env var.
 // Format: "Name:phone:lang:templateId,Name:phone:lang:templateId"
-// e.g. TEST_LEADS="Alice:60123456789:en:en_part1_quick_update,Bob:60123456780:en:en_part1_still_looking"
+// e.g. TEST_LEADS="Mark:60168568756:en:en_part1_quick_update,CC Liu:60179978682:en:en_part1_still_looking"
 export function getTestLeads() {
   const raw = process.env.TEST_LEADS || "";
   const leads = raw
@@ -495,6 +495,17 @@ export class CampaignRunner {
       await this.saveState();
       return;
     }
+    // GLOBAL suppression gate (A1), send-time check: even if a lead slipped
+    // into the cohort (imported before the STOP, or an old cohort file),
+    // nothing goes out to a phone on the global STOP list.
+    const supPhone = normalizePhone(job.lead?.phone);
+    if (supPhone && this.suppression?.has(supPhone)) {
+      job.status = "SKIPPED_SUPPRESSED";
+      job.error = "Global STOP list (opted out — possibly in another project).";
+      await this.saveState();
+      this.showProgress(`⛔ ${job.lead.name} skipped — global STOP list.`);
+      return;
+    }
 
     try {
       job.status = "SENDING_PART1";
@@ -649,6 +660,20 @@ export class CampaignRunner {
 
   async run() {
     if (!this.state) throw new Error("Call prepare() before run().");
+    // GLOBAL suppression gate (A1): refresh the STOP snapshot from Notion at
+    // campaign start; if Notion is unreachable, fall back to the last local
+    // snapshot so an outage never turns the gate off entirely.
+    try {
+      const { syncSuppressionList } = await import("./suppression.mjs");
+      const { set, updatedAt } = await syncSuppressionList();
+      this.suppression = set;
+      this.pushLog(`Suppression list refreshed: ${set.size} phone(s) blocked (as of ${updatedAt}).`);
+    } catch (err) {
+      const { loadSuppressionSync } = await import("./suppression.mjs");
+      const { set, updatedAt } = loadSuppressionSync();
+      this.suppression = set;
+      this.pushLog(`Suppression refresh failed (${err?.message}) — using local snapshot: ${set.size} phone(s)${updatedAt ? ` from ${updatedAt}` : ""}.`);
+    }
     this.running = true;
     this.stopped = false;
     this.consecutiveFailures = 0;

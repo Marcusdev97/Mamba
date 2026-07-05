@@ -4,7 +4,8 @@
 # into the Notion "Blast Leads" database (one row per customer, skips anyone
 # already there). Press Enter to use today; or type 27 / 06-27 / 2026-06-27.
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 NODE="/Users/liuyichen/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
 [[ -x "$NODE" ]] || NODE="$(command -v node)"
 

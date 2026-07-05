@@ -1,0 +1,43 @@
+#!/bin/zsh
+
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT_DIR="$(cd "$APP_DIR/.." && pwd)"
+NODE="/Users/liuyichen/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+[[ -x "$NODE" ]] || NODE="$(command -v node)"
+
+PORT="${CONTROL_PORT:-8810}"
+URL="http://127.0.0.1:${PORT}/"
+
+cd "$HOME" 2>/dev/null || cd /
+
+if [[ ! -x "$NODE" ]]; then
+  osascript -e 'display dialog "Mamba cannot find Node.js." buttons {"OK"} default button "OK"'
+  exit 1
+fi
+
+if ! curl -s -o /dev/null --max-time 2 "$URL"; then
+  LAUNCHER="$ROOT_DIR/launchers/Mamba Control Center.command"
+  open -a "/System/Applications/Utilities/Terminal.app" "$LAUNCHER" \
+    || open -b com.apple.Terminal "$LAUNCHER" \
+    || osascript - "$LAUNCHER" <<'APPLESCRIPT'
+on run argv
+  tell application "Terminal"
+    activate
+    do script (quoted form of (item 1 of argv))
+  end tell
+end run
+APPLESCRIPT
+  for i in {1..12}; do
+    curl -s -o /dev/null --max-time 1 "$URL" && break
+    sleep 1
+  done
+fi
+
+if curl -s -o /dev/null --max-time 2 "$URL"; then
+  open "$URL" \
+    || open -a "Google Chrome" "$URL" \
+    || open -a Safari "$URL" \
+    || osascript -e "display dialog \"Mamba is running. Open this URL in your browser:\\n$URL\" buttons {\"OK\"} default button \"OK\""
+else
+  osascript -e "display dialog \"Mamba could not start yet. Please keep the Terminal window open, then reload:\\n$URL\" buttons {\"OK\"} default button \"OK\""
+fi

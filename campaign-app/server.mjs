@@ -385,12 +385,33 @@ const handlers = {
         });
       } catch { /* if the lookup fails, fall back to importing everything */ }
     }
+    // GLOBAL suppression gate (A1) — cross-project, cross-database. Anyone who
+    // said STOP anywhere never enters a new cohort. NOT overridable by
+    // includeBlasted (that flag is for re-blasting, not for ignoring opt-outs).
+    let skippedSuppressed = 0;
+    try {
+      const { syncSuppressionList, loadSuppressionSync } = await import("./suppression.mjs");
+      let suppressed;
+      try {
+        suppressed = (await syncSuppressionList()).set; // fresh from Notion
+      } catch {
+        suppressed = loadSuppressionSync().set; // Notion down -> last snapshot
+      }
+      leads = leads.filter((lead) => {
+        const n = nfNormalizePhone(lead.phone);
+        if (n && suppressed.has(n)) { skippedSuppressed += 1; return false; }
+        return true;
+      });
+    } catch (err) {
+      console.warn(`[suppression] gate unavailable: ${err?.message}`);
+    }
     leadsCache = { projectId: project.id, ...result, leads };
     json(res, 200, {
       ok: true,
       project: project.id,
       imported: leads.length,
       skippedAlreadyBlasted,
+      skippedSuppressed,
       rejected: result.rejected.length,
       sourcePath: result.sourcePath,
       sample: leads.slice(0, 8).map((lead) => ({ name: lead.name, phone: lead.phone })),
@@ -1225,9 +1246,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   const address = `http://${HOST}:${PORT}`;
+  const openPath = process.env.MAMBA_OPEN_PATH || "/";
+  const openUrl = new URL(openPath, address).toString();
   console.log("Campaign Console (multi-project)");
   console.log("================================");
-  console.log(`Open in your browser: ${address}`);
+  console.log(`Open in your browser: ${openUrl}`);
   console.log("Close this window to stop the console.");
-  exec(`open "${address}"`);
+  if (process.env.MAMBA_AUTO_OPEN !== "0") exec(`open "${openUrl}"`);
 });

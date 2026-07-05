@@ -143,13 +143,23 @@ async function main() {
 
   const pages = await queryAll();
 
+  // GLOBAL suppression gate (A1): a lead's own Stop Flag is already excluded by
+  // the query, but a STOP recorded under ANOTHER project would not be — this
+  // snapshot check covers the cross-project case.
+  const { loadSuppressionSync } = await import("./suppression.mjs");
+  const { set: suppressed, updatedAt: supAt } = loadSuppressionSync();
+  if (supAt) console.log(`Global STOP list: ${suppressed.size} phone(s) (snapshot ${supAt}).\n`);
+  else console.log("Global STOP list: no snapshot yet — run `node campaign-app/suppression.mjs` once.\n");
+
   // group by Project + Next Flow
   const groups = new Map(); // key -> { project, nextFlow, leads:[] }
   let noNextFlow = 0;
   let noPhone = 0;
+  let suppressedCount = 0;
   for (const page of pages) {
     const phone = normalizePhone(pPhone(page, "Phone"));
     if (!phone) { noPhone += 1; continue; }
+    if (suppressed.has(phone)) { suppressedCount += 1; continue; }
     const nextFlow = pSelect(page, "Next Flow");
     if (!nextFlow || nextFlow === "Completed") { noNextFlow += 1; continue; } // nothing to send
     const project = pSelect(page, "Project") || "Unknown";
@@ -162,6 +172,7 @@ async function main() {
     console.log("No leads are due for a next flow right now.");
     if (noNextFlow) console.log(`(${noNextFlow} due lead(s) have no next flow / already Completed — nothing to send.)`);
     if (noPhone) console.log(`(${noPhone} due lead(s) skipped: missing/invalid phone.)`);
+    if (suppressedCount) console.log(`(${suppressedCount} due lead(s) skipped: on the GLOBAL STOP list.)`);
     return;
   }
 
@@ -191,6 +202,7 @@ async function main() {
   console.log(`\nDone. ${total} lead(s) across ${manifest.groups.length} cohort file(s).`);
   if (noNextFlow) console.log(`Skipped ${noNextFlow} due lead(s) with no next flow / Completed.`);
   if (noPhone) console.log(`Skipped ${noPhone} due lead(s) with missing/invalid phone.`);
+  if (suppressedCount) console.log(`Skipped ${suppressedCount} due lead(s) on the GLOBAL STOP list.`);
   console.log(`\nNext: in the Campaign Console, import one of these files as your lead list,`);
   console.log(`blast that flow, then run 'Advance Flow.command' on the new run.`);
 }

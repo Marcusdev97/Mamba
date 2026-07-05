@@ -1,6 +1,7 @@
 #!/bin/zsh
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 NODE="/Users/liuyichen/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
 [[ -x "$NODE" ]] || NODE="$(command -v node)"
 
@@ -15,7 +16,7 @@ if [[ ! -x "$NODE" ]]; then
   exit 1
 fi
 
-echo "Starting Mid Valley Campaign Console..."
+echo "Starting Mamba Campaign Console..."
 echo "A browser tab will open automatically."
 echo "Keep this window open while you use the console. Close it to stop."
 echo ""

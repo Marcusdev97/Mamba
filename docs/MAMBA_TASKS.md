@@ -27,7 +27,7 @@
   TEST_LEADS=<Name>:<phone>:en:<templateId>,<Name>:<phone>:en:<templateId>
   ```
 - [ ] **T3. Repo 转回 Private**（GitHub → Settings → Change visibility）— 你自己做
-- [x] **T4. MAMBA_STANDARD.md 和本文件也放进 repo 根目录一起 commit**（2026-07-05 完成）
+- [x] **T4. MAMBA_STANDARD.md 和本文件也放进 repo 的 `docs/` 一起 commit**（2026-07-05 完成）
 
 ## 🅰️ Track A — 出站赚钱（不等 AI, 本周起持续跑）
 

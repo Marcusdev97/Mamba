@@ -4,7 +4,8 @@
 # Evolution API webhook and records them instantly (text + voice/image/sticker).
 # Keep this window open while you want live tracking. Close it to stop.
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 NODE="/Users/liuyichen/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
 [[ -x "$NODE" ]] || NODE="$(command -v node)"
 

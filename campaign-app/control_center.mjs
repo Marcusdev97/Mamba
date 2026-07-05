@@ -1,7 +1,7 @@
 // Mamba | Control Center
 //
 // A tiny local web dashboard so you never have to hunt for .command files.
-// It lists every launcher in the Mamba folder as a button; clicking a button
+// It lists every launcher in launchers/ as a button; clicking a button
 // opens that command for you (in Terminal, just like double-clicking it).
 //
 // A browser page can't run local commands by itself, so this small Node server
@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, ".."); // the Mamba folder
+const launcherDir = path.join(rootDir, "launchers");
 const PORT = Number(process.env.CONTROL_PORT ?? 8810);
 const HOST = "127.0.0.1";
 const LOCAL_URL = `http://${HOST}:${PORT}`;
@@ -25,7 +26,7 @@ const SELF = "Mamba Control Center.command"; // don't list the launcher that sta
 // `order` sets the click-through sequence within a group (lower = earlier), so
 // the daily flow reads top-to-bottom in the order you actually run it.
 const KNOWN = {
-  "Campaign Console.command":          { emoji: "📣", label: "① 发送 Blast(主控制台)", desc: "导入名单、设定时间、开始群发", group: "日常", order: 1 },
+  "Campaign Console.command":          { emoji: "📣", label: "① Mamba Campaign Console", desc: "导入名单、设定时间、开始群发", group: "日常", order: 1 },
   "Morning Follow-up Check.command":   { emoji: "☀️", label: "② 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 2 },
   "选人发下一轮.command":               { emoji: "📥", label: "③ 选人发下一轮", desc: "网页列出该发下一轮的人,勾选后直接发(发完自动推进到下一轮),还能顺手标「不发」", group: "日常", order: 3 },
   "Update Notion Blast Leads.command": { emoji: "⬆️", label: "④ 上传 Blast 名单到 Notion", desc: "Flow 1 群发后,把当天 blast 的 leads 写进 Notion", group: "日常", order: 4 },
@@ -35,13 +36,15 @@ const KNOWN = {
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
   "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },
   "Sync Templates.command":            { emoji: "🔄", label: "同步模板到 Notion", desc: "把话术模板同步到 Notion", group: "设置 & 工具", order: 50 },
+  "Sync Suppression.command":          { emoji: "⛔", label: "同步全局 STOP 名单", desc: "从 Notion 同步所有项目的退订号码,发送前自动拦截", group: "设置 & 工具", order: 51 },
+  "Sync Brain.command":                { emoji: "🧠", label: "同步 AI Brain Cache", desc: "同步知识库、成功对话、异议库到本地缓存", group: "设置 & 工具", order: 52 },
   "Set Notion Token.command":          { emoji: "🔑", label: "设置 Notion Token", desc: "填入 / 更新 Notion API key", group: "设置 & 工具", order: 50 },
   "Fix Mac Block.command":             { emoji: "🛠", label: "修复 Mac 拦截", desc: "解除「unidentified developer」限制", group: "设置 & 工具", order: 50 },
 };
 const GROUP_ORDER = ["日常", "设置 & 工具", "其他"];
 
 async function listTasks() {
-  const files = (await fs.readdir(rootDir).catch(() => []))
+  const files = (await fs.readdir(launcherDir).catch(() => []))
     .filter((f) => f.endsWith(".command") && f !== SELF);
   return files
     .map((file) => {
@@ -153,10 +156,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/run") {
       const body = await readBody(req);
       const file = String(body.file ?? "");
-      // Safety: only allow launching a .command that actually exists in this folder.
+      // Safety: only allow launching a .command that actually exists in launchers/.
       const allowed = (await listTasks()).some((t) => t.file === file);
       if (!allowed) { json(res, 400, { ok: false, error: "未知的命令文件。" }); return; }
-      const fullPath = path.join(rootDir, file);
+      const fullPath = path.join(launcherDir, file);
       execFile("/usr/bin/open", [fullPath], (error) => {
         if (error) console.log(`Failed to open ${file}: ${error.message}`);
       });

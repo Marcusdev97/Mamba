@@ -1,6 +1,7 @@
 #!/bin/zsh
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 NODE="/Users/liuyichen/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
 [[ -x "$NODE" ]] || NODE="$(command -v node)"
 
@@ -12,10 +13,10 @@ if [[ ! -x "$NODE" ]]; then
   exit 1
 fi
 
-echo "Sync active templates from Notion into local projects."
+echo "Sync the AI brain cache from Notion (Knowledge / Golden / Objections -> local JSON)."
 echo ""
 
-"$NODE" "$ROOT_DIR/campaign-app/notion_sync_templates.mjs"
+"$NODE" "$ROOT_DIR/campaign-app/brain_cache_sync.mjs"
 
 echo ""
 read "?Press Enter to close..."

@@ -5,7 +5,8 @@
 # docker run 建网络 + 三个容器。幂等:容器已存在就直接 start。
 # 启动后号码会在 http://127.0.0.1:8080 上线。
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_DIR="$ROOT_DIR/evolution-pilot"
 NET="mamba-evolution"
 
