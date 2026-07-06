@@ -29,12 +29,12 @@ const designCss = await fs.readFile(path.join(appDir, "assets", "mamba.css"), "u
 // `order` sets the click-through sequence within a group (lower = earlier), so
 // the daily flow reads top-to-bottom in the order you actually run it.
 const KNOWN = {
-  "一键启动.command":                   { emoji: "🚀", label: "⓪ 一键启动(连接号码)", desc: "从零把整套跑起来:Docker → Evolution 引擎 → Console,然后打开「号码连接」页扫码上线", group: "日常", order: 0 },
-  "Campaign Console.command":          { emoji: "📣", label: "① 首轮群发(Flow 1)", desc: "导入名单、设定时间、群发第一轮。号码连接 / 选人发下一轮 / 模板&Flow / 查找客户都在顶部导航里", group: "日常", order: 1 },
-  "Morning Follow-up Check.command":   { emoji: "☀️", label: "② 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 2 },
-  "Update Notion Blast Leads.command": { emoji: "⬆️", label: "③ 上传 Blast 名单到 Notion(手动补跑)", desc: "群发完成后会自动上传;只有自动上传失败时才需要点这个补跑", group: "日常", order: 4 },
+  "Campaign Console.command":          { emoji: "📣", label: "① 首轮群发(Flow 1)", desc: "导入名单、设定时间、群发第一轮", group: "日常", order: 1 },
+  "选人发下一轮.command":               { emoji: "📥", label: "② 选人发下一轮(Flow 2~10)", desc: "网页列出该发下一轮的人,勾选后直接发(发完自动推进到下一轮),还能顺手标「不发」", group: "日常", order: 2 },
+  "Morning Follow-up Check.command":   { emoji: "☀️", label: "③ 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 3 },
+  "Update Notion Blast Leads.command": { emoji: "⬆️", label: "④ 上传 Blast 名单到 Notion(手动补跑)", desc: "群发完成后会自动上传;只有自动上传失败时才需要点这个补跑", group: "日常", order: 4 },
   "Live Reply Tracker.command":        { emoji: "💬", label: "实时回复追踪", desc: "实时接住客户回复并更新 Notion", group: "日常", order: 6 },
-  "号码连接.command":                   { emoji: "📱", label: "号码连接", desc: "扫码上线 WhatsApp 号码、查看状态、删除设备。引擎(Docker/Evolution)没跑会自动先启动", group: "设置 & 工具", order: 20 },
+  "号码连接.command":                   { emoji: "📱", label: "⓪ 号码连接(开工第一步)", desc: "扫码上线 WhatsApp 号码、查看状态、删除设备。Docker/Evolution/Console 没跑都会自动先启动", group: "日常", order: 0 },
   "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
   "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },

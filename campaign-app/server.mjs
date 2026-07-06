@@ -734,11 +734,69 @@ const handlers = {
           nextFlow,
           cohortDay: nfSelect(pg, "Cohort Day"),
           lastReply: nfText(pg, "Last Reply Text"),
+          lastBlastAt: pg?.properties?.["Last Blast At"]?.date?.start || null,
         });
       }
       cursor = data?.has_more ? data?.next_cursor : null;
     } while (cursor);
-    json(res, 200, { ok: true, today, leads });
+
+    // 🛡 开单前回复检测:Notion 侧的 Stop/Warm 已经被上面的 filter 挡掉了,
+    // 这里补最后一道闸门 —— 客户在 WhatsApp 回复了、但还没结算进 Notion 的人。
+    // 发现回复 -> 分类 -> 写回 Notion(退出序列/红旗)-> 从本次名单剔除。
+    const skipped = [];
+    let evoOffline = false;
+    if (leads.length) {
+      let instances = [];
+      try { instances = await openInstances(api); } catch { evoOffline = true; }
+      if (!evoOffline && instances.length) {
+        const byPhone = new Map(leads.map((l) => [l.phone, l]));
+        const inbound = new Map(); // phone -> { at, text }
+        for (const inst of instances) {
+          let resp;
+          try { resp = await api(`/chat/findMessages/${encodeURIComponent(inst.name)}`, { method: "POST", body: JSON.stringify({ where: {} }) }); }
+          catch { continue; }
+          for (const m of collectMessageObjects(resp)) {
+            if (m?.key?.fromMe) continue;
+            const phone = phoneFromJid(m?.key?.remoteJid);
+            const lead = phone && byPhone.get(phone);
+            if (!lead) continue;
+            const at = messageTime(m);
+            // 只认「上次 blast 之后」的回复;没有 Last Blast At 就看最近 7 天
+            const sinceMs = lead.lastBlastAt ? new Date(lead.lastBlastAt).getTime() : Date.now() - 7 * 864e5;
+            if (at < sinceMs) continue;
+            const prev = inbound.get(phone);
+            if (!prev || at > prev.at) inbound.set(phone, { at, text: extractText(m) });
+          }
+        }
+        for (const [phone, ev] of inbound) {
+          const lead = byPhone.get(phone);
+          const v = classifyReplyText(ev.text);
+          skipped.push({ name: lead.name, phone, signal: v.signal, route: v.route, text: (ev.text || "").slice(0, 80) });
+          try {
+            const props = {
+              Status: { select: { name: v.status } },
+              "Sequence Status": { select: { name: v.sequenceStatus } },
+              "Next Action": { select: { name: v.nextAction } },
+              "AI Category": { select: { name: v.aiCategory } },
+              "Last Reply At": { date: { start: new Date(ev.at).toISOString() } },
+              "Last Reply Text": { rich_text: [{ text: { content: (ev.text || "").slice(0, 1900) } }] },
+              "Reply Checked At": { date: { start: new Date().toISOString() } },
+              "AI Summary": { rich_text: [{ text: { content: `[${v.signal}] ${v.route} · 建议:${v.suggestedReply}` } }] },
+            };
+            if (v.stopFlag) { props["Stop Flag"] = { checkbox: true }; props["Stop Reason"] = { rich_text: [{ text: { content: `Auto: ${v.route}(picker 开单前检测)` } }] }; }
+            await notion("PATCH", `/pages/${String(lead.pageId).replace(/[^a-fA-F0-9]/g, "")}`, { properties: props });
+            await new Promise((r) => setTimeout(r, 200));
+          } catch { /* Notion 写失败也照样剔除,宁可少发不错发 */ }
+        }
+        if (skipped.length) {
+          const skipPhones = new Set(skipped.map((s) => s.phone));
+          for (let i = leads.length - 1; i >= 0; i--) if (skipPhones.has(leads[i].phone)) leads.splice(i, 1);
+        }
+      } else {
+        evoOffline = true;
+      }
+    }
+    json(res, 200, { ok: true, today, leads, skipped, evoOffline });
   },
 
   // Red-flag people right from the picker: stop their automatic sequence.
@@ -1381,7 +1439,7 @@ const server = http.createServer(async (req, res) => {
       const types = { ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
       try {
         const buf = await fs.readFile(fp);
-        res.writeHead(200, { "Content-Type": types[path.extname(fp)] || "application/octet-stream", "Cache-Control": "max-age=3600" });
+        res.writeHead(200, { "Content-Type": types[path.extname(fp)] || "application/octet-stream", "Cache-Control": "no-cache" });
         res.end(buf);
       } catch {
         res.writeHead(404); res.end("Not found");

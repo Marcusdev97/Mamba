@@ -81,6 +81,7 @@
     <input id="endTime" class="tinp" placeholder="21:00" title="结束时间,如 21:00,留空=今晚21:00">
   </div>
 
+  <div id="scanPanel" class="statusbox" style="display:none;"></div>
   <div id="statusPanel" class="statusbox" style="display:none;"></div>
   <div id="replyPanel" class="statusbox" style="display:none;"></div>
 
@@ -471,6 +472,27 @@ async function load() {
       iw.innerHTML = '<span class="pill" style="color:#f87171">WhatsApp 未在线</span>';
     }
     document.getElementById("dueInfo").textContent = `共 ${ALL.length} 人到期 · ${data.today || ""}`;
+    // 🛡 开单前回复检测结果
+    const sp = document.getElementById("scanPanel");
+    const skipped = data.skipped || [];
+    if (data.evoOffline) {
+      sp.style.display = "";
+      sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,本次没扫回复</div>' +
+        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先点控制台「号码连接」把引擎带起来,再刷新本页。</div>';
+    } else if (skipped.length) {
+      const red = skipped.filter((x) => x.signal === "RED").length;
+      const green = skipped.filter((x) => x.signal === "GREEN").length;
+      const other = skipped.length - red - green;
+      sp.style.display = "";
+      sp.innerHTML = '<div class="statushead">🛡 开单前检测:自动剔除 ' + skipped.length + ' 个回复过的客户' +
+        '(🔴 ' + red + ' 停/拒 · 🟢 ' + green + ' 有意向' + (other ? ' · ⚪ ' + other + ' 其他' : '') + '),已写回 Notion</div>' +
+        '<div style="color:#94a3b8;font-size:13px;margin-top:6px">' +
+        skipped.map((x) => esc(x.name) + '(…' + esc(String(x.phone).slice(-4)) + ')「' + esc(x.text || '') + '」→ ' + esc(x.route)).join('<br>') +
+        '</div>';
+    } else {
+      sp.style.display = "";
+      sp.innerHTML = '<div class="statushead" style="color:#4ade80">🛡 开单前检测:名单里没有人回复过,可以放心发。</div>';
+    }
     render();
     pollStatus(); // show a run already in progress, if any
   } catch (e) {
