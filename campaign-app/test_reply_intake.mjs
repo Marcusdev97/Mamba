@@ -3,7 +3,7 @@
 
 import {
   normalizePhone, extractText, describeMessage, jidPhone, resolvePhone,
-  collectMessages, senderFromPayload, inboundEvent,
+  collectMessages, senderFromPayload, inboundEvent, extractPollVote,
 } from "./reply_intake.mjs";
 
 let fail = 0;
@@ -24,6 +24,26 @@ check("image caption", extractText({ message: { imageMessage: { caption: "这个
 check("voice note label", describeMessage({ message: { audioMessage: { ptt: true } } }), "[voice note]");
 check("sticker label", describeMessage({ message: { stickerMessage: {} } }), "[sticker]");
 check("unknown body label", describeMessage({ message: {} }), "[reply]");
+
+// --- extractPollVote (Evolution/Baileys ship several shapes) ---
+check("poll vote: selectedOptions objects", extractPollVote({
+  pollUpdateMessage: { vote: { selectedOptions: [{ name: "2房" }] } },
+}), "2房");
+check("poll vote: string options", extractPollVote({
+  pollUpdateMessage: { vote: { selectedValues: ["Weekend viewing", "3房"] } },
+}), "Weekend viewing, 3房");
+check("poll vote: single name field", extractPollVote({
+  pollUpdateMessage: { vote: { selectedName: "Yes interested" } },
+}), "Yes interested");
+check("poll vote: undecodable -> empty", extractPollVote({ pollUpdateMessage: { vote: {} } }), "");
+check("poll vote: no poll -> empty", extractPollVote({ conversation: "hi" }), "");
+// extractText prefers the decoded option; describeMessage labels undecodable votes
+check("extractText picks up poll vote", extractText({
+  message: { pollUpdateMessage: { vote: { selectedOptions: [{ name: "2房" }] } } },
+}), "2房");
+check("undecodable vote still counts as reply", describeMessage({
+  message: { pollUpdateMessage: {} },
+}), "[poll vote]");
 
 // --- jidPhone / resolvePhone ---
 check("jid with device suffix", jidPhone("60123456789:12@s.whatsapp.net"), "60123456789");

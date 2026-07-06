@@ -15,7 +15,14 @@ if [[ ! -x "$NODE" ]]; then
   exit 1
 fi
 
-if ! curl -s -o /dev/null --max-time 2 "$URL"; then
+# Was the Control Center ALREADY running before we touched anything?
+WAS_UP=0
+if curl -s -o /dev/null --max-time 2 "$URL"; then WAS_UP=1; fi
+
+if [[ $WAS_UP -eq 0 ]]; then
+  # Not running yet — start it. The Control Center opens the dashboard tab itself
+  # when it boots, so this app must NOT open a second tab here (that double-open
+  # was the "opens twice" bug).
   LAUNCHER="$ROOT_DIR/launchers/Mamba Control Center.command"
   open -a "/System/Applications/Utilities/Terminal.app" "$LAUNCHER" \
     || open -b com.apple.Terminal "$LAUNCHER" \
@@ -31,13 +38,14 @@ APPLESCRIPT
     curl -s -o /dev/null --max-time 1 "$URL" && break
     sleep 1
   done
-fi
-
-if curl -s -o /dev/null --max-time 2 "$URL"; then
+  # Safety net only: if the Control Center didn't manage to open a tab, show the URL.
+  if ! curl -s -o /dev/null --max-time 2 "$URL"; then
+    osascript -e "display dialog \"Mamba could not start yet. Please keep the Terminal window open, then reload:\\n$URL\" buttons {\"OK\"} default button \"OK\""
+  fi
+else
+  # Already running (nothing auto-opens) — open exactly one tab now.
   open "$URL" \
     || open -a "Google Chrome" "$URL" \
     || open -a Safari "$URL" \
     || osascript -e "display dialog \"Mamba is running. Open this URL in your browser:\\n$URL\" buttons {\"OK\"} default button \"OK\""
-else
-  osascript -e "display dialog \"Mamba could not start yet. Please keep the Terminal window open, then reload:\\n$URL\" buttons {\"OK\"} default button \"OK\""
 fi

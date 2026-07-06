@@ -92,6 +92,12 @@
 </style>
 </head>
 <body>
+<nav class="mamba-nav" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 18px 4px;font-size:13px;">
+  <a href="/" style="padding:5px 12px;border:1px solid rgba(148,163,184,.35);border-radius:999px;text-decoration:none;color:inherit;opacity:.8;">🏠 主控台</a>
+  <a href="/next-flow" style="padding:5px 12px;border:1px solid rgba(148,163,184,.35);border-radius:999px;text-decoration:none;color:inherit;opacity:.8;">📥 选人发下一轮</a>
+  <a href="/templates" style="padding:5px 12px;border:1px solid rgba(148,163,184,.55);border-radius:999px;text-decoration:none;color:inherit;background:rgba(148,163,184,.18);font-weight:600;">🗂 模板 & Flow</a>
+  <a href="/lookup" style="padding:5px 12px;border:1px solid rgba(148,163,184,.35);border-radius:999px;text-decoration:none;color:inherit;opacity:.8;">🔎 查找客户</a>
+</nav>
 <div class="wrap">
   <h1>🗂 模板 & Flow 面板</h1>
   <div class="sub">整个自动序列一览 · 直接拉 Notion · 一眼看出哪个 flow 缺模板 · <a href="/">← 回主控制台</a></div>
@@ -284,14 +290,21 @@ async function dropTemplateOnFlow(event, flowTopic) {
 // (so variants sharing flow/lang/part don't collide on the same image).
 function autoImageKey(project, flowTopic, language, part, pageId) {
   const meta = [project, flowTopic, language, part].filter(Boolean).join("][");
-  const uid = String(pageId || "").replace(/-/g, "").slice(0, 8) || Date.now().toString(36);
+  // Use the FULL pageId (dashes stripped), NOT an 8-char slice. A short slice
+  // collided across different templates that share flow/lang/part (e.g. several
+  // Follow Up templates), so their images stuck together. The full page id is
+  // unique per Notion row, so every template gets its own image.
+  const uid = String(pageId || "").replace(/-/g, "") || Date.now().toString(36);
   return `[${meta}][${uid}]`;
 }
 
 function closeModal() { document.getElementById("tplModal").classList.add("hidden"); }
 const STATUSES = ["Active", "Testing", "Paused", "Retired"];
 const LANGS = ["EN", "ZH", "BM"];
-const PARTS = ["Part 1", "Part 2", "Follow Up"];
+// Part 1..N are sent in order, then "Follow Up" last. The backend keys by the
+// part number and sends every one (processJob loops all extra parts), so this
+// list is the only thing that limits how many messages a flow can blast at once.
+const PARTS = ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5", "Part 6", "Part 7", "Part 8", "Follow Up"];
 
 function editTemplate(pageId) {
   const t = TEMPLATES.find((x) => x.pageId === pageId);
@@ -300,6 +313,7 @@ function editTemplate(pageId) {
   document.getElementById("tplContent").innerHTML =
     `<div class="sub">${esc(t.language || "?")} · ${esc(t.part || "?")} · Flow Topic: ${esc(t.flowTopic || "?")}</div>` +
     `<label class="lbl">Message Text(发送内容;[Name] / [名字] 发送时换成客户名字)</label>` +
+    `<div class="lbl" style="color:#94a3b8;font-weight:400;margin:0 0 6px;">💡 单独一行写 <b>[[POLL]]</b> → 下面每行一个选项 = 做成 WhatsApp 投票(客户点选);[Name]=客户名字 · [Phone_Number]=发送的号码</div>` +
     `<textarea id="edText">${esc(t.text || "")}</textarea>` +
     `<div class="erow"><label class="lbl" style="margin:10px 8px 0 0;">状态</label>` +
     `<select id="edStatus">${STATUSES.map((s) => `<option${s === t.status ? " selected" : ""}>${s}</option>`).join("")}</select></div>` +
@@ -404,6 +418,7 @@ function createTemplate(topic) {
     `<span class="lbl" style="margin:0 0 0 8px;">Part</span><select id="ncPart">${PARTS.map((p) => `<option>${p}</option>`).join("")}</select>` +
     `<span class="lbl" style="margin:0 0 0 8px;">状态</span><select id="ncStatus">${STATUSES.map((s) => `<option${s === "Testing" ? " selected" : ""}>${s}</option>`).join("")}</select></div>` +
     `<label class="lbl">Message Text</label>` +
+    `<div class="lbl" style="color:#94a3b8;font-weight:400;margin:0 0 6px;">💡 单独一行写 <b>[[POLL]]</b> → 下面每行一个选项 = 做成 WhatsApp 投票(客户点选);[Name]=客户名字 · [Phone_Number]=发送的号码</div>` +
     `<textarea id="ncText" placeholder="发送内容;[Name] / [名字] 会换成客户名字"></textarea>` +
     `<label class="lbl">图片名(可留空;填了就能配图)</label>` +
     `<input id="ncImage" class="tinp" style="width:100%; box-sizing:border-box;" placeholder="例如 [Gen Starz][Location Highlights][EN][v1]">` +

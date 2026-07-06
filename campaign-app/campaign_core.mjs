@@ -38,9 +38,9 @@ export function parsePoll(text) {
   const raw = String(text ?? "");
   const marker = /^\s*\[\[?\s*poll\s*\]?\]\s*$/im;
   const m = raw.match(marker);
-  if (!m) return { isPoll: false, question: raw, options: [] };
+  if (!m) return { isPoll: false, question: raw, body: "", options: [] };
   const idx = raw.search(marker);
-  const question = raw.slice(0, idx).trim();
+  const before = raw.slice(0, idx).replace(/\s+$/, "");
   const options = raw.slice(idx + m[0].length)
     .split(/\r?\n/)
     // Strip a leading bullet: keycap emoji (1️⃣ = digit+VS16+U+20E3), "1." / "2)" /
@@ -48,8 +48,16 @@ export function parsePoll(text) {
     .map((line) => line.replace(/^\s*(?:[0-9]️?⃣|\d+[.)、]|[①-⓿]|[-*•])\s*/u, "").trim())
     .filter(Boolean)
     .slice(0, 12); // WhatsApp allows up to 12 poll options
-  if (options.length < 2) return { isPoll: false, question: raw, options: [] };
-  return { isPoll: true, question: question || "?", options };
+  if (options.length < 2) return { isPoll: false, question: raw, body: "", options: [] };
+  // A WhatsApp poll can't carry text or media, so split what's before [[POLL]]
+  // into a BODY (the narrative — sent first as its own message / image caption)
+  // and the QUESTION (the poll title = the last non-empty line before the marker).
+  const lines = before.split(/\r?\n/);
+  let qi = lines.length - 1;
+  while (qi >= 0 && !lines[qi].trim()) qi -= 1;
+  const question = (qi >= 0 ? lines[qi].trim() : "") || "?";
+  const body = lines.slice(0, qi).join("\n").trim();
+  return { isPoll: true, question, body, options };
 }
 
 export function formatTime(date) {
@@ -451,13 +459,24 @@ export class CampaignRunner {
     // Substitute the sender's own number first, so [Phone_Number] is filled whether
     // the message ends up going out as text, media, or a poll.
     text = await this.applySenderPhone(text, instanceName);
-    // Poll templates ([[POLL]] marker in the text) send as a native WhatsApp poll
-    // regardless of any attached media — a poll can't carry an image, so the
-    // media is intentionally ignored here. Every send path (preview, Flow-1
-    // blast, per-flow follow-up) goes through this method, so this one check
-    // makes polls work everywhere.
+    // Poll templates ([[POLL]] marker in the text). A WhatsApp poll can't carry an
+    // image or body text, so send the image (with the narrative as its caption)
+    // FIRST as its own message, then the poll itself. Every send path (preview,
+    // Flow-1 blast, per-flow follow-up) goes through this method, so polls work
+    // everywhere. The nested send below carries no [[POLL]] marker, so it takes
+    // the normal media/text path — no recursion loop.
     const poll = parsePoll(text);
-    if (poll.isPoll) return this.sendPoll(instanceName, number, poll.question, poll.options);
+    if (poll.isPoll) {
+      const gap = (this.config?.delivery?.partGapSeconds ?? 1) * 1000;
+      if (relativeMediaPath) {
+        await this.sendMediaWithRetry(instanceName, number, poll.body, relativeMediaPath, attempts);
+        await wait(gap);
+      } else if (poll.body) {
+        await this.sendText(instanceName, number, poll.body);
+        await wait(gap);
+      }
+      return this.sendPoll(instanceName, number, poll.question, poll.options);
+    }
     // If a media file is configured but not on disk, don't fail the whole
     // message — send text-only and warn. One missing image never blocks a blast.
     if (relativeMediaPath) {
@@ -519,10 +538,18 @@ export class CampaignRunner {
 
   async sendText(instanceName, number, text) {
     // Direct callers (e.g. a template sent straight as text) also get [Phone_Number]
-    // substitution + poll routing.
+    // substitution + poll routing. Any narrative before [[POLL]] goes out as its
+    // own text message first (a poll can't carry body text), then the poll.
     text = await this.applySenderPhone(text, instanceName);
     const poll = parsePoll(text);
-    if (poll.isPoll) return this.sendPoll(instanceName, number, poll.question, poll.options);
+    if (poll.isPoll) {
+      if (poll.body) {
+        const gap = (this.config?.delivery?.partGapSeconds ?? 1) * 1000;
+        await this.sendText(instanceName, number, poll.body);
+        await wait(gap);
+      }
+      return this.sendPoll(instanceName, number, poll.question, poll.options);
+    }
     const result = await this.api(`/message/sendText/${encodeURIComponent(instanceName)}`, {
       method: "POST",
       body: JSON.stringify({ number, text, delay: 1000 }),

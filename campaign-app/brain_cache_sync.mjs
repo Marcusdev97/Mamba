@@ -189,28 +189,54 @@ export async function syncBrainCache() {
   const dbs = resolveDbIds();
   const updatedAt = new Date().toISOString();
 
-  const [kPages, gPages, oPages] = await Promise.all([
+  // Each library syncs independently: one unshared/broken DB must not kill the
+  // other two (same per-DB tolerance as suppression.mjs). A failed library keeps
+  // its LAST snapshot on disk and the error is reported instead.
+  const settled = await Promise.allSettled([
     queryAllPages(token, dbs.projectKnowledge),
     queryAllPages(token, dbs.goldenConversations),
     queryAllPages(token, dbs.objectionBank),
   ]);
+  const [k, g, o] = settled.map((r) => (r.status === "fulfilled" ? { pages: r.value, error: null } : { pages: null, error: r.reason?.message ?? "unknown" }));
+  const errors = {
+    ...(k.error ? { knowledge: k.error } : {}),
+    ...(g.error ? { golden: g.error } : {}),
+    ...(o.error ? { objections: o.error } : {}),
+  };
+  if (k.error && g.error && o.error) throw new Error(`所有库都同步失败 — ${k.error}`);
 
-  const allFacts = kPages.map(mapKnowledgePage);
-  const { usable, unverified, expired } = splitUsableFacts(allFacts);
-  const golden = gPages.map(mapGoldenPage).filter((g) => g.text);
-  const objections = oPages.map(mapObjectionPage).filter((o) => o.says);
-
-  await writeJson(path.join(brainDir, "knowledge.json"), { updatedAt, count: usable.length, facts: usable });
-  await writeJson(path.join(brainDir, "golden.json"), { updatedAt, count: golden.length, conversations: golden });
-  await writeJson(path.join(brainDir, "objections.json"), { updatedAt, count: objections.length, objections });
+  let usable = null, unverified = 0, expired = 0, totalFacts = 0;
+  if (k.pages) {
+    const allFacts = k.pages.map(mapKnowledgePage);
+    ({ usable, unverified, expired } = splitUsableFacts(allFacts));
+    totalFacts = allFacts.length;
+    await writeJson(path.join(brainDir, "knowledge.json"), { updatedAt, count: usable.length, facts: usable });
+  }
+  let golden = null;
+  if (g.pages) {
+    golden = g.pages.map(mapGoldenPage).filter((row) => row.text);
+    await writeJson(path.join(brainDir, "golden.json"), { updatedAt, count: golden.length, conversations: golden });
+  }
+  let objections = null;
+  if (o.pages) {
+    objections = o.pages.map(mapObjectionPage).filter((row) => row.says);
+    await writeJson(path.join(brainDir, "objections.json"), { updatedAt, count: objections.length, objections });
+  }
   await writeJson(path.join(brainDir, "meta.json"), {
     updatedAt,
-    knowledge: { usable: usable.length, unverified, expired, total: allFacts.length },
-    golden: golden.length,
-    objections: objections.length,
+    knowledge: usable ? { usable: usable.length, unverified, expired, total: totalFacts } : { error: k.error },
+    golden: golden ? golden.length : { error: g.error },
+    objections: objections ? objections.length : { error: o.error },
+    errors,
   });
 
-  return { updatedAt, usable: usable.length, unverified, expired, golden: golden.length, objections: objections.length };
+  return {
+    updatedAt,
+    usable: usable?.length ?? null, unverified, expired,
+    golden: golden?.length ?? null,
+    objections: objections?.length ?? null,
+    errors,
+  };
 }
 
 // Runtime read for the brain service — no network on the hot path.
@@ -230,13 +256,20 @@ export function loadBrainCacheSync() {
 
 async function runOnce() {
   const r = await syncBrainCache();
+  const show = (v, unit) => (v == null ? "⚠️  skipped" : `${v} ${unit}`);
   console.log("MAMBA | BRAIN CACHE SYNC");
   console.log("========================");
-  console.log(` knowledge   ${r.usable} usable fact(s)  (skipped: ${r.unverified} unverified, ${r.expired} expired)`);
-  console.log(` golden      ${r.golden} conversation(s)`);
-  console.log(` objections  ${r.objections} entrie(s)`);
+  console.log(` knowledge   ${show(r.usable, "usable fact(s)")}${r.usable != null ? `  (skipped: ${r.unverified} unverified, ${r.expired} expired)` : ""}`);
+  console.log(` golden      ${show(r.golden, "conversation(s)")}`);
+  console.log(` objections  ${show(r.objections, "entrie(s)")}`);
   console.log(` Snapshot    campaign-data/brain/*.json @ ${r.updatedAt}`);
   if (r.unverified > 0) console.log(` ⚠️  ${r.unverified} fact(s) waiting for Verified ✓ — AI cannot see them until you tick the box.`);
+  for (const [lib, err] of Object.entries(r.errors ?? {})) {
+    console.log(` ⚠️  ${lib} 同步失败: ${err}`);
+    if (/Could not find database/i.test(err)) {
+      console.log(`     -> 去 Notion 打开「Mamba | Content & Templates Hub」页面 → 右上 ⋯ → Connections → 加上你的 integration,再跑一次。`);
+    }
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

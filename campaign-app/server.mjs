@@ -4,7 +4,7 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   paths,
@@ -264,6 +264,27 @@ async function autoAdvanceFlow(r) {
     r.state.advanceDone = true; // don't leave the UI stuck on "更新中" if it errors
     await r.saveState().catch(() => {});
     r.pushLog?.(`自动推进 Flow 出错:${e.message}`);
+  }
+}
+
+// After a LIVE Flow-1 blast finishes, upload the run's leads to Notion
+// automatically — same as clicking「上传 Blast 名单到 Notion」by hand.
+// Self-guarding: picker (next-flow) runs carry state.flowLabel and are skipped;
+// notion_upload.mjs dedups by phone, so a re-run / resume can never double-write.
+function autoNotionUpload(r) {
+  try {
+    if (!r?.runPath || r?.state?.mode !== "LIVE") return;
+    if (r.state.flowLabel) return; // picker run: leads already exist in Notion
+    r.pushLog?.("正在自动上传 blast 名单到 Notion…");
+    execFile(process.execPath, [path.join(appDir, "notion_upload.mjs"), r.runPath], { cwd: appDir }, (error, stdout, stderr) => {
+      if (error) {
+        r.pushLog?.(`自动上传 Notion 失败:${(stderr || error.message).trim().slice(0, 200)} —— 可在控制台点「上传 Blast 名单到 Notion(手动补跑)」`);
+      } else {
+        r.pushLog?.("Blast 名单已自动上传到 Notion ✅");
+      }
+    });
+  } catch (e) {
+    r?.pushLog?.(`自动上传 Notion 出错:${e.message}`);
   }
 }
 
@@ -571,6 +592,7 @@ const handlers = {
     r.run()
       .then(() => (autoAdvance ? autoAdvanceFlow(r) : null))
       .then(() => (autoAdvance ? creditSentCounts(r) : null))
+      .then(() => autoNotionUpload(r))
       .catch((error) => r.pushLog(`运行出错：${error.message}`));
     json(res, 200, { ok: true, snapshot: runner.snapshot() });
   },
@@ -583,7 +605,10 @@ const handlers = {
     }
     const remaining = runner.state.assignments.filter((j) => j.status === "QUEUED").length;
     if (!remaining) throw new Error("没有待发送的客户了（都已处理）。");
-    runner.run().catch((error) => runner.pushLog(`运行出错：${error.message}`));
+    const r = runner;
+    r.run()
+      .then(() => autoNotionUpload(r))
+      .catch((error) => r.pushLog(`运行出错：${error.message}`));
     json(res, 200, { ok: true, snapshot: runner.snapshot() });
   },
 
@@ -1103,20 +1128,35 @@ const handlers = {
     if (!rawName || !base64) throw new Error("缺少文件。");
     const comma = base64.indexOf(",");
     const b64 = base64.startsWith("data:") && comma >= 0 ? base64.slice(comma + 1) : base64;
-    // Prefix with the template's pageId8 so two templates uploading files with the
-    // same name (e.g. "Image 01.jpg" across flows) don't overwrite each other.
-    const prefix = String(b.pageId ?? "").replace(/[^a-fA-F0-9]/g, "").slice(0, 8);
-    const safe = (prefix ? prefix + "_" : "") + rawName.replace(/[^A-Za-z0-9._-]/g, "_");
+    // Prefix with the template's FULL pageId so two templates uploading files with
+    // the same name (e.g. "Image 01.jpg" across flows) can never overwrite each
+    // other. An 8-char slice was colliding and making one follow-up's image stick
+    // to another's. Fall back to a random id if there's no pageId, so a nameless
+    // upload also can't clobber an existing file.
+    const prefix = String(b.pageId ?? "").replace(/[^a-fA-F0-9]/g, "")
+      || Math.random().toString(16).slice(2, 12);
+    const safe = prefix + "_" + rawName.replace(/[^A-Za-z0-9._-]/g, "_");
     const imagesDir = path.join(paths.rootDir, "campaign-assets", "images");
     await fs.mkdir(imagesDir, { recursive: true });
     await fs.writeFile(path.join(imagesDir, safe), Buffer.from(b64, "base64"));
-    imageAliases[imageName] = safe; // update in-memory map + the file
+
+    // Force the alias key to be UNIQUE to this template: strip any trailing [hexid]
+    // the name may already carry (e.g. an Image Name copied from a duplicated
+    // template) and append THIS template's own full pageId. Without this, two
+    // templates sharing a name (common with Follow Ups) point at one alias, so
+    // uploading to one silently overwrites the other's image. A non-hex suffix
+    // like [v1] or [Assets] is preserved; only a real id suffix is replaced.
+    const fullPid = String(b.pageId ?? "").replace(/[^a-fA-F0-9]/g, "");
+    const baseKey = imageName.replace(/\s*\[[0-9a-fA-F]{6,}\]\s*$/, "").trim();
+    const key = fullPid ? `${baseKey}[${fullPid}]` : imageName;
+
+    imageAliases[key] = safe; // update in-memory map + the file
     await fs.writeFile(path.join(paths.rootDir, "campaign-assets", "image_aliases.json"), JSON.stringify(imageAliases, null, 2) + "\n");
     if (b.pageId) {
       const pageId = String(b.pageId).replace(/[^a-fA-F0-9]/g, "");
-      await notion("PATCH", `/pages/${pageId}`, { properties: { "Image Name": { rich_text: [{ text: { content: imageName.slice(0, 300) } }] } } });
+      await notion("PATCH", `/pages/${pageId}`, { properties: { "Image Name": { rich_text: [{ text: { content: key.slice(0, 300) } }] } } });
     }
-    json(res, 200, { ok: true, filename: safe });
+    json(res, 200, { ok: true, filename: safe, imageName: key });
   },
 
   // Delete (archive) a template — moves it to Notion trash, recoverable there.
