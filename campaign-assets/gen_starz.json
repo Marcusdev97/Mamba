@@ -1,0 +1,182 @@
+{
+  "campaignId": "gen_starz",
+  "campaignName": "Gen Starz",
+  "languageSelection": {
+    "mode": "random",
+    "weights": {
+      "en": 50,
+      "zh": 50
+    },
+    "keepPartsInSameLanguage": true
+  },
+  "delivery": {
+    "partGapSeconds": 45,
+    "contactGapSeconds": {
+      "min": 45,
+      "max": 75
+    },
+    "globalSerialSending": true,
+    "cancelPart2WhenCustomerReplies": true,
+    "preventDuplicateContact": true,
+    "requireOpenInstance": true
+  },
+  "personalization": {
+    "sourceColumn": "Name",
+    "placeholders": [
+      "[Name]",
+      "[名字]"
+    ]
+  },
+  "part1": {
+    "variants": [
+      {
+        "id": "gs_en_flow9_rental_reference_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nRental around this area is quite stable. Nearby completed condos can use as reference:\n\n✅ Millerz Square: RM3,000+\n✅ Vivo Residential Suites:  RM2,900–RM3,000+\n✅ Avara Seputeh: RM3,000+\n\nSo from investment angle, there’s potential to generate passive income and let the tenant help cover part of the monthly installment.\n\nPlus, this project comes with furnishing / fitting package, so it’s easier to rent out without spending too much extra on setup.\n\nIf you’re convenient, you can come and have a look at our showroom ah 😊\nI can show you the layout, package and nearby rental reference together.\n\n🅰️ Saturday, 12pm\n🅱️ Sunday, 12pm\n\nWhich day is easier for you?",
+        "media": "images/gen_starz_flow9_rental_reference_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow9_rental_reference_p1",
+        "language": "zh",
+        "text": "Hi [Name] 👋\n\n这一带出租其实还蛮稳定的，可以参考附近 completed condo：\n\n✅ Millerz Square：RM3,000+\n✅ Vivo Residential Suites： RM2,900–RM3,000+\n✅ Avara Seputeh：RM3,000+\n\n所以如果是投资角度来看，未来是有机会做到 passive income，让租客帮你供一部分屋子的。\n\n而且这个项目本身也有家私 / fitting package，出租会比较容易一点，不需要自己再花太多钱准备。\n\n如果你方便的话，可以来看看我们的 showroom ah 😊\n我可以直接给你看 layout、package，还有附近 rental reference，会比较清楚。\n\n🅰️ Saturday, 12pm\n🅱️ Sunday, 12pm\n\n你比较方便哪一天？",
+        "media": "images/gen_starz_flow9_rental_reference_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow1_stilllooking_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nAre you still looking for a property around KL / Old Klang Road / Mid Valley area?\nThere’s a new launch at Old Klang Road:\nFreehold, low density, doorstep MRT & fully furnished.\nEstimated completion: 2026 Q4 🔑\n\nI can send you the details if you’re interested.",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow1_fulldetails_p1",
+        "language": "zh",
+        "text": "Hi [名字] 👋\n\n刚收到一个 Old Klang Road / Mid Valley 旁边新楼盘的消息，觉得还不错，顺便分享给你。\n🎊 月供约 RM2,000+ 起\n✅ Freehold 永久地契\n🚆 Doorstep MRT 地铁旁\n🏡 Full Furnished 全家私配套\n🌳 Low Density 低密度\n🔑 2026 Q4 完工\n📝 2–3 房选择\n💰 出租需求高\n\n有兴趣的话，我发资料给你看看 😊",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow1_quickupdate_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nQuick update — new launch at Old Klang Road / Mid Valley side just released.\nFrom RM2,000+/month 🎊\n2-3 rooms, fully furnished, freehold & doorstep MRT.\nSuitable for own stay or rental investment.\n\nWould you like me to share the e-brochure?",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow1_fulldetails_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nI just received details of a newly launched project at Old Klang Road, very close to Mid Valley.\nRM2,000+ monthly beside Mid Valley 🎊 Freehold 🎉 Low Density 🤩 Doorstep MRT 🔑 2026 Q4 Completion\n\n✅ Freehold\n❣️ Low Density\n❤️ Doorstep MRT\n🌈 Full Furnished\n🌟 2026 Q4 Completion\n📝 2-3 Rooms\n💰 High Rental Demand\n✅ Low Upfront Entry\n\nWould you like me to send you the e-brochure and latest package?",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow7_facilities_p1",
+        "language": "zh",
+        "text": "Hi [Name] 👋\n\n设施方面，这个项目是偏向舒服自住型的。\n\n✅ 游泳池\n✅ 健身房\n✅ 多功能厅\n✅ 儿童 / 家庭空间\n✅ BBQ / 休闲区\n✅ 24小时保安\n\n所以它不只是地点和价格可以，整体居住环境也算完整，适合自住。",
+        "media": "images/gen_starz_facilities_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow7_facilities_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nFacilities wise, this project is designed for comfortable daily living.\n\n✅ Swimming Pool\n✅ Gym Room\n✅ Multipurpose Hall\n✅ Playground / Family Space\n✅ BBQ / Leisure Area\n✅ 24-hour Security\n\nSo it’s not only about price and location — the living environment is also quite complete for own stay.",
+        "media": "images/gen_starz_facilities_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow6_price_p1",
+        "language": "zh",
+        "text": "Hi [Name] 👋\n\n价格方面，在 Old Klang Road / Mid Valley 这一带来说，入场还算比较容易。\n\n💰 Nett 价格大概 RM504k 起\n📆 月供大概 RM2,100+ 起\n🏡 有 2房到3房选择\n\n目前价格参考：\n\n🏠 Type A — 650sf\n2房1厕 | 大概 RM504k nett 起\n\n🏠 Type B — 756sf\n2房2厕 | 大概 RM628k nett 起\n\n🏠 Type C — 874sf\n3房2厕 | 大概 RM708k nett 起\n\n以这个地点来说，entry price 在附近新盘里面算比较好进场。\n\n价格要根据最新单位和 package 确认。",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow6_price_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nPrice wise, the entry is still quite manageable for Old Klang Road / Mid Valley side.\n\n💰 From around RM504k nett\n📆 Monthly from around RM2,100+\n🏡 2–3 rooms available\n\nCurrent price reference:\n\n🏠 Type A — 650sf\n2R1B | From around RM504k nett\n\n🏠 Type B — 756sf\n2R2B | From around RM628k nett\n\n🏠 Type C — 874sf\n3R2B | From around RM708k nett\n\nFor this location, the entry is still quite reasonable compared to many new launches nearby.\n\nPrice subject to latest availability & package confirmation.",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow4_package_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nFor the package, this project is quite easy to enter.\n\n🎁 Developer package available\n💰 Low upfront entry\n📄 Legal fee package included\n🏡 Furnished / fitting package available\n🔑 Suitable for own stay or rental investment\n\nThat’s why many buyers look at this one — because the location is central, but the entry is still quite manageable.\n\nWould you like me to send you the latest package breakdown?",
+        "media": "images/gen_starz_package_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow4_package_p1",
+        "language": "zh",
+        "text": "Hi [Name] 👋\n\n这个项目的 package 算是比较容易进场。\n\n🎁 有 Developer Package\n💰 前期费用比较低\n📄 Legal fee package 有包括\n🏡 有家私 / 配套 package\n🔑 自住或出租投资都可以考虑\n\n所以很多人看这个盘，主要是因为地点在 KL 里面，但是进场门槛不会太高。\n\n你要我发 latest package breakdown 给你看吗？",
+        "media": "images/gen_starz_package_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow3_location_p1",
+        "language": "zh",
+        "text": "Hi [Name] 👋\n\n地点方面，这个是在 Old Klang Road, KL，靠近 Mid Valley 那一带。\n\n📍 去 Mid Valley / The Gardens 大概 5–8 分钟车程\n🏥 去 Pantai Hospital KL 大概 8–10 分钟\n🎓 去 University Malaya 大概 10–12 分钟\n🛍 去 Pavilion Bukit Jalil 大概 12–15 分钟\n🏙 去 KLCC / 市中心大概 15–20 分钟\n\n而且也很容易接去 NPE & Federal Highway，所以自住或出租都算方便。\n\n你要我发 exact location pin 给你看吗？",
+        "media": "images/gen_starz_location_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_en_flow3_location_p1",
+        "language": "en",
+        "text": "Hi [Name] 👋\n\nLocation wise, this one is at Old Klang Road, KL — very close to the Mid Valley side.\n\n📍 Around 5–8 mins drive to Mid Valley / The Gardens\n🏥 Around 8–10 mins to Pantai Hospital KL\n🎓 Around 10–12 mins to University Malaya\n🛍 Around 12–15 mins to Pavilion Bukit Jalil\n🏙 Around 15–20 mins to KLCC / city centre\n\nAlso easy access to NPE & Federal Highway, so it’s quite convenient whether for own stay or rental investment.\n\nWould you like me to send you the exact location pin?",
+        "media": "images/gen_starz_location_highlights_en_v1.png"
+      }
+    ]
+  },
+  "part2": {
+    "variants": [
+      {
+        "id": "gs_en_flow2_floorplans_p2",
+        "language": "en",
+        "text": "🏠 Type A - 2R 1B (650sf)\n🏠 Type B - 2R 2B (756sf)\n🏠 Type C - 3R 2B (874sf)\n\n2-3 rooms available, suitable for own stay or rental investment ☺️\nWould you like me to send you the floor plans and latest price list?",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow2_floorplans_p2",
+        "language": "zh",
+        "text": "🏠 A户型｜2房1卫（650平方尺）\n🏠 B户型｜2房2卫（756平方尺）\n🏠 C户型｜3房2卫（874平方尺）\n\n有 2房到3房选择，自住或出租投资都可以考虑 ☺️\n你想了解户型图和最新价格表吗？我可以发给你参考 😊",
+        "media": "images/gen_starz_price_highlights_en_v1.png"
+      },
+      {
+        "id": "gs_zh_flow8_showroom_invite",
+        "language": "zh",
+        "text": "RM2,000+ 月供 | Mid Valley 旁 | Freehold | Low Density | Doorstep MRT | 2026 Q4 完工 👍\n\n✅ Freehold 永久地契\n❣️ Low Density 低密度\n❤️ Doorstep MRT 地铁旁\n🌈 Full Furnished 全家私配套\n🌟 2026 Q4 Completion\n📝 2–3 房选择\n\nHihi，[Name] 你好，Mark here 🙆‍♂️😇\n你这个周六或周日方便过来参观 showroom 吗？😊🙋🏻\n\n🅰️ Saturday, 12pm\n🅱️ Sunday, 12pm\n\n你比较方便哪一天呢？",
+        "media": "images/[Gen Starz][Flow 8 Showroom Invite Video][EN][v1]"
+      },
+      {
+        "id": "gs_en_flow8_showroom_invite",
+        "language": "en",
+        "text": "𝐑𝐦 𝟐,𝟎𝟎𝟎 𝐢𝐧 𝐌𝐢𝐝 𝐕𝐚𝐥𝐥𝐞𝐲 | 𝐅𝐫𝐞𝐞𝐡𝐨𝐥𝐝 | 𝐋𝐨𝐰 𝐃𝐞𝐧𝐬𝐞 | 𝐃𝐨𝐨𝐫𝐬𝐭𝐞𝐩 𝐌𝐑𝐓 | 𝟐𝟎𝟐𝟔𝐐𝟒 𝐜𝐨𝐦𝐩𝐥𝐞𝐭𝐞 👍\n\n✅ 𝑭𝒓𝒆𝒆𝒉𝒐𝒍𝒅\n❣️𝑳𝒐𝒘 𝑫𝒆𝒏𝒔𝒆\n❤️𝑫𝒐𝒐𝒓𝒔𝒕𝒆𝒑 𝑴𝑹𝑻\n🌈 𝑭𝒖𝒍𝒍 𝑭𝒖𝒓𝒏𝒊𝒔𝒉𝒆𝒅\n🌟 𝟐𝟎𝟐𝟔 𝐐𝟒 Completion\n📝 2-3𝒓𝒐𝒐𝒎𝒔\n\nHihi, Mark here🙆‍♂️😇\nDo you available to drop by visit this Saturday or Sunday? 😊🙋🏻\n\n🅰️ Saturday, 12pm\n🅱️ Sunday, 12pm",
+        "media": "images/[Gen Starz][Flow 8 Showroom Invite Video][EN][v1]"
+      },
+      {
+        "id": "gs_zh_flow3_location_mrt_p2",
+        "language": "zh",
+        "text": "🚆 10m 𝑫𝒊𝒓𝒆𝒄𝒕 𝒍𝒊𝒏𝒌 𝒃𝒓𝒊𝒅𝒈𝒆 𝑴𝑹𝑻 𝒔𝒕𝒂𝒕𝒊𝒐𝒏\n\n📍 Location: Old Klang road （首个地铁）\n📍 Connected to key hotspots via MRT:\n\n1️⃣ stop – Pantai Sentral Park\n2️⃣ stops – Kuchai MRT line 2\n2️⃣ stops – Bangsar south Nexus\n3️⃣ stops – KL Gateway Mall🛍️\n4️⃣ stops – UM大学",
+        "media": "images/gen_starz_location_mrt_direct_link_en_v1.jpeg"
+      },
+      {
+        "id": "gs_en_flow3_location_mrt_p2",
+        "language": "en",
+        "text": "🚆 10m Direct Link Bridge to MRT Station\n\n📍 Location: Old Klang Road\n📍 Connected to key hotspots via MRT:\n\n1️⃣ stop – Pantai Sentral Park\n2️⃣ stops – Kuchai MRT Line 2\n2️⃣ stops – Bangsar South / Nexus\n3️⃣ stops – KL Gateway Mall 🛍️\n4️⃣ stops – University of Malaya",
+        "media": "images/gen_starz_location_mrt_direct_link_en_v1.jpeg"
+      },
+      {
+        "id": "gs_zh_flow7_facilities_p2",
+        "language": "zh",
+        "text": "如果你方便，我可以帮你安排一个简单的 showroom 参观 😊\n\n这样你可以更清楚看到整体 concept、设施和 layout。\n\n可以安排的时间：\n\n11am\n2pm\n5pm\n\n你比较方便哪个时间呢？",
+        "media": ""
+      },
+      {
+        "id": "gs_en_flow7_facilities_p2",
+        "language": "en",
+        "text": "If you’d like, I can arrange a short showroom visit for you 😊\n\nThat way, you can see the overall concept, facilities and layout more clearly in person.\n\nAvailable timing:\n\n11am\n2pm\n5pm\n\nWhich timing is easier for you?",
+        "media": ""
+      },
+      {
+        "id": "gs_en_flow6_price_p2",
+        "language": "en",
+        "text": "Best is to come showroom have a look first 😊\n\nI can show you the actual layout, package and latest available units more clearly.\n\nIf you’re free, I can arrange a viewing for you:\n\n10am\n3pm\n\nWhich timing is easier for you?",
+        "media": ""
+      },
+      {
+        "id": "gs_zh_flow6_price_p2",
+        "language": "zh",
+        "text": "最好是先来 showroom 看看 😊\n\n我可以直接带你看 layout、package 和最新单位。\n\n时间可以安排：\n\n10am\n3pm\n\n你比较方便哪一个呢？",
+        "media": ""
+      }
+    ]
+  }
+}

@@ -1,11 +1,11 @@
 {
   "campaignId": "binastra",
-  "campaignName": "Binastra Cochrane",
+  "campaignName": "Binastra",
   "languageSelection": {
     "mode": "random",
     "weights": {
-      "en": 100,
-      "zh": 0
+      "en": 50,
+      "zh": 50
     },
     "keepPartsInSameLanguage": true
   },
@@ -30,69 +30,93 @@
   "part1": {
     "variants": [
       {
-        "id": "binastra_en_f1_p1_v1",
+        "id": "binastra_flow01_project_template_en_part1_v2",
         "language": "en",
-        "text": "Harlow [Name] 👋 ! Good news share with you ! \n\n🚆 MRT • TRX • FREEHOLD\nGot one new launch at Cochrane side, beside MyTown / IKEA.\n\n✅ 0% DownPayment\n✅ Partial Furnished\n✅ Walk to MRT Cochrane\n✅ 1 stop to TRX\n✅ Freehold\n\nQuite interesting if you’re looking around KL city.",
-        "media": "images/binastra_f01_project.jpg"
+        "text": "🔥 Own a home next to TRX from just **RM2,XXX/month!**\n\n🏡 2 Bedrooms 2 Bathrooms – 3 Bedrooms 2 Bathrooms\n🌉 Direct Link to MyTown & MRT Cochrane\n🚆 Just 1️⃣ MRT Stop to TRX\n💰 Estimated Rental Up to RM5,000/month\n🛋️ Fully Furnished\n🔑 Dual Key Available\n\n⚠️ Limited units available – First come, first served!\n\n✅ E-Brochure\n✅ Latest Price List\n✅ Floor Plans\n✅ Current Promotions\n\n👇🏻\nMark ☎️ [Phone_Number]\n🎁 **First 50 registrations will receive a Fully Furnished Package.**",
+        "media": "images/39358de21613819ea7f7d86698af8b9e_ChatGPT_Image_Jul_6__2026__08_16_31_PM.png"
       },
       {
-        "id": "binastra_en_f1_p1_v2",
+        "id": "binastra_flow01_project_template_en_part1_v3",
         "language": "en",
-        "text": "Hi [Name] 😊\n\nJust saw a new freehold launch at Cochrane (beside MyTown & IKEA) — thought of you since you look around KL.\n\n🚇 Walk to MRT Cochrane\n🏙️ 1 stop to TRX\n💸 0% downpayment\n🛋️ Partially furnished\n🔑 Freehold\n\nWant me to send you more?",
-        "media": "images/binastra_f01_project.jpg"
+        "text": "🚆 Walk to MRT • 1 Stop to TRX\n💰 RM 2,XXX • Freehold • Furnished\n\n🏡 2 Bedrooms – 3 Bedrooms\n💎 FREEHOLD KL City Condo\n🛍 Right Beside MyTown & IKEA\n🌉 Direct Link to MRT Cochrane\n🛋 Partial Furnished\n🎁 Early Bird Package Available\n\n⚠️ Limited Early Bird Units\n\n✅ E-Brochure\n✅ Latest Price List\n✅ Floor Plans\n✅ Current Promotions\n\n➡️ [Phone_Number]",
+        "media": "images/39358de2161381fface2d37d619c9d49_ChatGPT_Image_Jul_6__2026__08_16_31_PM.png"
       },
       {
-        "id": "binastra_en_f1_p1_v3",
+        "id": "binastra_flow08_invitation_en_part1_v1",
         "language": "en",
-        "text": "Hey [Name] 👋\n\nNew launch just dropped beside MyTown / IKEA in Cochrane — and it’s freehold 🔑\n\n• MRT Cochrane at your doorstep\n• 1 stop to TRX, 2 to Bukit Bintang\n• 0% downpayment, partial furnished\n\nGood for own stay or investment. Interested to know more?",
-        "media": "images/binastra_f01_project.jpg"
+        "text": "🎉 Private Project Preview\n\nBinastra Cochrane is opening for early preview soon‼️\n\n━━━━━━━━━━━━━━\n\n✅ Freehold\n✅ 0% Downpayment\n✅ Partial furnished package\n✅ MRT Cochrane nearby\n✅ Early buyers get better unit selection\n\nWould you prefer to visit the showroom this Saturday or Sunday?\n\n🅰️ Saturday 10am\n🅱️ Sunday 1pm",
+        "media": "images/binastra_f08_invitation.jpg"
+      },
+      {
+        "id": "binastra_flow09_rental_en_part1_v1",
+        "language": "en",
+        "text": "📈 Rental Investment Angle\n\nBinastra Cochrane has strong rental potential because of its MRT + TRX location.\n\n━━━━━━━━━━━━━━\n\nPotential rental concept:\n✅ Multiple rental streams from one unit\n✅ Estimated rental up to RM6,000 - RM6,800/month\n✅ Access to TRX professional tenant pool\n✅ Strong demand from working professionals and expats\n✅ MRT connectivity supports easier tenant movement\n\nWould you like me to show the rental breakdown?",
+        "media": "images/binastra_f09_rental.jpg"
+      },
+      {
+        "id": "binastra_flow03_location_en_part1_v1",
+        "language": "en",
+        "text": "🏠 Binastra Cochrane Layout Options\nQuite a good range of layouts 👇\n\n━━━━━━━━━━━━━━\n\n⚜️ Type A — 649 sqft\n2 Bedrooms | 2 Bathrooms\n\n⚜️ Type B — 763 sqft\n2 Bedrooms | 2 Bathrooms | Dual Key\n\n⚜️ Type C — 1008 sqft\n3 Bedrooms | 3 Bathrooms | Dual Key\n\n⚜️ Type C1 — 1026 sqft\n3 Bedrooms | 3 Bathrooms | Dual Key\n\n━━━━━━━━━━━━━━\n\n✅ Free legal fees\n✅ Kitchen cabinet included\n✅ Air conditioners included\n✅ Smart home system included\n\nYou looking for how many rooms ya?",
+        "media": "images/39258de2_39258de2_PHOTO-2026-06-24-19-14-29.jpg"
+      },
+      {
+        "id": "binastra_flow04_package_en_part1_v1",
+        "language": "en",
+        "text": "🎁 Early Bird Package\n\nOne thing that makes this project easier to get started 👇\n\n━━━━━━━━━━━━━━\n\n✅ 0% Downpayment\n✅ Extra rebate package\n✅ Free SPA legal fee & stamp duty\n✅ Free loan legal fee & stamp duty\n✅ Free car park\n✅ Partial furnished package\n\n_Limited to the first 50 registrations._",
+        "media": "images/binastra_f04_package.jpg"
+      },
+      {
+        "id": "binastra_flow06_price_en_part1_v1",
+        "language": "en",
+        "text": "🏠 **Type A – 649 sq. ft.**\n\n🛏 2 Bedrooms | 🚿 2 Bathrooms\n\n✅ Practical and efficient layout\n✅ Bright open living & dining area\n✅ Two bedrooms with two bathrooms for better privacy\n✅ Suitable for own stay or investment\n\n💰 Estimated rental up to **RM4,200/month**",
+        "media": "images/39258de2_WhatsApp_Image_2026-07-06_at_14.41.30.jpeg"
+      },
+      {
+        "id": "binastra_flow02_layout_en_part1_v1",
+        "language": "en",
+        "text": "📍 Nearby projects for comparison:\n\n✅ Sunway Velocity – RM1,067 psf\n✅ One Cochrane Residences – RM1,097 psf\n✅ Residensi Peel – RM1,073 psf\n✅ Lavile – RM1,054 psf\n\n━━━━━━━━━━━━━━\n\n🌟 Our project is still at its **Early Bird launch stage**, so the pricing is currently much more attractive.\n\n🚶 Walkable to MRT\n✅ Freehold\n❕ 0% DownPayment & Furnished\n\n*Redeem your Early Bird Now 🤤*\n\nWould you like me to show you the current available units and package? 😊",
+        "media": "images/39258de2_WhatsApp_Image_2026-07-05_at_22.39.50.jpeg"
+      },
+      {
+        "id": "binastra_flow10_surrounding_en_part1_v1",
+        "language": "en",
+        "text": "Showroom is ready now 😊\n━━━━━━━━━━━━━━\nYou can come and see the actual model, layouts and available units.\n\n✅ Latest available units\n✅ Early Bird package\n✅ Different layouts\n✅ Current promotions\n\nMuch easier to understand when you see it in person. 😄",
+        "media": "images/39258de2161381bb854ed8a287e8f9f6_PHOTO-2026-07-06-13-42-36.jpg"
+      },
+      {
+        "id": "binastra_flow05_furnished_list_en_part1_v1",
+        "language": "en",
+        "text": "🛋 Partial Furnished Package Included\n\nThe unit comes with useful fittings and appliances so buyers can save on renovation cost.\n\n━━━━━━━━━━━━━━\n\n✅ Branded air conditioners\n✅ Kitchen cabinet top & bottom\n✅ Hood & hob\n✅ Oven\n✅ Refrigerator\n✅ Washing machine with dryer\n✅ Digital smart lock\n.... and more\n\n*Package value is estimated up to RM100K.*\n\nI got the showroom pictures (actual) , do you want have a look ? 👀",
+        "media": "images/binastra_f05_furnished.jpg"
+      },
+      {
+        "id": "binastra_flow07_facilities_en_part1_v1",
+        "language": "en",
+        "text": "🏊 Facilities Overview\n\nBinastra Cochrane is planned with lifestyle facilities for both own stay comfort and investment appeal.\n\n━━━━━━━━━━━━━━\n\n✅ Modern lifestyle facilities\n✅ Multi-tier security system\n✅ Facilities suitable for families and working professionals\n✅ Designed for city living convenience\n\nWould you like me to send the facilities brochure once confirmed?",
+        "media": "images/39258de2161381ed84cde2cf9785eb27_PHOTO-2026-07-05-23-02-22.jpg"
       }
     ]
   },
   "part2": {
     "variants": [
       {
-        "id": "binastra_en_f1_p2_v1",
+        "id": "binastra_surrounding_en_part_2",
         "language": "en",
-        "text": "Why I think this one can look:\n\nThis is last Freehold in this area liaw.\nPlus the location is quite convenient:\n\n📍 Walk to MRT Cochrane\n📍 Beside MyTown & IKEA\n📍 1 stop to TRX\n📍 2 stops to Bukit Bintang\n📍 Easy access to KLCC / Velocity\n\nFor own stay, convenient.\nFor investment, tenant pool should be strong because of MRT + TRX.",
+        "text": "Which date & time you prefer ya ? \n[[POLL]]\n1️⃣ Saturday 1pm\n2️⃣ Sunday 10am",
         "media": ""
       },
       {
-        "id": "binastra_en_f1_p2_v2",
+        "id": "binastra_price_en_part_2",
         "language": "en",
-        "text": "Quick reason why this one is worth a look:\n\nIt’s the last freehold left around here.\nAnd the connectivity is 🔥\n📍 Walk to MRT Cochrane\n📍 Beside MyTown & IKEA\n📍 1 stop TRX, 2 stops Bukit Bintang\n📍 Easy to KLCC / Velocity\n\nOwn stay = super convenient. Invest = strong tenant pool (MRT + TRX).",
-        "media": ""
+        "text": "🏠 *Type B – Dual Key – 763 sq. ft.*\n\n🛏 2 Bedrooms | 🚿 2 Bathrooms\n\n_Only Few Units_\n\n✅ Dual Key concept – ideal for own stay or rental income\n✅ Comes with a balcony and yard for added space\n✅ Bright and spacious living & dining area\n✅ 2 Bedrooms | 2 Bathrooms for greater convenience\n\n💰 Estimated rental up to **RM5,000/month**\n",
+        "media": "images/39558de2_WhatsApp_Image_2026-07-06_at_14.41.25.jpeg"
       },
       {
-        "id": "binastra_en_f1_p2_v3",
+        "id": "binastra_project_template_en_part_2",
         "language": "en",
-        "text": "Why I rate this one:\n\nLast freehold in the area, and location damn strategic:\n📍 MRT Cochrane walking distance\n📍 Next to MyTown & IKEA\n📍 1 stop to TRX\n📍 Easy KLCC / Bukit Bintang / Velocity\n\nStay or rent both also can — tenant demand strong here.",
-        "media": ""
+        "text": "📍 What I like most is actually the location.\n\n━━━━━━━━━━━━━━\n\n🚶 200m to MRT Cochrane\n🛍 200m to MyTown\n🛋 500m to IKEA Cheras\n🚝 1 station to _TRX_\n🚝 2 stations to _Bukit Bintang_\n🚝 3 stations to _KLCC_\n\n*No need interchange at all, super convenient❣️*",
+        "media": "images/39458de2_binastra_f03_location.jpg"
       }
     ]
-  },
-  "extraParts": [
-    {
-      "variants": [
-        {
-          "id": "binastra_en_f1_p3_v1",
-          "language": "en",
-          "text": "Do you want me to send you which one first?\n\n1. Layout\n2. Price package\n3. Rental estimate\n\nJust reply 1 / 2 / 3 can already liaw.",
-          "media": ""
-        },
-        {
-          "id": "binastra_en_f1_p3_v2",
-          "language": "en",
-          "text": "Which one you want first?\n\n1. Layout\n2. Price\n3. Rental estimate\n\nJust reply the number 😊",
-          "media": ""
-        },
-        {
-          "id": "binastra_en_f1_p3_v3",
-          "language": "en",
-          "text": "Want me to send layout, price, or rental first?\n\n1. Layout\n2. Price package\n3. Rental\n\nReply 1 / 2 / 3 can already 👍",
-          "media": ""
-        }
-      ]
-    }
-  ]
+  }
 }

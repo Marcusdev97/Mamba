@@ -26,12 +26,15 @@ const SELF = "Mamba Control Center.command"; // don't list the launcher that sta
 // `order` sets the click-through sequence within a group (lower = earlier), so
 // the daily flow reads top-to-bottom in the order you actually run it.
 const KNOWN = {
-  "一键启动.command":                   { emoji: "🚀", label: "⓪ 一键启动(连接号码)", desc: "从零把整套跑起来:Docker → Evolution 引擎 → Console,然后打开网页扫码连接号码开始 operate", group: "日常", order: 0 },
-  "Campaign Console.command":          { emoji: "📣", label: "① Mamba Campaign Console", desc: "导入名单、设定时间、开始群发。选人发下一轮 / 模板&Flow / 查找客户都在 Console 顶部导航里", group: "日常", order: 1 },
+  "一键启动.command":                   { emoji: "🚀", label: "⓪ 一键启动(连接号码)", desc: "从零把整套跑起来:Docker → Evolution 引擎 → Console,然后打开「号码连接」页扫码上线", group: "日常", order: 0 },
+  "Campaign Console.command":          { emoji: "📣", label: "① 首轮群发(Flow 1)", desc: "导入名单、设定时间、群发第一轮。号码连接 / 选人发下一轮 / 模板&Flow / 查找客户都在顶部导航里", group: "日常", order: 1 },
   "Morning Follow-up Check.command":   { emoji: "☀️", label: "② 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 2 },
   "Update Notion Blast Leads.command": { emoji: "⬆️", label: "③ 上传 Blast 名单到 Notion(手动补跑)", desc: "群发完成后会自动上传;只有自动上传失败时才需要点这个补跑", group: "日常", order: 4 },
   "Live Reply Tracker.command":        { emoji: "💬", label: "实时回复追踪", desc: "实时接住客户回复并更新 Notion", group: "日常", order: 6 },
   "Start Evolution.command":           { emoji: "🐳", label: "启动 Evolution(WhatsApp 引擎)", desc: "一键开 Docker + 拉起 Evolution 容器,号码上线后才能发送", group: "设置 & 工具", order: 20 },
+  "号码连接.command":                   { emoji: "📱", label: "号码连接", desc: "扫码上线 WhatsApp 号码、查看状态、删除设备", group: "设置 & 工具", order: 22 },
+  "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
+  "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
   "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },
   "Sync Templates.command":            { emoji: "🔄", label: "同步模板到 Notion", desc: "把话术模板同步到 Notion", group: "设置 & 工具", order: 50 },
   "Sync Suppression.command":          { emoji: "⛔", label: "同步全局 STOP 名单", desc: "从 Notion 同步所有项目的退订号码,发送前自动拦截", group: "设置 & 工具", order: 51 },

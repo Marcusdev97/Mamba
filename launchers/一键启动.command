@@ -90,7 +90,7 @@ else
 fi
 
 # ---------- 4) 打开连接号码的界面 ----------
-URL="http://127.0.0.1:${CONSOLE_PORT}/"
+URL="http://127.0.0.1:${CONSOLE_PORT}/numbers"
 echo ""
 echo "🎉 全部就绪!正在打开控制台:$URL"
 echo "   在网页上点「+ 添加号码(扫码)」,用手机 WhatsApp 扫码就能连接号码开始 operate。"

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Mamba Campaign Console</title>
+<title>首轮群发（Flow 1）· Mamba</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -99,58 +99,14 @@
 </style>
 </head>
 <body>
-<nav class="mamba-nav" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 18px 4px;font-size:13px;">
-  <a href="/" style="padding:5px 12px;border:1px solid rgba(148,163,184,.55);border-radius:999px;text-decoration:none;color:inherit;background:rgba(148,163,184,.18);font-weight:600;">🏠 主控台</a>
-  <a href="/next-flow" style="padding:5px 12px;border:1px solid rgba(148,163,184,.35);border-radius:999px;text-decoration:none;color:inherit;opacity:.8;">📥 选人发下一轮</a>
-  <a href="/templates" style="padding:5px 12px;border:1px solid rgba(148,163,184,.35);border-radius:999px;text-decoration:none;color:inherit;opacity:.8;">🗂 模板 & Flow</a>
-  <a href="/lookup" style="padding:5px 12px;border:1px solid rgba(148,163,184,.35);border-radius:999px;text-decoration:none;color:inherit;opacity:.8;">🔎 查找客户</a>
-</nav>
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>Mamba Campaign Console</h1>
-      <div class="sub" id="campaignSub">WhatsApp blasting control panel</div>
+      <h1>📣 首轮群发（Flow 1）</h1>
+      <div class="sub" id="campaignSub">导入名单 → 设定时间 → 群发第一轮</div>
     </div>
     <div class="pill"><span class="dot" id="apiDot"></span><span id="apiLabel">连接中…</span></div>
   </header>
-
-  <!-- Instance monitor -->
-  <div class="card">
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px">
-      <h2 style="margin:0">WhatsApp 号码状态</h2>
-      <div style="display:flex; gap:10px">
-        <button class="btn" id="btnRefreshInst">⟳ 刷新</button>
-        <button class="btn primary" id="btnAddNumber">+ 添加号码（扫码）</button>
-      </div>
-    </div>
-    <table>
-      <thead><tr><th>INSTANCE</th><th>STATUS</th><th>NUMBER</th><th></th></tr></thead>
-      <tbody id="instBody"><tr><td colspan="4" class="muted">读取中…</td></tr></tbody>
-    </table>
-
-    <!-- QR panel -->
-    <div id="qrPanel" class="hidden" style="margin-top:16px; border-top:1px solid var(--line); padding-top:16px">
-      <div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap">
-        <div style="background:#fff; padding:10px; border-radius:10px; width:230px; height:230px; display:flex; align-items:center; justify-content:center">
-          <img id="qrImg" alt="QR" style="width:210px; height:210px; image-rendering:pixelated" />
-        </div>
-        <div style="flex:1; min-width:240px">
-          <div style="font-weight:700; font-size:15px; margin-bottom:8px">为 <span id="qrName" style="color:var(--green)"></span> 扫码登录</div>
-          <ol class="muted" style="font-size:13px; padding-left:18px; margin:0 0 12px">
-            <li>在<b>目标手机</b>打开 WhatsApp（Business）</li>
-            <li>设置 → 已连接的设备 → 链接设备</li>
-            <li>扫描左边这个二维码</li>
-          </ol>
-          <div id="qrStatus" class="notice">等待扫描…（二维码每 25 秒自动刷新）</div>
-          <div style="margin-top:12px; display:flex; gap:10px">
-            <button class="btn" id="btnQrRefresh">刷新二维码</button>
-            <button class="btn" id="btnQrClose">关闭</button>
-          </div>
-          <div class="err" id="qrErr"></div>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- Project selector -->
   <div class="card" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap">
@@ -273,7 +229,7 @@ async function loadProjectConfig() {
   const c = await get("/api/config?project=" + encodeURIComponent(currentProject)).catch(() => null);
   if (!c || !c.ok) return;
   TEMPLATES = c.templates || [];
-  $("campaignSub").textContent = c.projectName + " · WhatsApp blasting control panel";
+  $("campaignSub").textContent = c.projectName + " · 导入名单 → 设定时间 → 群发第一轮";
   $("sourcePath").placeholder = "默认：" + (c.excel || "该 project 的 Excel");
   $("projectInfo").textContent = "Excel：" + (c.excel || "—") + " · 所有已连接的号一起发";
   await loadLeadsForEdit();
@@ -317,94 +273,21 @@ function badge(status) {
   return '<span class="badge ' + cls + '">' + status + "</span>";
 }
 
-// ---- instance monitor ----
+// ---- senders + API status (号码管理在 /numbers 页) ----
 async function refreshInstances() {
-  const btn = $("btnRefreshInst");
-  if (btn) { btn.disabled = true; btn.textContent = "查询中…"; }
-  $("apiLabel").textContent = "查询中…";
   const data = await get("/api/instances").catch(() => ({ online: false, instances: [] }));
-  if (btn) { btn.disabled = false; btn.textContent = "⟳ 刷新"; }
   $("apiDot").className = "dot " + (data.online ? "on" : "off");
   $("apiLabel").textContent = data.online ? "API 在线" : "API 离线（先启动 Evolution）";
-  const body = $("instBody");
-  if (!data.instances.length) {
-    body.innerHTML = '<tr><td colspan="4" class="muted">' + (data.online ? "暂无号码，点右上角添加" : (data.error || "无法连接 8080")) + "</td></tr>";
-  } else {
-    body.innerHTML = data.instances.map((i) => {
-      const cls = i.status === "OPEN" ? "b-sent" : "b-queued";
-      return "<tr><td>" + i.name + '</td><td><span class="badge ' + cls + '">' + i.status + "</span></td><td>" + i.number +
-        '</td><td style="text-align:right"><button class="btn" style="padding:4px 12px; font-size:12.5px" data-del="' + i.name + '">删除</button></td></tr>';
-    }).join("");
-  }
-  // sender checkboxes from OPEN instances
   openSenders = data.instances.filter((i) => i.status === "OPEN").map((i) => i.name);
   const sc = $("senderChecks");
   if (!openSenders.length) {
-    sc.innerHTML = '<span class="muted">没有 OPEN 的号码</span>';
+    sc.innerHTML = '<span class="muted">没有 OPEN 的号码 —— 去 Mamba 控制台开「📱 号码连接」扫码上线</span>';
+    sc.dataset.list = "";
   } else if (sc.dataset.list !== openSenders.join(",")) {
     sc.dataset.list = openSenders.join(",");
     sc.innerHTML = openSenders.map((n) => '<label><input type="checkbox" class="sender" value="' + n + '" checked> ' + n + "</label>").join("");
   }
 }
-
-// ---- add / delete WhatsApp numbers ----
-let qrName = null;
-let qrTimer = null;
-
-$("btnAddNumber").addEventListener("click", async () => {
-  const label = (prompt("号码标签（留空自动取下一个，如 wa_03）：", "") || "").trim();
-  $("btnAddNumber").disabled = true;
-  const r = await post("/api/instance/create", { name: label || undefined });
-  $("btnAddNumber").disabled = false;
-  if (!r.ok) { alert(r.error); return; }
-  qrName = r.instanceName;
-  $("qrName").textContent = qrName;
-  $("qrImg").src = r.qr;
-  $("qrErr").textContent = "";
-  $("qrStatus").textContent = "等待扫描…（二维码每 25 秒自动刷新）";
-  $("qrPanel").classList.remove("hidden");
-  $("qrPanel").scrollIntoView({ behavior: "smooth" });
-  if (qrTimer) clearInterval(qrTimer);
-  qrTimer = setInterval(qrTick, 5000);
-});
-
-async function refreshQr() {
-  if (!qrName) return;
-  const r = await get("/api/instance/qr?name=" + encodeURIComponent(qrName)).catch(() => null);
-  if (r && r.ok) { $("qrImg").src = r.qr; $("qrErr").textContent = ""; }
-}
-let qrTicks = 0;
-async function qrTick() {
-  qrTicks += 1;
-  // check whether this instance is now connected
-  const data = await get("/api/instances").catch(() => null);
-  const inst = data && data.instances.find((i) => i.name === qrName);
-  if (inst && inst.status === "OPEN") {
-    $("qrStatus").innerHTML = "✓ <b style='color:var(--green)'>" + qrName + " 已连接：" + inst.number + "</b>";
-    clearInterval(qrTimer); qrTimer = null;
-    refreshInstances();
-    return;
-  }
-  if (qrTicks % 5 === 0) refreshQr(); // every ~25s
-}
-
-$("btnQrRefresh").addEventListener("click", refreshQr);
-$("btnQrClose").addEventListener("click", () => {
-  $("qrPanel").classList.add("hidden");
-  if (qrTimer) { clearInterval(qrTimer); qrTimer = null; }
-  qrName = null;
-});
-
-$("instBody").addEventListener("click", async (e) => {
-  const btn = e.target.closest("[data-del]");
-  if (!btn) return;
-  const name = btn.dataset.del;
-  if (!confirm("删除 " + name + "？会登出该 WhatsApp 设备并删除其会话（历史发送记录保留）。")) return;
-  btn.disabled = true;
-  const r = await post("/api/instance/delete", { name });
-  if (!r.ok) { alert(r.error); btn.disabled = false; return; }
-  refreshInstances();
-});
 
 // ---- mode toggle ----
 $("modeSeg").addEventListener("click", (e) => {
@@ -554,8 +437,8 @@ $("projectSel").addEventListener("change", async () => {
 });
 
 // ---- boot ----
-$("btnRefreshInst").addEventListener("click", refreshInstances);
 loadProjects().then(refreshInstances);
+setInterval(refreshInstances, 10000); // 从号码连接页回来时自动更新 senders
 // if a run is already in progress (server restarted page), show it
 get("/api/status").then((snap) => { if (snap && snap.state) { $("progressCard").classList.remove("hidden"); startPolling(); } });
 </script>

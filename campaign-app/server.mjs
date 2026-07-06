@@ -1345,6 +1345,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/numbers") {
+      const html = await fs.readFile(path.join(appDir, "numbers.html"), "utf8");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/next-flow") {
       const html = await fs.readFile(path.join(appDir, "next-flow.html"), "utf8");
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

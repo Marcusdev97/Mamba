@@ -1,32 +1,23 @@
 {
   "projects": [
     {
-      "id": "radium_arena",
-      "name": "Radium Arena",
-      "config": "radium_arena.json",
-      "senders": [],
-      "excel": "Untitled spreadsheet.xlsx"
-    },
-    {
-      "id": "mid_valley",
-      "name": "Mid Valley",
-      "config": "mid_valley.json",
-      "senders": [
-        "wa_02"
-      ],
-      "excel": "Untitled spreadsheet.xlsx"
-    },
-    {
-      "id": "enlace",
-      "name": "Enlace",
-      "config": "enlace.json",
-      "senders": [],
-      "excel": "Untitled spreadsheet.xlsx"
-    },
-    {
       "id": "binastra",
       "name": "Binastra",
       "config": "binastra.json",
+      "senders": [],
+      "excel": "Untitled spreadsheet.xlsx"
+    },
+    {
+      "id": "gen_starz",
+      "name": "Gen Starz",
+      "config": "gen_starz.json",
+      "senders": [],
+      "excel": "Untitled spreadsheet.xlsx"
+    },
+    {
+      "id": "radium_arena",
+      "name": "Radium Arena",
+      "config": "radium_arena.json",
       "senders": [],
       "excel": "Untitled spreadsheet.xlsx"
     }
