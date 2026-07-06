@@ -4,55 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>号码连接 · Mamba</title>
-<style>
-  :root {
-    --bg: #0f1115;
-    --panel: #181b21;
-    --panel-2: #1f232b;
-    --line: #2a2f39;
-    --text: #e8eaed;
-    --muted: #9aa3b2;
-    --green: #25d366;
-    --green-d: #1da851;
-    --blue: #4a9eff;
-    --amber: #f5b342;
-    --red: #ff5d5d;
-    --radius: 12px;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-    font-size: 14px; line-height: 1.5;
-  }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 64px; }
-  header.top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
-  header.top h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: .2px; }
-  header.top .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-  .pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px;
-    border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--panel-2); border: 1px solid var(--line); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(37,211,102,.18); }
-  .dot.off { background: var(--red); box-shadow: 0 0 0 3px rgba(255,93,93,.16); }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
-  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 14px; font-weight: 700; }
-  .btn { appearance: none; border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-    padding: 10px 16px; border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer; transition: .12s; }
-  .btn:hover { border-color: #3a414e; }
-  .btn:disabled { opacity: .45; cursor: not-allowed; }
-  .btn.primary { background: var(--green); border-color: var(--green); color: #04220f; }
-  .btn.primary:hover { background: var(--green-d); }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; }
-  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
-  .b-sent { background: rgba(37,211,102,.16); color: var(--green); }
-  .b-queued { background: #2a2f39; color: var(--muted); }
-  .notice { color: var(--muted); font-size: 12.5px; }
-  .err { color: var(--red); font-size: 13px; margin-top: 8px; min-height: 16px; }
-  .hidden { display: none !important; }
-  .muted { color: var(--muted); }
-</style>
+<link rel="stylesheet" href="/assets/mamba.css" />
 </head>
 <body>
 <div class="wrap">
@@ -102,7 +54,7 @@
   </div>
 
   <div class="notice" style="margin-top:4px">
-    号码显示 <b style="color:var(--green)">OPEN</b> 就可以发送了。API 离线的话先在 Mamba 控制台点「启动 Evolution」。
+    号码显示 <b style="color:var(--green)">OPEN</b> 就可以发送了。API 离线的话,重新点一次控制台的「号码连接」按钮,它会自动把引擎启动起来。
   </div>
 </div>
 

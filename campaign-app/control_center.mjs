@@ -21,6 +21,9 @@ const HOST = "127.0.0.1";
 const LOCAL_URL = `http://${HOST}:${PORT}`;
 const SELF = "Mamba Control Center.command"; // don't list the launcher that started us
 
+// Design system (docs/MAMBA_UI_BIBLE.md) — inlined because this server has no /assets route.
+const designCss = await fs.readFile(path.join(appDir, "assets", "mamba.css"), "utf8").catch(() => "");
+
 // Nice labels/descriptions for the known launchers. Anything else found in the
 // folder still shows up (under "其他"), so the panel always reflects reality.
 // `order` sets the click-through sequence within a group (lower = earlier), so
@@ -31,8 +34,7 @@ const KNOWN = {
   "Morning Follow-up Check.command":   { emoji: "☀️", label: "② 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 2 },
   "Update Notion Blast Leads.command": { emoji: "⬆️", label: "③ 上传 Blast 名单到 Notion(手动补跑)", desc: "群发完成后会自动上传;只有自动上传失败时才需要点这个补跑", group: "日常", order: 4 },
   "Live Reply Tracker.command":        { emoji: "💬", label: "实时回复追踪", desc: "实时接住客户回复并更新 Notion", group: "日常", order: 6 },
-  "Start Evolution.command":           { emoji: "🐳", label: "启动 Evolution(WhatsApp 引擎)", desc: "一键开 Docker + 拉起 Evolution 容器,号码上线后才能发送", group: "设置 & 工具", order: 20 },
-  "号码连接.command":                   { emoji: "📱", label: "号码连接", desc: "扫码上线 WhatsApp 号码、查看状态、删除设备", group: "设置 & 工具", order: 22 },
+  "号码连接.command":                   { emoji: "📱", label: "号码连接", desc: "扫码上线 WhatsApp 号码、查看状态、删除设备。引擎(Docker/Evolution)没跑会自动先启动", group: "设置 & 工具", order: 20 },
   "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
   "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },
@@ -79,22 +81,20 @@ function page() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mamba 控制台</title>
+<style>${designCss}</style>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 60px; }
+  .wrap { max-width: 920px; padding: 32px 20px 60px; }
   h1 { margin: 0 0 4px; font-size: 26px; }
-  .sub { color: #94a3b8; margin-bottom: 26px; }
-  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: #7dd3fc; margin: 28px 0 12px; }
+  .sub { color: var(--muted); margin-bottom: 26px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--blue); margin: 28px 0 12px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
-  .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 16px; cursor: pointer; transition: .12s; text-align: left; color: inherit; }
-  .card:hover { border-color: #38bdf8; transform: translateY(-2px); }
+  .card { appearance: none; width: 100%; border-radius: 14px; cursor: pointer; text-align: left; color: inherit; font-family: inherit; font-size: inherit; margin-bottom: 0;
+    transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .card:hover { border-color: var(--green); transform: translateY(-2px); }
   .card:active { transform: translateY(0); }
   .emoji { font-size: 22px; }
   .label { font-weight: 700; margin: 8px 0 4px; font-size: 15px; }
-  .desc { color: #94a3b8; font-size: 13px; line-height: 1.4; }
-  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #16a34a; color: white; padding: 12px 20px; border-radius: 10px; font-weight: 700; opacity: 0; transition: .2s; pointer-events: none; }
-  .toast.show { opacity: 1; }
-  .toast.err { background: #dc2626; }
+  .desc { color: var(--muted); font-size: 13px; line-height: 1.4; }
 </style>
 </head>
 <body>

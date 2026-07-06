@@ -1373,6 +1373,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Serve the design system (mamba.css + fonts). See docs/MAMBA_UI_BIBLE.md.
+    if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
+      const rel = decodeURIComponent(url.pathname.slice("/assets/".length));
+      if (rel.includes("..")) { json(res, 400, { ok: false, error: "Bad path" }); return; }
+      const fp = path.join(appDir, "assets", rel);
+      const types = { ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
+      try {
+        const buf = await fs.readFile(fp);
+        res.writeHead(200, { "Content-Type": types[path.extname(fp)] || "application/octet-stream", "Cache-Control": "max-age=3600" });
+        res.end(buf);
+      } catch {
+        res.writeHead(404); res.end("Not found");
+      }
+      return;
+    }
+
     // Serve local campaign images so the template panel can show thumbnails.
     if (req.method === "GET" && url.pathname.startsWith("/images/")) {
       const fname = decodeURIComponent(url.pathname.slice("/images/".length)).replace(/[^A-Za-z0-9._-]/g, "_");
@@ -1409,6 +1425,17 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     json(res, 400, { ok: false, error: error.message });
   }
+});
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.log("");
+    console.log(`Console 已经在 ${PORT} 端口运行了 —— 不用再启动一个。`);
+    console.log(`直接打开 http://${HOST}:${PORT}/ 即可;所有页面(首轮群发/号码连接/模板/查找)共用这一个 server。`);
+    console.log(`想强制重启:先跑  lsof -ti tcp:${PORT} | xargs kill  再启动。`);
+    process.exit(0);
+  }
+  throw error;
 });
 
 server.listen(PORT, HOST, () => {
