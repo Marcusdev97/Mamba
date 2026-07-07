@@ -75,6 +75,11 @@ Mamba/
 │   ├── <项目>.json          # 每个项目的话术配置(如 binastra.json)
 │   ├── image_aliases.json   # 模板图片名 → 本地文件名 映射
 │   └── images/              # 群发用的图片
+├── assets/                  # Cloudflare R2 云端图片入口
+│   ├── inbox/               # 新图临时丢这里
+│   ├── templates/           # 可复用模板图
+│   ├── raw/                 # 原始素材
+│   └── manifest.json        # 同步后自动生成:本地文件 → 云端 URL
 ├── campaign-data/           # 运行时数据(大多不进 git)
 │   ├── notion_config.json   # Notion 数据库 ID(进 git,无 token)
 │   └── ...                  # 名单缓存、发送记录等(不进 git)
@@ -164,6 +169,34 @@ Mamba/
 
 ### 图片
 模板的「Image Name」字段 → 通过 `image_aliases.json` 映射到 `campaign-assets/images/` 里的本地文件。发送时从本地读图(base64)。某段不想带图,在面板点「🗑 移除图(改纯文字)」。
+
+### Cloudflare 云端图片
+新素材可以放进根目录的 `assets/`。双击 **同步 Cloudflare 图片** 后,系统会把 `assets/` 和现有 `campaign-assets/images/` 上传到 Cloudflare R2,并生成 `assets/manifest.json`。之后 AI 或另一台电脑可以直接读这个 manifest 拿图片 URL。
+
+当前 Cloudflare R2 设置:
+- Bucket: `mamba-assets`
+- Prefix: `mamba-assets`
+- Public manifest: `https://pub-3e0df885be9c4a2db26f1cfb0fcf8f3e.r2.dev/mamba-assets/manifest.json`
+- 默认同步来源: `assets/` + `campaign-assets/images/`
+
+给 AI 的规则:
+- 新图先放 `assets/inbox/` 或 `assets/templates/`。
+- 群发已经在用的旧图继续留在 `campaign-assets/images/`,不需要搬。
+- 运行 `npm run sync:cloudflare-assets` 会上传新增/修改过的图片。
+- 运行 `npm run check:cloudflare-assets` 只检查会同步什么,不会上传。
+- `assets/manifest.json` 是本地生成物,不要提交到 GitHub。
+- Cloudflare secret 只放 `evolution-pilot/.env`,不要提交到 GitHub。
+
+第一次使用前,在 `evolution-pilot/.env` 加上:
+
+```bash
+CF_ACCOUNT_ID=你的 Cloudflare Account ID
+CF_R2_BUCKET=mamba-assets
+CF_R2_ACCESS_KEY_ID=你的 R2 access key
+CF_R2_SECRET_ACCESS_KEY=你的 R2 secret key
+CF_R2_PUBLIC_URL=https://pub-3e0df885be9c4a2db26f1cfb0fcf8f3e.r2.dev
+CF_R2_PREFIX=mamba-assets
+```
 
 ---
 

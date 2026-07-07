@@ -21,6 +21,15 @@ campaign-data/*
 **/node_modules/
 *.log
 .DS_Store
+assets/manifest.json
+
+# ─── Cloudflare 图片入口:图片上传到 R2,本地只保留文件夹骨架 ───
+assets/inbox/*
+assets/templates/*
+assets/raw/*
+!assets/inbox/.gitkeep
+!assets/templates/.gitkeep
+!assets/raw/.gitkeep
 
 # ─── 原始素材大文件夹(图片已经接到 campaign-assets/images)──
 Binastra_Cochrane_Exact_Notion_Template_Names_2026-07-04_v1/

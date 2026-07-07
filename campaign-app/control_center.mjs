@@ -39,6 +39,7 @@ const KNOWN = {
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
   "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },
   "Sync Templates.command":            { emoji: "🔄", label: "同步模板到 Notion", desc: "把话术模板同步到 Notion", group: "设置 & 工具", order: 50 },
+  "Sync Cloudflare Assets.command":    { emoji: "☁️", label: "同步 Cloudflare 图片", desc: "把 assets/ 和 campaign 图片上传到 Cloudflare R2,给 AI 和其他电脑共用", group: "设置 & 工具", order: 49 },
   "Sync Suppression.command":          { emoji: "⛔", label: "同步全局 STOP 名单", desc: "从 Notion 同步所有项目的退订号码,发送前自动拦截", group: "设置 & 工具", order: 51 },
   "Sync Brain.command":                { emoji: "🧠", label: "同步 AI Brain Cache", desc: "同步知识库、成功对话、异议库到本地缓存", group: "设置 & 工具", order: 52 },
   "Set Notion Token.command":          { emoji: "🔑", label: "设置 Notion Token", desc: "填入 / 更新 Notion API key", group: "设置 & 工具", order: 50 },

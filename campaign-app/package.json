@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Mamba campaign automation scripts",
+  "scripts": {
+    "sync:cloudflare-assets": "node cloudflare_assets_sync.mjs",
+    "check:cloudflare-assets": "node cloudflare_assets_sync.mjs --dry-run"
+  },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
     "xlsx": "^0.18.5"
