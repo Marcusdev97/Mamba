@@ -143,6 +143,7 @@ async function api(path, body, method) {
 
 let ALL = [];          // all due leads from Notion
 let PROJECTS = [];      // console projects [{id,name}]
+let PROJECT_ALIAS = {}; // lead-project -> template/console project (e.g. Mid Valley -> Gen Starz)
 let currentProject = "";
 
 // Which Cohort Day's templates to send for each Next Flow (mirrors FLOW_SEQUENCE).
@@ -317,7 +318,8 @@ async function previewGroup(flow) {
 }
 
 async function startBlast(mode) {
-  const proj = PROJECTS.find((p) => p.name === currentProject);
+  const wanted = PROJECT_ALIAS[currentProject] || currentProject;
+  const proj = PROJECTS.find((p) => p.name === wanted);
   if (!proj) return toast("Console 里找不到对应 project:" + currentProject, true);
   const rows = selectedRows();
   if (!rows.length) return toast("先勾选(决定发哪一轮的模板)。", true);
@@ -454,6 +456,7 @@ async function load() {
       api("/api/projects"), api("/api/instances"), api("/api/next-flow/list"),
     ]);
     PROJECTS = proj.projects || [];
+    PROJECT_ALIAS = proj.alias || {};
     ALL = data.leads || [];
     // project dropdown from the projects that actually have due leads
     const present = [...new Set(ALL.map((l) => l.project))];

@@ -35,6 +35,11 @@ const HOST = "127.0.0.1";
 const PORT = Number(process.env.CONSOLE_PORT ?? 8787);
 
 const env = await loadEnv();
+// Bridge .env into process.env so process.env consumers (e.g. getTestLeads -> TEST_LEADS)
+// see the same values. Only fill blanks; never override real shell-exported env vars.
+for (const [k, v] of Object.entries(env)) {
+  if (v !== "" && process.env[k] === undefined) process.env[k] = v;
+}
 const api = makeApi(env);
 
 let leadsCache = null; // { projectId, leads, rejected, sourcePath } | null
@@ -371,6 +376,7 @@ const handlers = {
     json(res, 200, {
       ok: true,
       projects: projects.map((p) => ({ id: p.id, name: p.name, senders: p.senders ?? [], excel: p.excel ?? "" })),
+      alias: notionConfig?.projectAlias || {},
     });
   },
 

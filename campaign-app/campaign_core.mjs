@@ -802,6 +802,20 @@ export class CampaignRunner {
       this.running = false;
     }
     this.pushLog(`Campaign ${this.state.status}. Final: ${JSON.stringify(this.summary())}`);
+    // 跑完自动发 Telegram 通知(COMPLETED / STOPPED 都发,注明状态与统计)。
+    try {
+      const { makeTelegram } = await import("./telegram.mjs");
+      const tg = makeTelegram();
+      if (tg.enabled && tg.hasChatId) {
+        const s = this.summary();
+        const proj = this.state.project?.name || this.state.project || this.config?.campaignName || "";
+        const parts = Object.entries(s).map(([k, v]) => `${k}: ${v}`).join(" · ") || "(无)";
+        const icon = this.state.status === "COMPLETED" ? "✅" : "⏹";
+        await tg.send(`${icon} Mamba ${this.state.status}\n项目: ${proj}\n模式: ${this.state.mode}\n${parts}`);
+      }
+    } catch (err) {
+      this.pushLog(`Telegram 完成通知发送失败: ${err?.message || err}`);
+    }
     return this.state.status;
   }
 
