@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
 import { normalizePhone, describeMessage, resolvePhone, collectMessages, senderFromPayload } from "./reply_intake.mjs";
+import { makeTelegram, escapeHtml } from "./telegram.mjs";
 
 const HOST = process.env.TRACKER_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TRACKER_PORT ?? 8798);
@@ -33,6 +34,7 @@ const notion = await createNotionSync({
   env,
   onLog: (message) => console.log(message),
 });
+const tg = makeTelegram(env);
 
 let startedAt = new Date().toISOString();
 let leadIndex = new Map();
@@ -56,6 +58,44 @@ function isAdLead(text) {
   if (!text || !adPhrases.length) return false;
   const lower = String(text).toLowerCase();
   return adPhrases.some((phrase) => lower.includes(phrase));
+}
+
+// Keyword alerts: when a customer reply mentions something that needs YOU to step
+// in (price / location / layout / viewing / loan — configurable), ping Telegram.
+// The list lives in campaign-assets/alert_keywords.json and is re-read on every
+// batch, so editing it takes effect without restarting the tracker.
+const alertKeywordsPath = path.join(paths.dataDir, "..", "campaign-assets", "alert_keywords.json");
+async function loadAlertConfig() {
+  try {
+    const cfg = JSON.parse(await fs.readFile(alertKeywordsPath, "utf8"));
+    if (cfg?.enabled === false) return { enabled: false, groups: [] };
+    const groups = (cfg?.groups ?? []).map((g) => ({
+      label: String(g.label ?? "").trim() || "跟进",
+      keywords: (g.keywords ?? []).map((k) => String(k).toLowerCase().trim()).filter(Boolean),
+    })).filter((g) => g.keywords.length);
+    return { enabled: true, groups };
+  } catch {
+    return { enabled: true, groups: [] };
+  }
+}
+// Return the labels of every group the text matches (so one reply can flag e.g.
+// both price AND viewing). Empty array = no alert.
+function matchAlertGroups(text, cfg) {
+  if (!cfg?.enabled || !text) return [];
+  const lower = String(text).toLowerCase();
+  return cfg.groups.filter((g) => g.keywords.some((k) => lower.includes(k))).map((g) => g.label);
+}
+async function sendKeywordAlert(event, labels) {
+  if (!tg.enabled || !tg.hasChatId || !labels.length) return;
+  const who = event.name && event.name !== "Unknown" ? `${event.name} (${event.phone})` : event.phone;
+  const message = [
+    `🔔 <b>需要人工跟进</b> · ${escapeHtml(labels.join(" / "))}`,
+    `👤 ${escapeHtml(who)}`,
+    event.sender ? `📲 via ${escapeHtml(event.sender)}` : "",
+    "",
+    `💬 ${escapeHtml(event.text)}`,
+  ].filter(Boolean).join("\n");
+  await tg.send(message).catch((error) => console.log(`Telegram alert failed for ${event.phone}: ${error.message}`));
 }
 let stats = { totalReplies: 0, warm: 0, notInterested: 0, stop: 0, unknown: 0 };
 
@@ -239,6 +279,7 @@ function eventFromMessage(payload, message) {
 
 async function processWebhook(payload) {
   await refreshLeadIndex();
+  const alertCfg = await loadAlertConfig(); // re-read each batch so edits apply live
   const messages = collectMessages(payload);
   const seen = new Set();
   const saved = [];
@@ -250,6 +291,13 @@ async function processWebhook(payload) {
     await saveEvent(event);
     saved.push(event);
     console.log(`[${event.category}] ${event.name} (${event.phone}) -> ${event.text}`);
+
+    // Keyword filter: high-intent reply -> Telegram ping so you can take over.
+    const labels = matchAlertGroups(event.text, alertCfg);
+    if (labels.length) {
+      console.log(`  🔔 alert (${labels.join(", ")}) -> Telegram`);
+      await sendKeywordAlert(event, labels);
+    }
   }
 
   return saved;

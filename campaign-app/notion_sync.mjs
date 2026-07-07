@@ -449,11 +449,13 @@ export class NotionSync {
     }
     const replyCount = existing ? pageNumber(existing, "Reply Count") + 1 : 1;
     const existingTemplates = existing ? pageRelationIds(existing, "Template Sent") : [];
-    const properties = {
-      Name: title(event.name || event.phone),
-      Phone: phoneNumber(event.phone),
+    // Fields a REPLY is allowed to touch. Identity fields (Name / Phone / Project)
+    // are deliberately excluded: an existing lead was blasted under a specific
+    // 楼盘, so a reply must never re-stamp their Project — that was flipping e.g.
+    // Gen Starz customers to whichever project happened to be configured when they
+    // replied. Multi-project safe: a customer's 楼盘 is fixed at blast time.
+    const replyProps = {
       Status: status(leadStatusFromReply(event.status)),
-      Project: select(this.config.project),
       "Last Reply At": dateValue(event.receivedAt),
       "Last Reply Text": richText(event.text),
       "AI Category": select(categoryFromReply(event.category)),
@@ -464,13 +466,22 @@ export class NotionSync {
 
     let page;
     if (existing) {
-      // Note: Stop Flag is intentionally NOT in `properties`, so an update never
-      // un-ticks a customer you've stopped.
-      page = await this.updatePage(existing.id, properties);
+      // Update only reply fields. Name/Phone/Project preserved; Stop Flag also
+      // untouched so an update never un-ticks a customer you've stopped.
+      page = await this.updatePage(existing.id, replyProps);
     } else {
+      // Brand-new inbound (never blasted). Project is left BLANK unless the event
+      // already carries one — you run multiple 楼盘 at once, so a global default
+      // would mis-tag a stranger ~half the time. You assign the 楼盘 on review.
       page = await this.request("POST", "/pages", {
         parent: { type: "database_id", database_id: cleanId(blastLeadsDatabase(this.config)) },
-        properties: { ...properties, "Stop Flag": checkbox(false) },
+        properties: {
+          Name: title(event.name || event.phone),
+          Phone: phoneNumber(event.phone),
+          ...(event.project ? { Project: select(event.project) } : {}),
+          "Stop Flag": checkbox(false),
+          ...replyProps,
+        },
       });
     }
 

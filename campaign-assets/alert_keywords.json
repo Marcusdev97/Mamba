@@ -1,0 +1,26 @@
+{
+  "_readme": "客户回复里出现下面任一关键词(不分大小写),就在 Telegram 上 ping 你,提示这条需要人工跟进。你自己增删 groups 和 keywords 即可,改完存档就生效(不用重启)。label 会显示在提醒标题里。enabled 设为 false 可整体关掉。",
+  "enabled": true,
+  "groups": [
+    {
+      "label": "💰 问价 Price",
+      "keywords": ["price", "how much", "package", "rebate", "discount", "多少钱", "几钱", "价格", "配套", "回扣", "berapa", "harga"]
+    },
+    {
+      "label": "📍 位置 Location",
+      "keywords": ["location", "where", "address", "nearby", "mrt", "lrt", "trx", "klcc", "地点", "位置", "地址", "在哪里", "靠近", "lokasi", "dekat mana"]
+    },
+    {
+      "label": "📐 户型 Layout",
+      "keywords": ["layout", "floor plan", "floorplan", "sqft", "size", "bedroom", "户型", "面积", "平方尺", "几房", "bilik", "keluasan"]
+    },
+    {
+      "label": "🏠 看房 Viewing",
+      "keywords": ["view", "visit", "appointment", "show unit", "showroom", "看房", "参观", "约时间", "现场", "boleh tengok", "boleh view"]
+    },
+    {
+      "label": "🏦 贷款/月供 Loan",
+      "keywords": ["loan", "bank", "installment", "monthly", "salary", "月供", "供多少", "贷款", "银行", "ansuran", "gaji"]
+    }
+  ]
+}
