@@ -134,7 +134,7 @@ export function makeApi(env) {
   };
 }
 
-function normalizePhone(value) {
+export function normalizePhone(value) {
   let digits = String(value ?? "").replace(/\D/g, "");
   if (digits.startsWith("0")) digits = `60${digits.slice(1)}`;
   return /^\d{8,15}$/.test(digits) ? digits : null;
@@ -272,23 +272,32 @@ export function firstFlowPart2Variants(config, part1Variant) {
   });
 }
 
-// Fix (2026-07): test numbers moved out of source into TEST_LEADS env var.
-// Format: "Name:phone:lang:templateId,Name:phone:lang:templateId"
-// e.g. TEST_LEADS="Mark:60168568756:en:en_part1_quick_update,CC Liu:60179978682:en:en_part1_still_looking"
-export function getTestLeads() {
-  const raw = process.env.TEST_LEADS || "";
-  const leads = raw
-    .split(",")
+// TEST recipients can come from the web UI (one per line: Name, Phone, Lang) or
+// from TEST_LEADS in .env (legacy: Name:phone:lang:templateId).
+export function getTestLeads(raw = process.env.TEST_LEADS || "") {
+  const text = String(raw || "").trim();
+  const entries = (text.includes("\n")
+    ? text.split(/\r?\n/)
+    : (text.includes(":") && text.includes(",") ? text.split(",") : [text]))
     .map((s) => s.trim())
-    .filter(Boolean)
-    .map((entry, i) => {
-      const [name, phone, language, templateId] = entry.split(":").map((s) => (s || "").trim());
-      if (!name || !phone) return null;
-      return { id: `test_${i}_${name.toLowerCase().replace(/\s+/g, "_")}`, name, phone, language: language || "en", templateId: templateId || "" };
-    })
     .filter(Boolean);
+  const leads = entries.map((entry, i) => {
+    const pieces = entry.includes(":") ? entry.split(":") : entry.split(/[,\t|]/);
+    const [nameRaw, phoneRaw, languageRaw, templateIdRaw] = pieces.map((s) => (s || "").trim());
+    const phone = normalizePhone(phoneRaw);
+    if (!nameRaw || !phone) return null;
+    const language = String(languageRaw || "en").trim().toLowerCase();
+    const slug = nameRaw.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `recipient_${i + 1}`;
+    return {
+      id: `test_${i}_${slug}`,
+      name: nameRaw,
+      phone,
+      language: language === "zh" ? "zh" : "en",
+      templateId: templateIdRaw || "",
+    };
+  }).filter(Boolean);
   if (!leads.length) {
-    console.warn("[TEST MODE] TEST_LEADS env var is empty — add it to your .env (see comment above getTestLeads).");
+    console.warn("[TEST MODE] 没有测试收件人。请在页面填写，或在 .env 设置 TEST_LEADS。");
   }
   return leads;
 }
@@ -350,6 +359,7 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
       id: `job_${String(index + 1).padStart(5, "0")}`,
       lead,
       instanceName: instance.name,
+      instanceKey: instance.name,
       senderLast4: instance.owner.slice(-4),
       language,
       part1Variant: part1.id,
@@ -880,6 +890,7 @@ export class CampaignRunner {
               name: job.lead.name,
               phone: job.lead.phone,
               instanceName: job.instanceName,
+              instanceKey: job.instanceKey ?? job.instanceName,
               language: job.language,
               part1Variant: job.part1Variant,
               part2Variant: job.part2Variant,

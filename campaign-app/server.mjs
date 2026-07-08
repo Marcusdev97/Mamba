@@ -754,7 +754,10 @@ const handlers = {
 
     let selectedLeads;
     if (mode === "TEST") {
-      selectedLeads = getTestLeads();
+      selectedLeads = getTestLeads(body.testRecipients || undefined);
+      if (!selectedLeads.length) {
+        throw new Error("TEST 模式请先填写至少一个测试收件人。格式: 名字, 电话, 语言。");
+      }
     } else {
       if (!leadsCache || leadsCache.projectId !== project.id || !leadsCache.leads.length) {
         throw new Error(`还没有导入 ${project.name} 的 leads，请先导入它的 Excel。`);

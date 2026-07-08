@@ -66,8 +66,12 @@
         <button data-mode="TEST" class="active">TEST</button>
         <button data-mode="LIVE">LIVE</button>
       </div>
+      <label class="fld" id="testRecipientsFld">
+        <span>TEST 收件人（一行一个：名字, 电话, 语言）</span>
+        <textarea id="testRecipients" rows="4" placeholder="Marcus, 60123456789, EN" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px;resize:vertical"></textarea>
+      </label>
       <label class="fld hidden" id="leadCountFld"><span>发送 leads 数量（留空=全部）</span><input type="number" id="leadCount" min="1" placeholder="全部" /></label>
-      <label class="fld"><span>发送号码（senders，OPEN 的才能选）</span></label>
+      <label class="fld"><span>Connection Key（OPEN 的才能选）</span></label>
       <div class="checks" id="senderChecks"><span class="muted">等待号码列表…</span></div>
       <div style="margin-top:14px"><button class="btn primary" id="btnPrepare">生成预览</button></div>
       <div class="err" id="prepErr"></div>
@@ -78,7 +82,7 @@
   <div class="card hidden" id="previewCard">
     <h2><span class="step-no">3</span>预览与确认</h2>
     <div class="chips" id="previewChips"></div>
-    <div id="testNote" class="notice">TEST 模式只发给 Mark（…8756）和 CC Liu（…8682），各收 Part 1 + Part 2。</div>
+    <div id="testNote" class="notice">TEST 模式只发给你填写的测试收件人，不会使用 Excel 名单。</div>
     <div id="liveBox" class="hidden">
       <div class="warn-box">⚠️ LIVE 模式会向真实客户号码发送。请确认所有收件人均已 opt-in（同意接收）。</div>
       <label style="display:flex;gap:9px;align-items:center;font-size:13.5px;margin-bottom:12px">
@@ -116,22 +120,28 @@
 const $ = (id) => document.getElementById(id);
 let mode = "TEST";
 let openSenders = [];
+let openSenderItems = [];
 let statusTimer = null;
 let TEMPLATES = [];
 let currentProject = null;
 let currentProjectSenders = [];
+let PROJECTS = [];
 let templateSource = "";
 let templateFlow = "";
 
 function applyProjectSenders() {
-  document.querySelectorAll(".sender").forEach((c) => { c.checked = currentProjectSenders.includes(c.value); });
+  document.querySelectorAll(".sender").forEach((c) => {
+    c.checked = currentProjectSenders.length ? currentProjectSenders.includes(c.value) : true;
+  });
 }
 
 async function loadProjects() {
   const r = await get("/api/projects").catch(() => null);
   if (!r || !r.ok || !r.projects.length) return;
-  $("projectSel").innerHTML = r.projects.map((p) => '<option value="' + p.id + '">' + p.name + "</option>").join("");
+  PROJECTS = r.projects;
+  $("projectSel").innerHTML = PROJECTS.map((p) => '<option value="' + p.id + '">' + p.name + "</option>").join("");
   currentProject = r.projects[0].id;
+  currentProjectSenders = r.projects[0].senders || [];
   await loadProjectConfig();
 }
 
@@ -197,14 +207,19 @@ async function refreshInstances() {
   const data = await get("/api/instances").catch(() => ({ online: false, instances: [] }));
   $("apiDot").className = "dot " + (data.online ? "on" : "off");
   $("apiLabel").textContent = data.online ? "API 在线" : "API 离线（先启动 Evolution）";
-  openSenders = data.instances.filter((i) => i.status === "OPEN").map((i) => i.name);
+  openSenderItems = data.instances.filter((i) => i.status === "OPEN");
+  openSenders = openSenderItems.map((i) => i.name);
   const sc = $("senderChecks");
   if (!openSenders.length) {
     sc.innerHTML = '<span class="muted">没有 OPEN 的号码 —— 去 Mamba 控制台开「📱 号码连接」扫码上线</span>';
     sc.dataset.list = "";
   } else if (sc.dataset.list !== openSenders.join(",")) {
     sc.dataset.list = openSenders.join(",");
-    sc.innerHTML = openSenders.map((n) => '<label><input type="checkbox" class="sender" value="' + n + '" checked> ' + n + "</label>").join("");
+    sc.innerHTML = openSenderItems.map((item) => {
+      const number = item.number && item.number !== "Not connected" ? " · " + item.number : "";
+      return '<label><input type="checkbox" class="sender" value="' + item.name + '" checked> <b>' + item.name + '</b><span class="muted">' + number + "</span></label>";
+    }).join("");
+    applyProjectSenders();
   }
 }
 
@@ -214,6 +229,7 @@ $("modeSeg").addEventListener("click", (e) => {
   mode = b.dataset.mode;
   [...$("modeSeg").children].forEach((x) => x.classList.toggle("active", x === b));
   $("leadCountFld").classList.toggle("hidden", mode !== "LIVE");
+  $("testRecipientsFld").classList.toggle("hidden", mode !== "TEST");
 });
 
 // ---- import ----
@@ -260,6 +276,7 @@ $("btnPrepare").addEventListener("click", async () => {
     endTime: $("endTime").value.trim(),
     instances: senders,
     leadCount: $("leadCount").value.trim() ? Number($("leadCount").value.trim()) : undefined,
+    testRecipients: $("testRecipients").value.trim() || undefined,
   });
   if (!r.ok) { $("prepErr").textContent = r.error; return; }
   renderPreview(r);
@@ -272,7 +289,7 @@ function renderPreview(r) {
     '<div class="chip">模式 <b>' + s.mode + "</b></div>" +
     '<div class="chip">时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>" +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
-    '<div class="chip">号码 <b>' + s.assignments.map(a=>a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>" +
+    '<div class="chip">Connection <b>' + s.assignments.map(a=>a.instanceKey || a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>" +
     '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>";
   $("previewBody").innerHTML = s.assignments.map((a) =>
     "<tr><td>" + fmtTime(a.scheduledAt) + "</td><td>" + a.name + "</td><td>" + a.phone + "</td><td>" + a.instanceName +
@@ -300,7 +317,8 @@ async function startCampaign(optIn) {
   startPolling();
 }
 $("btnStartTest").addEventListener("click", () => {
-  if (!confirm("开始测试发送给 Mark 和 CC Liu？")) return;
+  const total = document.querySelectorAll("#previewBody tr").length;
+  if (!confirm("开始测试发送给 " + total + " 个测试收件人？")) return;
   startCampaign(false);
 });
 $("btnStartLive").addEventListener("click", () => {
@@ -352,6 +370,9 @@ async function pollStatus() {
 // ---- project switching ----
 $("projectSel").addEventListener("change", async () => {
   currentProject = $("projectSel").value;
+  const p = PROJECTS.find((item) => item.id === currentProject);
+  currentProjectSenders = p?.senders || [];
+  applyProjectSenders();
   $("importMsg").textContent = ""; $("importErr").textContent = "";
   await loadProjectConfig();
 });
