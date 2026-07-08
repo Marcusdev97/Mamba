@@ -481,7 +481,7 @@ async function load() {
     if (data.evoOffline) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,本次没扫回复</div>' +
-        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先点控制台「号码连接」把引擎带起来,再刷新本页。</div>';
+        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先去 Settings / Phone Setup 把引擎带起来,再刷新本页。</div>';
     } else if (skipped.length) {
       const red = skipped.filter((x) => x.signal === "RED").length;
       const green = skipped.filter((x) => x.signal === "GREEN").length;

@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Settings · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .settings-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .phone-card { order: 1; }
+  .notion-card { order: 2; }
+  .telegram-card { order: 3; }
+  .save-card { order: 4; }
+  .status-line { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .health { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .top a { color: var(--blue); text-decoration: none; font-weight: 700; }
+  .top a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Settings</h1>
+      <div class="sub">Phone Setup · Notion · Telegram · 保存到 evolution-pilot/.env</div>
+    </div>
+    <a href="/">返回 Campaign Console</a>
+  </header>
+
+  <div class="settings-grid">
+    <div class="card notion-card">
+      <h2>2. Notion</h2>
+      <label class="fld">
+        <span>Notion Integration Token</span>
+        <input id="notionToken" type="password" autocomplete="off" placeholder="ntn_..." />
+      </label>
+      <div class="status-line" id="notionStatus">读取中...</div>
+    </div>
+
+    <div class="card telegram-card">
+      <h2>3. Telegram</h2>
+      <label class="fld">
+        <span>Bot Token</span>
+        <input id="telegramBotToken" type="password" autocomplete="off" placeholder="123456:ABC..." />
+      </label>
+      <label class="fld">
+        <span>Chat ID</span>
+        <input id="telegramChatId" type="text" autocomplete="off" placeholder="例如 123456789" />
+      </label>
+      <div class="actions">
+        <button class="btn" id="btnFindChat">自动找 Chat ID</button>
+        <button class="btn" id="btnTestTelegram">发送测试 Telegram</button>
+      </div>
+      <div class="status-line" id="telegramStatus">读取中...</div>
+    </div>
+
+    <div class="card phone-card">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px">
+        <div>
+          <h2 style="margin:0">1. Phone Setup</h2>
+          <div class="status-line">Connection Key = wa_01 / wa_02；电话号码只是识别用。</div>
+        </div>
+        <div class="actions" style="margin-top:0">
+          <button class="btn" id="btnRefreshInst">刷新</button>
+          <button class="btn primary" id="btnAddNumber">+ 添加号码（扫码）</button>
+        </div>
+      </div>
+      <div class="health" id="phoneHealth">
+        <div class="chip">API <b>查询中...</b></div>
+      </div>
+      <table>
+        <thead><tr><th>KEY</th><th>STATUS</th><th>WHATSAPP</th><th></th></tr></thead>
+        <tbody id="instBody"><tr><td colspan="4" class="muted">读取中...</td></tr></tbody>
+      </table>
+
+      <div id="qrPanel" class="hidden" style="margin-top:16px; border-top:1px solid var(--line); padding-top:16px">
+        <div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap">
+          <div style="background:#fff; padding:10px; border-radius:10px; width:230px; height:230px; display:flex; align-items:center; justify-content:center">
+            <img id="qrImg" alt="QR" style="width:210px; height:210px; image-rendering:pixelated" />
+          </div>
+          <div style="flex:1; min-width:240px">
+            <div style="font-weight:700; font-size:15px; margin-bottom:8px">为 <span id="qrName" style="color:var(--green)"></span> 扫码登录</div>
+            <ol class="muted" style="font-size:13px; padding-left:18px; margin:0 0 12px">
+              <li>在目标手机打开 WhatsApp 或 WhatsApp Business</li>
+              <li>设置 → 已连接的设备 → 链接设备</li>
+              <li>扫描左边二维码</li>
+            </ol>
+            <div id="qrStatus" class="notice">等待扫描...（二维码每 25 秒自动刷新）</div>
+            <div class="actions">
+              <button class="btn" id="btnQrRefresh">刷新二维码</button>
+              <button class="btn" id="btnQrClose">关闭</button>
+            </div>
+            <div class="err" id="qrErr"></div>
+          </div>
+        </div>
+      </div>
+      <div class="status-line">健康标准：至少 1 个 Key 显示 OPEN，才可以发送 campaign。</div>
+    </div>
+
+    <div class="card save-card">
+      <h2>4. Save</h2>
+      <div class="actions">
+        <button class="btn primary" id="btnSave">保存 Settings</button>
+      </div>
+      <div class="ok" id="okMsg"></div>
+      <div class="err" id="errMsg"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let qrName = null;
+let qrTimer = null;
+let qrTicks = 0;
+
+async function api(url, body) {
+  const res = await fetch(url, body === undefined ? undefined : {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function values() {
+  return {
+    notionToken: $("notionToken").value.trim(),
+    telegramBotToken: $("telegramBotToken").value.trim(),
+    telegramChatId: $("telegramChatId").value.trim(),
+  };
+}
+
+function render(settings) {
+  const s = settings || {};
+  $("notionStatus").textContent = s.notion?.configured
+    ? "已设置: " + s.notion.masked
+    : "未设置";
+  $("telegramStatus").textContent =
+    "Bot: " + (s.telegram?.botConfigured ? "已设置 " + s.telegram.botMasked : "未设置") +
+    " · Chat ID: " + (s.telegram?.chatConfigured ? s.telegram.chatId : "未设置");
+  if (!$("telegramChatId").value && s.telegram?.chatId) $("telegramChatId").value = s.telegram.chatId;
+}
+
+function message(ok, err) {
+  $("okMsg").textContent = ok || "";
+  $("errMsg").textContent = err || "";
+}
+
+function badge(status) {
+  const cls = status === "OPEN" ? "b-sent" : "b-queued";
+  return '<span class="badge ' + cls + '">' + status + "</span>";
+}
+
+async function refreshInstances() {
+  const btn = $("btnRefreshInst");
+  if (btn) { btn.disabled = true; btn.textContent = "查询中..."; }
+  const data = await api("/api/instances").catch((e) => ({ ok: true, online: false, error: e.message, instances: [] }));
+  if (btn) { btn.disabled = false; btn.textContent = "刷新"; }
+  const instances = data.instances || [];
+  const open = instances.filter((i) => i.status === "OPEN").length;
+  const closed = Math.max(0, instances.length - open);
+  $("phoneHealth").innerHTML =
+    '<div class="chip">API <b>' + (data.online ? "ONLINE" : "OFFLINE") + "</b></div>" +
+    '<div class="chip">OPEN <b>' + open + "</b></div>" +
+    '<div class="chip">Closed <b>' + closed + "</b></div>" +
+    '<div class="chip">Last Check <b>' + new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit", hour12: false }) + "</b></div>";
+  const body = $("instBody");
+  if (!instances.length) {
+    body.innerHTML = '<tr><td colspan="4" class="muted">' + (data.online ? "暂无号码，点添加号码扫码" : (data.error || "Evolution API 离线")) + "</td></tr>";
+    return;
+  }
+  body.innerHTML = instances.map((i) =>
+    "<tr><td><b>" + i.name + "</b></td><td>" + badge(i.status) + "</td><td>" + i.number +
+    '</td><td style="text-align:right"><button class="btn" style="padding:4px 12px; font-size:12.5px" data-del="' + i.name + '">删除</button></td></tr>'
+  ).join("");
+}
+
+async function refreshQr() {
+  if (!qrName) return;
+  const r = await api("/api/instance/qr?name=" + encodeURIComponent(qrName)).catch((e) => ({ ok: false, error: e.message }));
+  if (r.ok) { $("qrImg").src = r.qr; $("qrErr").textContent = ""; }
+  else $("qrErr").textContent = r.error || "刷新二维码失败";
+}
+
+async function qrTick() {
+  qrTicks += 1;
+  const data = await api("/api/instances").catch(() => null);
+  const inst = data && data.instances.find((i) => i.name === qrName);
+  if (inst && inst.status === "OPEN") {
+    $("qrStatus").innerHTML = "已连接: <b style='color:var(--green)'>" + qrName + " · " + inst.number + "</b>";
+    clearInterval(qrTimer); qrTimer = null;
+    refreshInstances();
+    return;
+  }
+  if (qrTicks % 5 === 0) refreshQr();
+}
+
+$("btnSave").addEventListener("click", async () => {
+  message("", "");
+  try {
+    const data = await api("/api/settings", values());
+    render(data.settings);
+    $("notionToken").value = "";
+    $("telegramBotToken").value = "";
+    message("已保存。当前 Mamba server 会马上使用新的设置。", "");
+  } catch (e) {
+    message("", e.message);
+  }
+});
+
+$("btnFindChat").addEventListener("click", async () => {
+  message("", "");
+  try {
+    const data = await api("/api/settings/telegram-chat", values());
+    render(data.settings);
+    $("telegramChatId").value = String(data.chat.id);
+    message("找到 Telegram chat: " + data.chat.name + " (" + data.chat.id + ")", "");
+  } catch (e) {
+    message("", e.message);
+  }
+});
+
+$("btnTestTelegram").addEventListener("click", async () => {
+  message("", "");
+  try {
+    const data = await api("/api/settings/test-telegram", values());
+    render(data.settings);
+    $("telegramBotToken").value = "";
+    message("测试 Telegram 已发送: " + data.bot, "");
+  } catch (e) {
+    message("", e.message);
+  }
+});
+
+$("btnAddNumber").addEventListener("click", async () => {
+  message("", "");
+  const label = (prompt("Connection Key（留空自动取下一个，如 wa_03）：", "") || "").trim();
+  $("btnAddNumber").disabled = true;
+  try {
+    const r = await api("/api/instance/create", { name: label || undefined });
+    qrName = r.instanceName;
+    $("qrName").textContent = qrName;
+    $("qrImg").src = r.qr;
+    $("qrErr").textContent = "";
+    $("qrStatus").textContent = "等待扫描...（二维码每 25 秒自动刷新）";
+    $("qrPanel").classList.remove("hidden");
+    $("qrPanel").scrollIntoView({ behavior: "smooth" });
+    if (qrTimer) clearInterval(qrTimer);
+    qrTicks = 0;
+    qrTimer = setInterval(qrTick, 5000);
+  } catch (e) {
+    message("", e.message);
+  } finally {
+    $("btnAddNumber").disabled = false;
+  }
+});
+
+$("btnQrRefresh").addEventListener("click", refreshQr);
+$("btnQrClose").addEventListener("click", () => {
+  $("qrPanel").classList.add("hidden");
+  if (qrTimer) { clearInterval(qrTimer); qrTimer = null; }
+  qrName = null;
+});
+
+$("instBody").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-del]");
+  if (!btn) return;
+  const name = btn.dataset.del;
+  if (!confirm("删除 " + name + "？会登出该 WhatsApp 设备并删除连接。")) return;
+  btn.disabled = true;
+  try {
+    await api("/api/instance/delete", { name });
+    refreshInstances();
+  } catch (err) {
+    message("", err.message);
+    btn.disabled = false;
+  }
+});
+$("btnRefreshInst").addEventListener("click", refreshInstances);
+
+api("/api/settings").then((data) => render(data.settings)).catch((e) => {
+  $("notionStatus").textContent = "读取失败";
+  $("telegramStatus").textContent = e.message;
+});
+refreshInstances();
+setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
+</script>
+</body>
+</html>

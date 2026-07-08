@@ -1,9 +1,9 @@
 #!/bin/zsh
 
-# 号码连接 — 一个按钮搞定"号码能发"的所有前置:
+# Phone Setup — 一个按钮搞定"号码能发"的所有前置:
 #   1) Docker / Evolution 引擎没跑 -> 自动启动(原「启动 Evolution」的逻辑)
 #   2) Campaign Console 没跑 -> 自动启动
-#   3) 打开「号码连接」页扫码上线
+#   3) 打开 Settings 里的 Phone Setup 扫码上线
 # 幂等:什么都在跑的话,就只是打开网页。
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +19,7 @@ fi
 
 PORT="${CONSOLE_PORT:-8787}"
 EVO_PORT="8080"
-URL="http://127.0.0.1:${PORT}/numbers"
+URL="http://127.0.0.1:${PORT}/settings"
 
 export PATH="/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 
@@ -27,7 +27,7 @@ if [[ ! -x "$NODE" ]]; then
   echo "找不到 Node.js。"; read "?Press Enter to close..."; exit 1
 fi
 
-echo "MAMBA | 号码连接"
+echo "MAMBA | Phone Setup"
 echo "================"
 
 # ---------- 1) Evolution 引擎 ----------
@@ -115,7 +115,7 @@ if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/"; then
 fi
 
 # ---------- 3) 打开页面 ----------
-echo "打开号码连接:$URL"
+echo "打开 Settings / Phone Setup:$URL"
 open "$URL"
 echo ""
 read "?Press Enter to close..."

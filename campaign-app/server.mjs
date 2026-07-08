@@ -49,7 +49,10 @@ let runner = null;
 
 // --- Notion access (for the "选人发下一轮" picker) --------------------------
 const NOTION_VERSION = "2022-06-28";
-const notionToken = env.NOTION_API_KEY || env.NOTION_TOKEN || process.env.NOTION_API_KEY || process.env.NOTION_TOKEN;
+const envPath = path.join(paths.rootDir, "evolution-pilot", ".env");
+function notionTokenValue() {
+  return env.NOTION_API_KEY || env.NOTION_TOKEN || process.env.NOTION_API_KEY || process.env.NOTION_TOKEN || "";
+}
 let notionConfig = {};
 try {
   notionConfig = JSON.parse(await fs.readFile(path.join(paths.rootDir, "campaign-data", "notion_config.json"), "utf8"));
@@ -72,10 +75,11 @@ function resolveMedia(imageName) {
 }
 
 async function notion(method, pathname, body, attempt = 0) {
-  if (!notionToken) throw new Error("没有 Notion token。先运行 Set Notion Token。");
+  const token = notionTokenValue();
+  if (!token) throw new Error("没有 Notion token。先运行 Set Notion Token。");
   const r = await fetch(`https://api.notion.com/v1${pathname}`, {
     method,
-    headers: { Authorization: `Bearer ${notionToken}`, "Content-Type": "application/json", "Notion-Version": NOTION_VERSION },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Notion-Version": NOTION_VERSION },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(20000),
   });
@@ -104,6 +108,69 @@ function nfAddDaysKL(days) {
   const d = new Date(`${klTodayKL()}T00:00:00+08:00`);
   d.setUTCDate(d.getUTCDate() + Number(days || 0));
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
+}
+
+function maskSecret(value) {
+  const s = String(value || "");
+  if (!s) return "";
+  if (s.length <= 10) return `${s.slice(0, 2)}***${s.slice(-2)}`;
+  return `${s.slice(0, 6)}...${s.slice(-4)}`;
+}
+
+async function writeEnvValues(values) {
+  let text = "";
+  try {
+    text = await fs.readFile(envPath, "utf8");
+  } catch {
+    await fs.mkdir(path.dirname(envPath), { recursive: true });
+  }
+  const lines = text.split(/\r?\n/);
+  for (const [key, value] of Object.entries(values)) {
+    const clean = String(value ?? "").trim();
+    if (!clean) continue;
+    const line = `${key}=${clean}`;
+    let replaced = false;
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index].startsWith(`${key}=`)) {
+        lines[index] = line;
+        replaced = true;
+      }
+    }
+    if (!replaced) {
+      if (lines.length && lines.at(-1) !== "") lines.push("");
+      lines.push(line);
+    }
+    env[key] = clean;
+    process.env[key] = clean;
+  }
+  await fs.writeFile(envPath, `${lines.join("\n").replace(/\n+$/, "")}\n`);
+}
+
+function settingsSnapshot() {
+  return {
+    notion: {
+      configured: Boolean(notionTokenValue()),
+      masked: maskSecret(notionTokenValue()),
+    },
+    telegram: {
+      botConfigured: Boolean(env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN),
+      botMasked: maskSecret(env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN),
+      chatConfigured: Boolean(env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID),
+      chatId: env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "",
+    },
+  };
+}
+
+async function telegramApi(method, token, body = {}) {
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!data.ok) throw new Error(`Telegram ${method}: ${JSON.stringify(data)}`);
+  return data.result;
 }
 
 // Fetch the Active templates for a Project + Cohort Day, grouped by language:
@@ -548,6 +615,60 @@ function buildCsv(state) {
 }
 
 const handlers = {
+  "GET /api/settings": async (_req, res) => {
+    json(res, 200, { ok: true, settings: settingsSnapshot() });
+  },
+
+  "POST /api/settings": async (req, res) => {
+    const body = await readBody(req);
+    const values = {};
+    const notionToken = String(body.notionToken ?? "").trim();
+    const telegramBotToken = String(body.telegramBotToken ?? "").trim();
+    const telegramChatId = String(body.telegramChatId ?? "").trim();
+    if (notionToken) values.NOTION_API_KEY = notionToken;
+    if (telegramBotToken) values.TELEGRAM_BOT_TOKEN = telegramBotToken;
+    if (telegramChatId) values.TELEGRAM_CHAT_ID = telegramChatId;
+    if (!Object.keys(values).length) throw new Error("没有填写任何要保存的 token。");
+    await writeEnvValues(values);
+    json(res, 200, { ok: true, settings: settingsSnapshot() });
+  },
+
+  "POST /api/settings/telegram-chat": async (req, res) => {
+    const body = await readBody(req);
+    const token = String(body.telegramBotToken ?? env.TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
+    if (!token) throw new Error("请先填 Telegram Bot Token。");
+    const updates = await telegramApi("getUpdates", token, {});
+    const chats = [];
+    for (const update of updates || []) {
+      const message = update.message ?? update.edited_message ?? update.channel_post;
+      const chat = message?.chat;
+      if (chat?.id && !chats.find((c) => c.id === chat.id)) {
+        chats.push({ id: chat.id, name: chat.username || chat.first_name || chat.title || "Telegram Chat" });
+      }
+    }
+    if (!chats.length) {
+      throw new Error("找不到 chat。先去 Telegram 打开你的 bot，发一句 hi，然后再点一次。");
+    }
+    const chosen = chats.at(-1);
+    await writeEnvValues({ TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: String(chosen.id) });
+    json(res, 200, { ok: true, chat: chosen, settings: settingsSnapshot() });
+  },
+
+  "POST /api/settings/test-telegram": async (req, res) => {
+    const body = await readBody(req);
+    const token = String(body.telegramBotToken ?? env.TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
+    const chatId = String(body.telegramChatId ?? env.TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? "").trim();
+    if (!token) throw new Error("请先填 Telegram Bot Token。");
+    if (!chatId) throw new Error("请先填 Telegram Chat ID，或点「自动找 Chat ID」。");
+    const me = await telegramApi("getMe", token, {});
+    await telegramApi("sendMessage", token, {
+      chat_id: chatId,
+      text: "Mamba Telegram 已连接成功。",
+    });
+    await writeEnvValues({ TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: chatId });
+    json(res, 200, { ok: true, bot: me?.username || me?.first_name || "Telegram Bot", settings: settingsSnapshot() });
+  },
+
   "GET /api/projects": async (_req, res) => {
     const projects = await loadProjects();
     json(res, 200, {
@@ -1596,9 +1717,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/numbers") {
-      const html = await fs.readFile(path.join(appDir, "numbers.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
+      res.writeHead(302, { Location: "/settings" });
+      res.end();
       return;
     }
 
@@ -1618,6 +1738,13 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/lookup") {
       const html = await fs.readFile(path.join(appDir, "lookup.html"), "utf8");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/settings") {
+      const html = await fs.readFile(path.join(appDir, "settings.html"), "utf8");
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;
@@ -1681,7 +1808,7 @@ server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
     console.log("");
     console.log(`Console 已经在 ${PORT} 端口运行了 —— 不用再启动一个。`);
-    console.log(`直接打开 http://${HOST}:${PORT}/ 即可;所有页面(首轮群发/号码连接/模板/查找)共用这一个 server。`);
+    console.log(`直接打开 http://${HOST}:${PORT}/ 即可;所有页面(首轮群发/Settings/模板/查找)共用这一个 server。`);
     console.log(`想强制重启:先跑  lsof -ti tcp:${PORT} | xargs kill  再启动。`);
     process.exit(0);
   }

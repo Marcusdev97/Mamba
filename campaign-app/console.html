@@ -13,7 +13,10 @@
       <h1>📣 首轮群发（Flow 1）</h1>
       <div class="sub" id="campaignSub">导入名单 → 设定时间 → 群发第一轮</div>
     </div>
-    <div class="pill"><span class="dot" id="apiDot"></span><span id="apiLabel">连接中…</span></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <a class="btn" href="/settings" style="text-decoration:none">Settings</a>
+      <div class="pill"><span class="dot" id="apiDot"></span><span id="apiLabel">连接中…</span></div>
+    </div>
   </header>
 
   <!-- Project selector -->
@@ -202,7 +205,7 @@ function badge(status) {
   return '<span class="badge ' + cls + '">' + status + "</span>";
 }
 
-// ---- senders + API status (号码管理在 /numbers 页) ----
+// ---- senders + API status (Phone Setup 在 /settings 页) ----
 async function refreshInstances() {
   const data = await get("/api/instances").catch(() => ({ online: false, instances: [] }));
   $("apiDot").className = "dot " + (data.online ? "on" : "off");
@@ -211,7 +214,7 @@ async function refreshInstances() {
   openSenders = openSenderItems.map((i) => i.name);
   const sc = $("senderChecks");
   if (!openSenders.length) {
-    sc.innerHTML = '<span class="muted">没有 OPEN 的号码 —— 去 Mamba 控制台开「📱 号码连接」扫码上线</span>';
+    sc.innerHTML = '<span class="muted">没有 OPEN 的号码 —— 去 Settings / Phone Setup 扫码上线</span>';
     sc.dataset.list = "";
   } else if (sc.dataset.list !== openSenders.join(",")) {
     sc.dataset.list = openSenders.join(",");
@@ -379,7 +382,7 @@ $("projectSel").addEventListener("change", async () => {
 
 // ---- boot ----
 loadProjects().then(refreshInstances);
-setInterval(refreshInstances, 10000); // 从号码连接页回来时自动更新 senders
+setInterval(refreshInstances, 10000); // 从 Settings / Phone Setup 回来时自动更新 senders
 // if a run is already in progress (server restarted page), show it
 get("/api/status").then((snap) => { if (snap && snap.state) { $("progressCard").classList.remove("hidden"); startPolling(); } });
 </script>
