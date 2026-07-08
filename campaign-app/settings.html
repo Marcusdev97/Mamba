@@ -14,6 +14,34 @@
   .status-line { color: var(--muted); font-size: 13px; margin-top: 8px; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
   .health { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .health-panel {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    padding: 12px 14px;
+    margin: 14px 0 12px;
+  }
+  .health-title {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .7px;
+    text-transform: uppercase;
+    margin-bottom: 7px;
+  }
+  .health-summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .health-state {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .health-state.ok { background: var(--green-bg); color: var(--green); }
+  .health-state.warn { background: var(--amber-bg); color: var(--amber); }
+  .health-state.bad { background: var(--red-bg); color: var(--red); }
+  .health-text { color: var(--text); font-size: 13px; }
   .top a { color: var(--blue); text-decoration: none; font-weight: 700; }
   .top a:hover { text-decoration: underline; }
 </style>
@@ -36,6 +64,7 @@
         <input id="notionToken" type="password" autocomplete="off" placeholder="ntn_..." />
       </label>
       <div class="status-line" id="notionStatus">读取中...</div>
+      <div class="status-line" id="notionLinked">Linked: 查询中...</div>
     </div>
 
     <div class="card telegram-card">
@@ -46,13 +75,15 @@
       </label>
       <label class="fld">
         <span>Chat ID</span>
-        <input id="telegramChatId" type="text" autocomplete="off" placeholder="例如 123456789" />
+        <input id="telegramChatId" type="text" autocomplete="off" placeholder="先对 bot 发 hi，再点自动找 Chat ID" />
       </label>
+      <div class="status-line">不要填 bot username。Chat ID 通常是数字，自动找最稳。</div>
       <div class="actions">
         <button class="btn" id="btnFindChat">自动找 Chat ID</button>
         <button class="btn" id="btnTestTelegram">发送测试 Telegram</button>
       </div>
       <div class="status-line" id="telegramStatus">读取中...</div>
+      <div class="status-line" id="telegramLinked">Linked: 查询中...</div>
     </div>
 
     <div class="card phone-card">
@@ -68,6 +99,13 @@
       </div>
       <div class="health" id="phoneHealth">
         <div class="chip">API <b>查询中...</b></div>
+      </div>
+      <div class="health-panel">
+        <div class="health-title">Phone Health</div>
+        <div class="health-summary">
+          <span class="health-state warn" id="phoneHealthState">CHECKING</span>
+          <span class="health-text" id="phoneHealthText">正在检查 WhatsApp connection...</span>
+        </div>
       </div>
       <table>
         <thead><tr><th>KEY</th><th>STATUS</th><th>WHATSAPP</th><th></th></tr></thead>
@@ -140,9 +178,31 @@ function render(settings) {
     ? "已设置: " + s.notion.masked
     : "未设置";
   $("telegramStatus").textContent =
-    "Bot: " + (s.telegram?.botConfigured ? "已设置 " + s.telegram.botMasked : "未设置") +
-    " · Chat ID: " + (s.telegram?.chatConfigured ? s.telegram.chatId : "未设置");
+    "Bot: " + (s.telegram?.botConfigured ? "已设置 " + s.telegram.botMasked : (s.telegram?.botInvalid ? "旧值格式不对" : "未设置")) +
+    " · Chat ID: " + (s.telegram?.chatConfigured ? s.telegram.chatId : (s.telegram?.chatInvalid ? "旧值不是 Chat ID，请重新自动找" : "未设置"));
   if (!$("telegramChatId").value && s.telegram?.chatId) $("telegramChatId").value = s.telegram.chatId;
+}
+
+function renderIdentity(identity) {
+  const n = identity?.notion || {};
+  $("notionLinked").textContent = n.ok
+    ? "Linked: " + n.label
+    : "Linked: " + (n.error ? "无法确认" : "未连接");
+
+  const t = identity?.telegram || {};
+  const bot = t.botOk ? t.botLabel : "未连接";
+  const chat = t.chatOk ? t.chatLabel : "未连接";
+  $("telegramLinked").textContent = "Linked Bot: " + bot + " · Linked Chat: " + chat;
+}
+
+async function refreshIdentity() {
+  try {
+    const data = await api("/api/settings/identity");
+    renderIdentity(data.identity);
+  } catch (e) {
+    $("notionLinked").textContent = "Linked: 无法确认";
+    $("telegramLinked").textContent = "Linked: 无法确认";
+  }
 }
 
 function message(ok, err) {
@@ -153,6 +213,36 @@ function message(ok, err) {
 function badge(status) {
   const cls = status === "OPEN" ? "b-sent" : "b-queued";
   return '<span class="badge ' + cls + '">' + status + "</span>";
+}
+
+function renderPhoneHealth(data, instances) {
+  const open = instances.filter((i) => i.status === "OPEN").length;
+  const closed = Math.max(0, instances.length - open);
+  let state = "HEALTHY";
+  let cls = "ok";
+  let text = open + " 个号码 OPEN，可以发送 campaign。";
+
+  if (!data.online) {
+    state = "OFFLINE";
+    cls = "bad";
+    text = "Evolution API 离线，Mamba 暂时不能检查或发送 WhatsApp。";
+  } else if (!instances.length) {
+    state = "NO PHONE";
+    cls = "warn";
+    text = "还没有添加号码。请点「添加号码（扫码）」连接 WhatsApp。";
+  } else if (!open) {
+    state = "NOT READY";
+    cls = "bad";
+    text = "没有 OPEN 的号码，暂时不能发送 campaign。";
+  } else if (closed) {
+    state = "PARTIAL";
+    cls = "warn";
+    text = open + " 个 OPEN，" + closed + " 个未连接；可以发送，但建议检查未连接号码。";
+  }
+
+  $("phoneHealthState").className = "health-state " + cls;
+  $("phoneHealthState").textContent = state;
+  $("phoneHealthText").textContent = text;
 }
 
 async function refreshInstances() {
@@ -168,6 +258,7 @@ async function refreshInstances() {
     '<div class="chip">OPEN <b>' + open + "</b></div>" +
     '<div class="chip">Closed <b>' + closed + "</b></div>" +
     '<div class="chip">Last Check <b>' + new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit", hour12: false }) + "</b></div>";
+  renderPhoneHealth(data, instances);
   const body = $("instBody");
   if (!instances.length) {
     body.innerHTML = '<tr><td colspan="4" class="muted">' + (data.online ? "暂无号码，点添加号码扫码" : (data.error || "Evolution API 离线")) + "</td></tr>";
@@ -206,6 +297,7 @@ $("btnSave").addEventListener("click", async () => {
     render(data.settings);
     $("notionToken").value = "";
     $("telegramBotToken").value = "";
+    refreshIdentity();
     message("已保存。当前 Mamba server 会马上使用新的设置。", "");
   } catch (e) {
     message("", e.message);
@@ -218,6 +310,7 @@ $("btnFindChat").addEventListener("click", async () => {
     const data = await api("/api/settings/telegram-chat", values());
     render(data.settings);
     $("telegramChatId").value = String(data.chat.id);
+    refreshIdentity();
     message("找到 Telegram chat: " + data.chat.name + " (" + data.chat.id + ")", "");
   } catch (e) {
     message("", e.message);
@@ -230,6 +323,7 @@ $("btnTestTelegram").addEventListener("click", async () => {
     const data = await api("/api/settings/test-telegram", values());
     render(data.settings);
     $("telegramBotToken").value = "";
+    refreshIdentity();
     message("测试 Telegram 已发送: " + data.bot, "");
   } catch (e) {
     message("", e.message);
@@ -286,6 +380,7 @@ api("/api/settings").then((data) => render(data.settings)).catch((e) => {
   $("notionStatus").textContent = "读取失败";
   $("telegramStatus").textContent = e.message;
 });
+refreshIdentity();
 refreshInstances();
 setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
 </script>

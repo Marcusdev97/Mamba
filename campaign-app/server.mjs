@@ -126,37 +126,83 @@ async function writeEnvValues(values) {
   }
   const lines = text.split(/\r?\n/);
   for (const [key, value] of Object.entries(values)) {
-    const clean = String(value ?? "").trim();
-    if (!clean) continue;
+    const clean = value === null ? null : String(value ?? "").trim();
+    if (clean !== null && !clean) continue;
     const line = `${key}=${clean}`;
     let replaced = false;
     for (let index = 0; index < lines.length; index += 1) {
       if (lines[index].startsWith(`${key}=`)) {
+        if (clean === null) {
+          lines.splice(index, 1);
+          index -= 1;
+          replaced = true;
+          continue;
+        }
         lines[index] = line;
         replaced = true;
       }
     }
-    if (!replaced) {
+    if (clean !== null && !replaced) {
       if (lines.length && lines.at(-1) !== "") lines.push("");
       lines.push(line);
     }
-    env[key] = clean;
-    process.env[key] = clean;
+    if (clean === null) {
+      delete env[key];
+      delete process.env[key];
+    } else {
+      env[key] = clean;
+      process.env[key] = clean;
+    }
   }
   await fs.writeFile(envPath, `${lines.join("\n").replace(/\n+$/, "")}\n`);
 }
 
+function isTelegramBotToken(value) {
+  return /^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(String(value || "").trim());
+}
+
+function isTelegramChatId(value) {
+  const s = String(value || "").trim();
+  return /^-?\d{5,}$/.test(s) || /^@[A-Za-z0-9_]{5,}$/.test(s);
+}
+
+function assertTelegramBotToken(value) {
+  if (!isTelegramBotToken(value)) {
+    throw new Error("Telegram Bot Token 格式不对。Bot token 长这样: 123456789:ABC...，请放在 Bot Token 栏位。");
+  }
+}
+
+function assertTelegramChatId(value) {
+  const s = String(value || "").trim();
+  if (!s) return;
+  if (isTelegramBotToken(s)) {
+    throw new Error("你把 Bot Token 放进 Chat ID 了。Chat ID 是数字；先对 bot 发 hi，再点「自动找 Chat ID」。");
+  }
+  if (/^[A-Za-z0-9_]+_bot$/i.test(s) || /^@[A-Za-z0-9_]+_bot$/i.test(s)) {
+    throw new Error("Chat ID 不是 bot username。先在 Telegram 对这个 bot 发一句 hi，然后点「自动找 Chat ID」。");
+  }
+  if (!isTelegramChatId(s)) {
+    throw new Error("Chat ID 格式不对。私人聊天通常是数字；group/channel 可以是 @username。");
+  }
+}
+
 function settingsSnapshot() {
+  const botToken = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
+  const chatId = env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
+  const botValid = isTelegramBotToken(botToken);
+  const chatValid = isTelegramChatId(chatId);
   return {
     notion: {
       configured: Boolean(notionTokenValue()),
       masked: maskSecret(notionTokenValue()),
     },
     telegram: {
-      botConfigured: Boolean(env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN),
-      botMasked: maskSecret(env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN),
-      chatConfigured: Boolean(env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID),
-      chatId: env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "",
+      botConfigured: botValid,
+      botInvalid: Boolean(botToken && !botValid),
+      botMasked: maskSecret(botToken),
+      chatConfigured: chatValid,
+      chatInvalid: Boolean(chatId && !chatValid),
+      chatId: chatValid ? chatId : "",
     },
   };
 }
@@ -171,6 +217,58 @@ async function telegramApi(method, token, body = {}) {
   const data = await response.json().catch(() => ({}));
   if (!data.ok) throw new Error(`Telegram ${method}: ${JSON.stringify(data)}`);
   return data.result;
+}
+
+function telegramName(value) {
+  if (!value) return "";
+  const handle = value.username ? `@${value.username}` : "";
+  const full = [value.first_name, value.last_name].filter(Boolean).join(" ").trim();
+  return value.title || full || handle || String(value.id || "");
+}
+
+async function settingsIdentity() {
+  const identity = {
+    notion: { ok: false, label: "", error: "" },
+    telegram: { botOk: false, botLabel: "", chatOk: false, chatLabel: "", error: "" },
+  };
+
+  const token = notionTokenValue();
+  if (token) {
+    try {
+      const me = await notion("GET", "/users/me");
+      identity.notion.ok = true;
+      identity.notion.label = me?.name || me?.bot?.owner?.workspace_name || me?.id || "Notion integration";
+    } catch (error) {
+      identity.notion.error = error.message;
+    }
+  }
+
+  const botToken = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
+  const chatId = env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
+  if (isTelegramBotToken(botToken)) {
+    try {
+      const bot = await telegramApi("getMe", botToken, {});
+      identity.telegram.botOk = true;
+      identity.telegram.botLabel = `${telegramName(bot)}${bot.username ? "" : ""}`;
+    } catch (error) {
+      identity.telegram.error = error.message;
+    }
+    if (isTelegramChatId(chatId)) {
+      try {
+        const chat = await telegramApi("getChat", botToken, { chat_id: chatId });
+        identity.telegram.chatOk = true;
+        const name = telegramName(chat);
+        const username = chat.username ? `@${chat.username}` : "";
+        identity.telegram.chatLabel = [name, username && username !== name ? username : "", chat.type ? `(${chat.type})` : ""]
+          .filter(Boolean)
+          .join(" ");
+      } catch (error) {
+        identity.telegram.error = error.message;
+      }
+    }
+  }
+
+  return identity;
 }
 
 // Fetch the Active templates for a Project + Cohort Day, grouped by language:
@@ -596,6 +694,16 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+function safeUploadFilename(filename) {
+  const raw = path.basename(String(filename || "leads.xlsx"));
+  const ext = path.extname(raw).toLowerCase();
+  if (![".xlsx", ".xlsm", ".xls", ".csv", ".tsv"].includes(ext)) {
+    throw new Error("只支持 .xlsx / .xlsm / .xls / .csv / .tsv 文件。");
+  }
+  const base = path.basename(raw, ext).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "leads";
+  return `${Date.now()}_${base}${ext}`;
+}
+
 function emptySnapshot() {
   return { running: false, stopped: false, state: null, log: [] };
 }
@@ -619,6 +727,10 @@ const handlers = {
     json(res, 200, { ok: true, settings: settingsSnapshot() });
   },
 
+  "GET /api/settings/identity": async (_req, res) => {
+    json(res, 200, { ok: true, identity: await settingsIdentity() });
+  },
+
   "POST /api/settings": async (req, res) => {
     const body = await readBody(req);
     const values = {};
@@ -626,8 +738,17 @@ const handlers = {
     const telegramBotToken = String(body.telegramBotToken ?? "").trim();
     const telegramChatId = String(body.telegramChatId ?? "").trim();
     if (notionToken) values.NOTION_API_KEY = notionToken;
-    if (telegramBotToken) values.TELEGRAM_BOT_TOKEN = telegramBotToken;
-    if (telegramChatId) values.TELEGRAM_CHAT_ID = telegramChatId;
+    if (telegramBotToken) {
+      assertTelegramBotToken(telegramBotToken);
+      values.TELEGRAM_BOT_TOKEN = telegramBotToken;
+      if (!telegramChatId && !isTelegramChatId(env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "")) {
+        values.TELEGRAM_CHAT_ID = null;
+      }
+    }
+    if (telegramChatId) {
+      assertTelegramChatId(telegramChatId);
+      values.TELEGRAM_CHAT_ID = telegramChatId;
+    }
     if (!Object.keys(values).length) throw new Error("没有填写任何要保存的 token。");
     await writeEnvValues(values);
     json(res, 200, { ok: true, settings: settingsSnapshot() });
@@ -637,6 +758,7 @@ const handlers = {
     const body = await readBody(req);
     const token = String(body.telegramBotToken ?? env.TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
     if (!token) throw new Error("请先填 Telegram Bot Token。");
+    assertTelegramBotToken(token);
     const updates = await telegramApi("getUpdates", token, {});
     const chats = [];
     for (const update of updates || []) {
@@ -660,6 +782,8 @@ const handlers = {
     const chatId = String(body.telegramChatId ?? env.TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? "").trim();
     if (!token) throw new Error("请先填 Telegram Bot Token。");
     if (!chatId) throw new Error("请先填 Telegram Chat ID，或点「自动找 Chat ID」。");
+    assertTelegramBotToken(token);
+    assertTelegramChatId(chatId);
     const me = await telegramApi("getMe", token, {});
     await telegramApi("sendMessage", token, {
       chat_id: chatId,
@@ -802,6 +926,20 @@ const handlers = {
       sourcePath: result.sourcePath,
       sample: leads.slice(0, 8).map((lead) => ({ name: lead.name, phone: lead.phone })),
     });
+  },
+
+  "POST /api/import/upload-excel": async (req, res) => {
+    const body = await readBody(req);
+    const safe = safeUploadFilename(body.filename);
+    const base64 = String(body.base64 ?? "");
+    const comma = base64.indexOf(",");
+    const payload = base64.startsWith("data:") && comma >= 0 ? base64.slice(comma + 1) : base64;
+    if (!payload) throw new Error("没有收到文件内容。");
+    const uploadDir = path.join(paths.rootDir, "campaign-data", "uploads");
+    await fs.mkdir(uploadDir, { recursive: true });
+    const target = path.join(uploadDir, safe);
+    await fs.writeFile(target, Buffer.from(payload, "base64"));
+    json(res, 200, { ok: true, sourcePath: target, filename: safe });
   },
 
   // Full list of the currently imported leads, for in-console name editing.

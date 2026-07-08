@@ -190,6 +190,30 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 input::placeholder, textarea::placeholder { color: var(--faint); }
 select { width: auto; }
 
+/* -- File drop zone -- */
+.dropzone {
+  border: 1px dashed var(--line-2);
+  background: rgba(255,255,255,.02);
+  border-radius: var(--radius);
+  padding: var(--sp-4);
+  margin: -2px 0 var(--sp-3);
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease),
+              background var(--t-fast) var(--ease),
+              transform var(--t-fast) var(--ease);
+}
+.dropzone:hover,
+.dropzone.dragging {
+  border-color: var(--green);
+  background: var(--green-bg);
+}
+.dropzone.has-file {
+  border-color: var(--green);
+  background: rgba(37,211,102,.1);
+}
+.dropzone:active { transform: translateY(1px); }
+.dropzone b { color: var(--text); }
+
 /* -- Table -- */
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: var(--sp-2) 10px; border-bottom: 1px solid var(--line); }

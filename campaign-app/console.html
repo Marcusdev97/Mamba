@@ -34,6 +34,11 @@
         <span>Excel 路径（留空用默认 Untitled spreadsheet.xlsx）</span>
         <input type="text" id="sourcePath" placeholder="默认：根目录的 Untitled spreadsheet.xlsx" />
       </label>
+      <input type="file" id="excelFile" class="hidden" accept=".xlsx,.xlsm,.xls,.csv,.tsv" />
+      <div id="excelDrop" class="dropzone" tabindex="0" role="button">
+        <div><b>拖 Excel 到这里</b><span class="muted"> 或点击选择文件</span></div>
+        <div class="muted" id="excelFileLabel">支持 .xlsx / .xlsm / .xls / .csv / .tsv</div>
+      </div>
       <div class="muted" style="font-size:12px;margin:-2px 0 10px;line-height:1.55">
         🛡 <b>自动跳过已 blast 的客户</b>:导入时会对比 Notion「Blast Leads」里<b>本项目已存在的号码</b>,已在序列里的自动剔除,不会重复轰炸;同一个 Excel 内的重复号码、无效号码也会剔掉。剩下的才是这次要发的新客户。
       </div>
@@ -131,6 +136,7 @@ let currentProjectSenders = [];
 let PROJECTS = [];
 let templateSource = "";
 let templateFlow = "";
+let selectedExcelFile = null;
 
 function applyProjectSenders() {
   document.querySelectorAll(".sender").forEach((c) => {
@@ -188,6 +194,47 @@ async function post(url, body) {
 }
 async function get(url) { return (await fetch(url)).json(); }
 
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function setSelectedExcelFile(file) {
+  if (!file) return;
+  if (!/\.(xlsx|xlsm|xls|csv|tsv)$/i.test(file.name)) {
+    $("importErr").textContent = "请选择 Excel/CSV 文件（.xlsx / .xlsm / .xls / .csv / .tsv）。";
+    return;
+  }
+  selectedExcelFile = file;
+  $("sourcePath").value = "";
+  $("excelFileLabel").textContent = file.name + " · " + Math.ceil(file.size / 1024) + " KB";
+  $("excelDrop").classList.add("has-file");
+  $("importErr").textContent = "";
+}
+
+function clearSelectedExcelFile() {
+  selectedExcelFile = null;
+  $("excelFile").value = "";
+  $("excelFileLabel").textContent = "支持 .xlsx / .xlsm / .xls / .csv / .tsv";
+  $("excelDrop").classList.remove("has-file");
+}
+
+async function uploadSelectedExcelIfNeeded() {
+  if (!selectedExcelFile) return "";
+  const base64 = await fileToBase64(selectedExcelFile);
+  const r = await post("/api/import/upload-excel", {
+    project: currentProject,
+    filename: selectedExcelFile.name,
+    base64,
+  });
+  if (!r.ok) throw new Error(r.error || "Excel 上传失败。");
+  return r.sourcePath;
+}
+
 function fmtTime(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -237,11 +284,46 @@ $("modeSeg").addEventListener("click", (e) => {
 
 // ---- import ----
 $("btnImport").addEventListener("click", async () => {
-  $("importErr").textContent = ""; $("importMsg").textContent = "导入中…";
-  const r = await post("/api/import", { project: currentProject, sourcePath: $("sourcePath").value.trim() || undefined });
-  if (!r.ok) { $("importMsg").textContent = ""; $("importErr").textContent = r.error; return; }
-  $("importMsg").textContent = "✓ 导入 " + r.imported + " 个新 leads（🛡 跳过已 blast " + (r.skippedAlreadyBlasted || 0) + " 个 · 剔除重复/无效 " + r.rejected + "）";
-  await loadLeadsForEdit();
+  $("importErr").textContent = ""; $("importMsg").textContent = selectedExcelFile ? "上传 Excel 中…" : "导入中…";
+  try {
+    const uploadedPath = await uploadSelectedExcelIfNeeded();
+    if (uploadedPath) $("sourcePath").value = uploadedPath;
+    $("importMsg").textContent = "导入中…";
+    const r = await post("/api/import", { project: currentProject, sourcePath: $("sourcePath").value.trim() || undefined });
+    if (!r.ok) { $("importMsg").textContent = ""; $("importErr").textContent = r.error; return; }
+    $("importMsg").textContent = "✓ 导入 " + r.imported + " 个新 leads（🛡 跳过已 blast " + (r.skippedAlreadyBlasted || 0) + " 个 · 剔除重复/无效 " + r.rejected + "）";
+    await loadLeadsForEdit();
+  } catch (error) {
+    $("importMsg").textContent = "";
+    $("importErr").textContent = error.message;
+  }
+});
+
+$("excelDrop").addEventListener("click", () => $("excelFile").click());
+$("excelDrop").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    $("excelFile").click();
+  }
+});
+$("excelFile").addEventListener("change", (event) => setSelectedExcelFile(event.target.files?.[0]));
+$("sourcePath").addEventListener("input", () => {
+  if ($("sourcePath").value.trim()) clearSelectedExcelFile();
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  $("excelDrop").addEventListener(eventName, (event) => {
+    event.preventDefault();
+    $("excelDrop").classList.add("dragging");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  $("excelDrop").addEventListener(eventName, (event) => {
+    event.preventDefault();
+    $("excelDrop").classList.remove("dragging");
+  });
+}
+$("excelDrop").addEventListener("drop", (event) => {
+  setSelectedExcelFile(event.dataTransfer?.files?.[0]);
 });
 
 // ---- edit lead names ----
