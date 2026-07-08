@@ -21,7 +21,10 @@ fi
 
 # Was the Control Center ALREADY running before we touched anything?
 WAS_UP=0
-if curl -s -o /dev/null --max-time 2 "$URL"; then WAS_UP=1; fi
+# 控制台无状态 —— 点图标永远重启,保证界面是最新代码
+OLD_PID="$(lsof -ti tcp:$PORT 2>/dev/null)"
+[[ -n "$OLD_PID" ]] && { kill $OLD_PID 2>/dev/null; sleep 1; }
+WAS_UP=0
 
 if [[ $WAS_UP -eq 0 ]]; then
   # Not running yet — start it. The Control Center opens the dashboard tab itself

@@ -117,11 +117,18 @@ const pNumber = (page, name) => Number(page?.properties?.[name]?.number ?? 0);
 let blastChoice = (_name, optionName) => (optionName ? { select: { name: optionName } } : { select: null });
 
 // ---- source resolver ---------------------------------------------------------
+const DEAD_DBS = new Set(); // 查询失败(没分享给 integration / 已删除)的库,本次运行直接跳过
 async function resolveByPhone(sync, dbIds, phone) {
   const filter = { property: "Phone", phone_number: { equals: phone } };
   for (const [db, id] of [["blast", dbIds.blast], ["ads", dbIds.ads], ["recycle", dbIds.recycle]]) {
-    if (!id) continue;
-    const res = await sync.queryDataSource(id, filter, 1);
+    if (!id || DEAD_DBS.has(db)) continue;
+    let res;
+    try { res = await sync.queryDataSource(id, filter, 1); }
+    catch (e) {
+      DEAD_DBS.add(db);
+      console.log(`⚠️ ${db} 库查询失败,本次跳过它(其余库照常):${String(e.message).slice(0, 120)}`);
+      continue;
+    }
     const page = res?.results?.[0];
     if (page) return { db, page };
   }
@@ -289,10 +296,17 @@ async function collectDue(sync, dbIds) {
   const today = klDate(0);
   const out = [];
   for (const [db, id] of [["blast", dbIds.blast], ["ads", dbIds.ads], ["recycle", dbIds.recycle]]) {
-    if (!id) continue;
-    const res = await sync.queryDataSource(id, {
-      property: "Follow Up Due", date: { on_or_before: today },
-    }, 100);
+    if (!id || DEAD_DBS.has(db)) continue;
+    let res;
+    try {
+      res = await sync.queryDataSource(id, {
+        property: "Follow Up Due", date: { on_or_before: today },
+      }, 100);
+    } catch (e) {
+      DEAD_DBS.add(db);
+      console.log(`⚠️ ${db} 库查询失败,今日跟进清单里跳过它:${String(e.message).slice(0, 120)}`);
+      continue;
+    }
     for (const page of res?.results ?? []) {
       // Stop Flag ticked -> never list this customer for follow-up.
       if (pCheckbox(page, "Stop Flag")) continue;

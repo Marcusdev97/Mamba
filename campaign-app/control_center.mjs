@@ -175,6 +175,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.log(`控制台已经在 ${PORT} 端口运行了。想看最新界面:lsof -ti tcp:${PORT} | xargs kill 然后重开。`);
+    process.exit(0);
+  }
+  throw error;
+});
+
 server.listen(PORT, HOST, () => {
   console.log("Mamba | Control Center");
   console.log("======================");

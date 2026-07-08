@@ -52,7 +52,7 @@ async function importLeads() {
   return result;
 }
 
-const config = JSON.parse(await fs.readFile(path.join(campaignDir, "mid_valley_campaign.json"), "utf8"));
+const config = JSON.parse(await fs.readFile(path.join(campaignDir, "gen_starz_campaign.json"), "utf8"));
 const leadsFile = await importLeads();
 const envText = await fs.readFile(path.join(rootDir, "evolution-pilot", ".env"), "utf8");
 const env = Object.fromEntries(
@@ -317,7 +317,7 @@ process.on("SIGINT", async () => {
   process.exit(0);
 });
 
-console.log("MID VALLEY CAMPAIGN LAUNCHER");
+console.log("GEN STARZ CAMPAIGN LAUNCHER");
 console.log("============================");
 console.log(`Imported leads: ${leadsFile.leads.length}`);
 const instances = await openInstances();

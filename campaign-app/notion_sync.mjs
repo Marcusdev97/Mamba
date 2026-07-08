@@ -13,7 +13,7 @@ const configPath = path.join(paths.dataDir, "notion_config.json");
 const statePath = path.join(paths.dataDir, "notion_state.json");
 
 const defaultConfig = {
-  project: "Mid Valley",
+  project: "Gen Starz",
   databases: {
     blastLeads: "64b439a288c1415fa36ac890e17c88e6",
     adsLeads: "fcfe32f817244929b89085f4af59ade9",

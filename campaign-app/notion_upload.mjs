@@ -298,7 +298,7 @@ async function main() {
       console.log(`\n(skip empty run ${path.basename(runFile)})`);
       continue;
     }
-    const projectName = run.project || config.project || "Mid Valley";
+    const projectName = run.project || config.project || "Gen Starz";
     console.log(`\n— Run ${run.runId ?? path.basename(runFile)} · ${projectName} · ${klDateTime(run.startAt || run.createdAt)}`);
 
     const runPageId = await upsertCampaignRun(run, projectName);

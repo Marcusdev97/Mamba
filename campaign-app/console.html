@@ -120,6 +120,8 @@ let statusTimer = null;
 let TEMPLATES = [];
 let currentProject = null;
 let currentProjectSenders = [];
+let templateSource = "";
+let templateFlow = "";
 
 function applyProjectSenders() {
   document.querySelectorAll(".sender").forEach((c) => { c.checked = currentProjectSenders.includes(c.value); });
@@ -137,18 +139,27 @@ async function loadProjectConfig() {
   const c = await get("/api/config?project=" + encodeURIComponent(currentProject)).catch(() => null);
   if (!c || !c.ok) return;
   TEMPLATES = c.templates || [];
+  templateSource = c.templateSource || "";
+  templateFlow = c.templateFlow || "";
   $("campaignSub").textContent = c.projectName + " · 导入名单 → 设定时间 → 群发第一轮";
   $("sourcePath").placeholder = "默认：" + (c.excel || "该 project 的 Excel");
-  $("projectInfo").textContent = "Excel：" + (c.excel || "—") + " · 所有已连接的号一起发";
+  const sourceLabel = templateSource === "notion"
+    ? "Templates：Notion · " + (templateFlow || "Flow 1")
+    : "Templates：本地 fallback" + (c.templateError ? "（" + c.templateError.slice(0, 80) + "）" : "");
+  $("projectInfo").textContent = "Excel：" + (c.excel || "—") + " · " + sourceLabel + " · 所有已连接的号一起发";
   await loadLeadsForEdit();
 }
 
 function tplLabel(t) {
-  return t.language.toUpperCase() + " · " + t.id.replace(/^(en|zh)_part1_/, "");
+  return t.language.toUpperCase() + " · " + (t.name || t.id);
 }
 function tplSelect(id, current) {
-  const opts = TEMPLATES.map((t) =>
-    '<option value="' + t.id + '" data-lang="' + t.language + '"' + (t.id === current ? " selected" : "") + ">" + tplLabel(t) + "</option>"
+  const options = TEMPLATES;
+  if (!options.length) return '<span class="muted">Notion 没有 Flow 1 Active 模板</span>';
+  const currentOk = options.some((t) => t.id === current);
+  const selected = currentOk ? current : options[0]?.id;
+  const opts = options.map((t) =>
+    '<option value="' + t.id + '" data-lang="' + t.language + '"' + (t.id === selected ? " selected" : "") + ">" + tplLabel(t) + "</option>"
   ).join("");
   return '<select class="tpl" data-id="' + id + '" onchange="updRowLang(this)" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:5px 7px;font-size:12.5px">' + opts + "</select>";
 }
@@ -261,7 +272,8 @@ function renderPreview(r) {
     '<div class="chip">模式 <b>' + s.mode + "</b></div>" +
     '<div class="chip">时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>" +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
-    '<div class="chip">号码 <b>' + s.assignments.map(a=>a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>";
+    '<div class="chip">号码 <b>' + s.assignments.map(a=>a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>" +
+    '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>";
   $("previewBody").innerHTML = s.assignments.map((a) =>
     "<tr><td>" + fmtTime(a.scheduledAt) + "</td><td>" + a.name + "</td><td>" + a.phone + "</td><td>" + a.instanceName +
     '</td><td id="lang_' + a.id + '">' + a.language + "</td><td>" + tplSelect(a.id, a.part1Variant) + "</td></tr>"

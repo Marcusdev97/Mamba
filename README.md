@@ -209,7 +209,7 @@ CF_R2_PREFIX=mamba-assets
 - **Campaign Runs** —— 每次群发一行(cohort)。
 - 另有 Images / Ads Leads / Recycle Leads。
 
-模板匹配靠 **Flow Topic**(不是天数)+ 项目别名(`projectAlias`,例:名单项目「Mid Valley」→ 模板项目「Gen Starz」)。
+模板匹配靠 **Flow Topic**(不是天数)+ 项目别名(`projectAlias`,例:名单项目「Gen Starz」→ 模板项目「Gen Starz」)。
 
 ---
 

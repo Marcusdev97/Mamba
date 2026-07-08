@@ -20,6 +20,15 @@ if [[ ! -x "$NODE" ]]; then
   exit 1
 fi
 
+# 控制台无状态 —— 每次启动都先换掉旧进程,保证按钮/emoji 永远是最新代码
+PORT="${CONTROL_PORT:-8810}"
+OLD_PID="$(lsof -ti tcp:$PORT 2>/dev/null)"
+if [[ -n "$OLD_PID" ]]; then
+  echo "换掉旧的 Control Center(pid $OLD_PID)…"
+  kill $OLD_PID 2>/dev/null
+  sleep 1
+fi
+
 echo "Starting Mamba Control Center..."
 echo "A dashboard will open in your browser. Click any button to run a tool."
 echo "Keep this window open while you use the panel."

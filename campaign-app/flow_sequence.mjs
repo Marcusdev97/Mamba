@@ -97,7 +97,7 @@ export function classifyReplyText(text) {
     return { route: "LAYOUT_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Warm", stopFlag: false, signal: "GREEN", suggestedReply: "有 2房和 3房选择，我 send layout 给你看，你比较偏小单位还是家庭型？" };
   }
   if (/(location|where|address|map|nearby|distance|\bmrt\b|\blrt\b|\btrx\b|\bklcc\b|station|地点|位置|地址|在哪里|靠近|车站|地铁|dekat mana|lokasi|stesen)/i.test(cleaned)) {
-    return { route: "LOCATION_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Warm", stopFlag: false, signal: "GREEN", suggestedReply: "这个在 Old Klang Road / Mid Valley 一带。我可以 send map location 给你参考。" };
+    return { route: "LOCATION_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Warm", stopFlag: false, signal: "GREEN", suggestedReply: "这个在 Old Klang Road / Gen Starz 一带。我可以 send map location 给你参考。" };
   }
   if (/(details|info|brochure|send ?me|can ?send|share|资料|详情|发来看|可以send|可以发|boleh share|boleh send)/i.test(cleaned)) {
     return { route: "DETAILS_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Brochure Request", stopFlag: false, signal: "GREEN", suggestedReply: "可以，我 send 资料给你看。你比较想看价格、地点还是户型先？" };

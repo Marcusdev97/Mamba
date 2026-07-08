@@ -20,7 +20,7 @@
 
 | Code | 项目全名 | Notion Select 显示名 | 状态 |
 |------|---------|---------------------|------|
-| `mv` | Mid Valley | Mid Valley | Active |
+| `mv` | Gen Starz | Gen Starz | Active |
 | `gs` | Gen Starz (Old Klang Road) | Gen Starz | Active |
 | `enl` | Enlace Suites (Pantai Sentral Park) | Enlace | Active |
 | `bin` | Binastra Cochrane | Binastra | Active |

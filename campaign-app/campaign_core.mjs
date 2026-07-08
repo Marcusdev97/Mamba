@@ -1,4 +1,4 @@
-// Shared core for the Mid Valley WhatsApp campaign.
+// Shared core for the Gen Starz WhatsApp campaign.
 // Used by both the web console (server.mjs) and the terminal launcher (campaign_runner.mjs).
 
 import fs from "node:fs/promises";
@@ -92,7 +92,7 @@ export function resolveTime(value, fallback) {
 }
 
 export async function loadConfig() {
-  return JSON.parse(await fs.readFile(path.join(paths.campaignDir, "mid_valley_campaign.json"), "utf8"));
+  return JSON.parse(await fs.readFile(path.join(paths.campaignDir, "gen_starz_campaign.json"), "utf8"));
 }
 
 // Multi-project registry: campaign-assets/projects.json lists each project with
@@ -245,6 +245,33 @@ export function chooseLanguage(config) {
   return Math.random() * 100 < threshold ? "en" : "zh";
 }
 
+export function firstFlowVariants(config) {
+  const variants = config?.part1?.variants || [];
+  const flow1 = variants.filter((variant) => /(^|_)flow0?1(_|$)/i.test(String(variant.id || "")));
+  return flow1.length ? flow1 : variants;
+}
+
+function hasExplicitFirstFlow(config) {
+  return (config?.part1?.variants || []).some((variant) => /(^|_)flow0?1(_|$)/i.test(String(variant.id || "")));
+}
+
+export function firstFlowPart2Variants(config, part1Variant) {
+  const variants = config?.part2?.variants || [];
+  if (!variants.length) return [];
+  const sameLanguage = variants.filter((variant) => variant.language === part1Variant?.language);
+  const candidates = sameLanguage.length ? sameLanguage : variants;
+
+  // New flow-based configs keep follow-up flow messages inside part1/part2 arrays.
+  // For the first-blast console, do not let Flow 2/6/8/9 Part 2 messages sneak
+  // into Flow 1. Legacy configs without flow IDs keep their old pairing behavior.
+  if (!hasExplicitFirstFlow(config)) return candidates;
+
+  return candidates.filter((variant) => {
+    const id = String(variant.id || "");
+    return /(^|_)flow0?1(_|$)/i.test(id) || /project[_-]?template/i.test(id);
+  });
+}
+
 // Fix (2026-07): test numbers moved out of source into TEST_LEADS env var.
 // Format: "Name:phone:lang:templateId,Name:phone:lang:templateId"
 // e.g. TEST_LEADS="Mark:60168568756:en:en_part1_quick_update,CC Liu:60179978682:en:en_part1_still_looking"
@@ -271,41 +298,44 @@ export function getTestLeads() {
 export function applyTemplateOverrides(state, overrides, config) {
   if (!Array.isArray(overrides) || !overrides.length) return;
   const byId = new Map(overrides.map((item) => [item.id, item]));
+  const allowedPart1 = firstFlowVariants(config);
   for (const job of state.assignments) {
     const override = byId.get(job.id);
     if (!override || !override.part1Variant) continue;
-    const variant1 = config.part1.variants.find((variant) => variant.id === override.part1Variant);
+    const variant1 = allowedPart1.find((variant) => variant.id === override.part1Variant);
     if (!variant1) continue;
     job.part1Variant = variant1.id;
     job.language = variant1.language;
     job.part1Text = personalize(variant1.text, job.lead.name);
-    const variant2 =
-      config.part2.variants.find((variant) => variant.id === job.part2Variant && variant.language === variant1.language)
-      || config.part2.variants.find((variant) => variant.language === variant1.language);
+    const allowedPart2 = firstFlowPart2Variants(config, variant1);
+    const variant2 = allowedPart2.find((variant) => variant.id === job.part2Variant) || allowedPart2[0] || null;
     if (variant2) {
       job.part2Variant = variant2.id;
       job.part2Text = personalize(variant2.text, job.lead.name);
+      job.part2Media = variant2.media ?? config.part2?.media ?? "";
+    } else {
+      job.part2Variant = null;
+      job.part2Text = "";
+      job.part2Media = "";
     }
   }
 }
 
 export function buildAssignments(leads, instances, startAt, endAt, config) {
+  const part1Variants = firstFlowVariants(config);
   const assignments = leads.map((lead, index) => {
     const instance = instances[index % instances.length];
     let language = lead.language ?? chooseLanguage(config);
 
     // Fall back to a language that actually has templates (projects may be EN-only, etc.).
-    let eligiblePart1 = config.part1.variants.filter((variant) => variant.language === language);
+    let eligiblePart1 = part1Variants.filter((variant) => variant.language === language);
     if (!eligiblePart1.length) {
-      language = config.part1.variants[0]?.language ?? language;
-      eligiblePart1 = config.part1.variants.filter((variant) => variant.language === language);
+      language = part1Variants[0]?.language ?? language;
+      eligiblePart1 = part1Variants.filter((variant) => variant.language === language);
     }
-    let eligiblePart2 = config.part2.variants.filter((variant) => variant.language === language);
-    if (!eligiblePart2.length) eligiblePart2 = config.part2.variants;
-
     const part1 = (lead.templateId && eligiblePart1.find((variant) => variant.id === lead.templateId)) || pick(eligiblePart1);
-    const part2 = pick(eligiblePart2);
-    if (!part1 || !part2) throw new Error(`No active template for ${lead.name} (${language}).`);
+    if (!part1) throw new Error(`No active Flow 1 template for ${lead.name} (${language}).`);
+    const part2 = pick(firstFlowPart2Variants(config, part1));
 
     // Dynamic extra parts (Part 3, 4, ...) — optional. config.extraParts is an
     // ordered array; each element is { variants: [{language, text, media}] }.
@@ -323,11 +353,11 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
       senderLast4: instance.owner.slice(-4),
       language,
       part1Variant: part1.id,
-      part2Variant: part2.id,
+      part2Variant: part2?.id ?? null,
       part1Text: personalize(part1.text, lead.name),
-      part2Text: personalize(part2.text, lead.name),
+      part2Text: part2 ? personalize(part2.text, lead.name) : "",
       part1Media: part1.media ?? config.part1?.media,
-      part2Media: part2.media ?? config.part2?.media,
+      part2Media: part2?.media ?? "",
       extraParts,
       status: "QUEUED",
       scheduledAt: null,
@@ -841,6 +871,9 @@ export class CampaignRunner {
             total: this.state.assignments.length,
             summary: this.summary(),
             flowLabel: this.state.flowLabel ?? null,
+            templateSource: this.state.templateSource ?? null,
+            templateFlow: this.state.templateFlow ?? null,
+            templateProject: this.state.templateProject ?? null,
             advanceDone: this.state.advanceDone ?? false,
             assignments: this.state.assignments.map((job) => ({
               id: job.id,

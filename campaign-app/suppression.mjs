@@ -3,7 +3,7 @@
 // Principle: "STOP means stop the PERSON, not the project." One opt-out
 // anywhere (any project, any lead database) blocks that phone everywhere,
 // forever. Before this module, Stop Flag was only respected per-project:
-// someone who said STOP under Mid Valley could be re-imported and re-blasted
+// someone who said STOP under Gen Starz could be re-imported and re-blasted
 // under Binastra. That is the #1 ban + reputation risk — fixed here.
 //
 // Two gates use this module:
