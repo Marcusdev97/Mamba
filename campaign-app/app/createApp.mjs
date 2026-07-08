@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRouter, json, notFound, text } from "../lib/http.mjs";
+import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 
 const HTML_ROUTES = {
@@ -74,6 +75,7 @@ function exportCsv(res, runtime) {
 export function createApp(runtime) {
   const router = createRouter(runtime);
   registerSettingsRoutes(router);
+  registerProjectsRoutes(router);
 
   return async function app(req, res) {
     try {

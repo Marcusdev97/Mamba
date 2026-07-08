@@ -725,15 +725,6 @@ function buildCsv(state) {
 }
 
 const handlers = {
-  "GET /api/projects": async (_req, res) => {
-    const projects = await loadProjects();
-    json(res, 200, {
-      ok: true,
-      projects: projects.map((p) => ({ id: p.id, name: p.name, senders: p.senders ?? [], excel: p.excel ?? "" })),
-      alias: notionConfig?.projectAlias || {},
-    });
-  },
-
   "GET /api/instances": async (_req, res) => {
     try {
       const instances = await listInstances(api);
@@ -771,41 +762,6 @@ const handlers = {
     if (!name) throw new Error("缺少 name。");
     await deleteInstance(api, name);
     json(res, 200, { ok: true });
-  },
-
-  "GET /api/config": async (req, res) => {
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
-    const { project, config } = await getProject(url.searchParams.get("project") ?? undefined);
-    let templates = [];
-    let templateSource = "notion";
-    let templateError = "";
-    try {
-      templates = await getFirstFlowTemplateOptions(project.name);
-    } catch (error) {
-      templateSource = "local-fallback";
-      templateError = error.message;
-      templates = firstFlowVariants(config).map((variant) => ({
-        id: variant.id,
-        language: variant.language,
-        name: variant.id,
-        status: "Local",
-      }));
-    }
-    json(res, 200, {
-      ok: true,
-      project: project.id,
-      projectName: project.name,
-      campaignName: config.campaignName,
-      partGapSeconds: config.delivery.partGapSeconds,
-      contactGapSeconds: config.delivery.contactGapSeconds,
-      senders: project.senders ?? [],
-      excel: project.excel ?? "",
-      leadsLoaded: leadsCache && leadsCache.projectId === project.id ? leadsCache.leads.length : 0,
-      templateSource,
-      templateFlow: FIRST_FLOW_LABEL,
-      templateError,
-      templates,
-    });
   },
 
   "POST /api/import": async (req, res) => {
@@ -1793,6 +1749,15 @@ const runtime = await loadRuntime({
     isTelegramChatId,
     assertTelegramBotToken,
     assertTelegramChatId,
+  },
+  projects: {
+    alias: notionConfig?.projectAlias || {},
+    firstFlowLabel: FIRST_FLOW_LABEL,
+    loadProjects,
+    getProject,
+    getFirstFlowTemplateOptions,
+    firstFlowVariants,
+    getLeadsCache: () => leadsCache,
   },
 });
 const server = http.createServer(createApp(runtime));
