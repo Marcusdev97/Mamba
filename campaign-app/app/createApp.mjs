@@ -5,6 +5,7 @@ import { registerLookupRoutes } from "../routes/lookup.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
+import { registerTemplatesRoutes } from "../routes/templates.routes.mjs";
 
 function exportCsv(res, runtime) {
   const runner = runtime.getRunner?.();
@@ -27,6 +28,7 @@ export function createApp(runtime) {
   registerInstancesRoutes(router);
   registerImportRoutes(router);
   registerLookupRoutes(router);
+  registerTemplatesRoutes(router);
 
   return async function app(req, res) {
     try {

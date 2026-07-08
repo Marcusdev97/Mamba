@@ -1179,260 +1179,6 @@ const handlers = {
     });
   },
 
-  // Mobile Preview: send the automatic sequence to one test phone only.
-  // It does not create leads, update Notion, advance flow state, or credit counts.
-  "POST /api/templates/mobile-preview": async (req, res) => {
-    const body = await readBody(req);
-    const projectName = String(body.projectName ?? "").trim();
-    const phone = nfNormalizePhone(body.phone);
-    const name = String(body.name ?? "").trim() || "there";
-    const requestedLanguage = String(body.language ?? "EN").trim().toUpperCase();
-    const requestedInstance = String(body.instanceName ?? "").trim();
-    const includeTesting = body.includeTesting === true;
-    if (!projectName) throw new Error("请选择项目。");
-    if (!phone) throw new Error("电话号码格式不对。例子: 60123456789。");
-
-    const opened = await openInstances(api);
-    const sender = requestedInstance
-      ? opened.find((item) => item.name === requestedInstance)
-      : opened[0];
-    if (!sender) throw new Error("没有已连接的 WhatsApp sender。先去主控制台扫码连接一个 sender。");
-
-    const previewRunner = new CampaignRunner({ env });
-    const flowResults = [];
-    let sentMessages = 0;
-
-    await previewRunner.sendText(
-      sender.name,
-      phone,
-      `Mamba Mobile Preview\nProject: ${projectName}\nLanguage: ${requestedLanguage}\nSender: ${sender.name}\n\n下面会发送自动序列的真实模板。这个测试不会更新 Notion。`,
-    );
-    sentMessages += 1;
-    await shortPause();
-
-    for (const flow of FLOW_SEQUENCE) {
-      const byLang = await fetchFlowTemplates(projectName, flow.label, { includeTesting });
-      const picked = pickPreviewLanguage(byLang, requestedLanguage);
-      if (!picked.parts.length) {
-        flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: 0, skipped: true, draft: false });
-        continue;
-      }
-
-      const draftTag = picked.usedTesting ? " · Testing 草稿" : "";
-      await previewRunner.sendText(sender.name, phone, `${flow.label} (${flow.cohortDay})${draftTag}`);
-      sentMessages += 1;
-      await shortPause();
-
-      let flowSent = 0;
-      for (const part of picked.parts) {
-        await previewRunner.sendMediaWithRetry(
-          sender.name,
-          phone,
-          personalize(part.text || "", name),
-          part.media || "",
-        );
-        sentMessages += 1;
-        flowSent += 1;
-        await shortPause();
-      }
-      flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: flowSent, skipped: false, draft: picked.usedTesting });
-    }
-
-    json(res, 200, {
-      ok: true,
-      projectName,
-      phone,
-      instanceName: sender.name,
-      requestedLanguage,
-      sentMessages,
-      flows: flowResults,
-      skippedFlows: flowResults.filter((f) => f.skipped).length,
-      draftFlows: flowResults.filter((f) => f.draft).length,
-      includeTesting,
-    });
-  },
-
-  // Template & Flow dashboard: pull all templates for a project from Notion so the
-  // page can show the flow map + which flow is missing an Active template.
-  "GET /api/templates/list": async (req, res) => {
-    const tplDbId = String(notionConfig?.databases?.templates ?? "").replace(/[^a-fA-F0-9]/g, "");
-    if (!tplDbId) { json(res, 200, { ok: true, project: "", projects: [], templates: [] }); return; }
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
-    const projectQ = String(url.searchParams.get("project") ?? "").trim();
-
-    const all = [];
-    let cursor;
-    do {
-      const body = { page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
-      const data = await notion("POST", `/databases/${tplDbId}/query`, body);
-      for (const pg of data?.results ?? []) all.push(pg);
-      cursor = data?.has_more ? data?.next_cursor : null;
-    } while (cursor);
-
-    // Projects come from the Project property's options (so a brand-new project
-    // shows up even before it has any templates), falling back to distinct values.
-    let projects = [];
-    try {
-      const db = await notion("GET", `/databases/${tplDbId}`);
-      const p = db?.properties?.Project;
-      projects = (p?.select?.options || p?.multi_select?.options || []).map((o) => o.name);
-    } catch { /* fall back below */ }
-    if (!projects.length) projects = all.map((p) => nfSelect(p, "Project")).filter(Boolean);
-    projects = [...new Set(projects)].sort();
-    const project = projectQ || resolveTemplateProject(notionConfig?.project) || projects[0] || "";
-    const templates = [];
-    for (const pg of all.filter((p) => nfSelect(p, "Project") === project)) {
-      const imageName = nfText(pg, "Image Name");
-      const mediaPath = resolveMedia(imageName); // "images/xxx" or ""
-      let mediaExists = false;
-      if (mediaPath) {
-        try { await fs.access(path.join(paths.rootDir, "campaign-assets", mediaPath)); mediaExists = true; } catch { /* not local */ }
-      }
-      templates.push({
-        pageId: pg.id,
-        name: nfTitle(pg, "Template Name"),
-        flowTopic: nfSelect(pg, "Flow Topic"),
-        flowNo: pg.properties?.["Flow No"]?.number ?? null,
-        language: nfSelect(pg, "Language"),
-        part: nfSelect(pg, "Part"),
-        status: nfSelect(pg, "Status"),
-        imageName,
-        hasImageName: !!imageName,
-        mediaUrl: mediaExists ? `/${mediaPath}` : "",
-        mediaExists,
-        text: nfText(pg, "Message Text").slice(0, 4000),
-        url: `https://www.notion.so/${String(pg.id).replace(/-/g, "")}`,
-      });
-    }
-    json(res, 200, { ok: true, project, projects, templates });
-  },
-
-  // Edit a template's Message Text / Status straight from the panel (saves to Notion).
-  "POST /api/templates/update": async (req, res) => {
-    const body = await readBody(req);
-    const pageId = String(body.pageId ?? "").replace(/[^a-fA-F0-9]/g, "");
-    if (!pageId) throw new Error("缺少 pageId。");
-    const props = {};
-    if (typeof body.messageText === "string") props["Message Text"] = { rich_text: [{ text: { content: body.messageText.slice(0, 1900) } }] };
-    if (body.status) props["Status"] = { select: { name: String(body.status) } };
-    if (typeof body.imageName === "string") props["Image Name"] = { rich_text: [{ text: { content: String(body.imageName).slice(0, 300) } }] };
-    if (body.flowTopic) props["Flow Topic"] = { select: { name: String(body.flowTopic).slice(0, 100) } };
-    if (body.flowNo !== undefined && body.flowNo !== null && body.flowNo !== "") props["Flow No"] = { number: Number(body.flowNo) };
-    if (body.part) props["Part"] = { select: { name: String(body.part).slice(0, 100) } };
-    if (body.language) props["Language"] = { select: { name: String(body.language).slice(0, 20).toUpperCase() } };
-    if (body.flowTopic) {
-      const meta = flowMetaByTopic(body.flowTopic);
-      if (meta) {
-        props["Flow No"] = { number: meta.no };
-        if (meta.day) props["Cohort Day"] = { select: { name: meta.day } };
-      }
-      const page = await notion("GET", `/pages/${pageId}`);
-      const project = String(body.project || nfSelect(page, "Project") || "").trim();
-      const language = String(body.language || nfSelect(page, "Language") || "EN").trim();
-      const part = String(body.part || nfSelect(page, "Part") || "Part 1").trim();
-      props["Template Name"] = { title: [{ text: { content: buildTemplateTitle({ project, flowTopic: body.flowTopic, language, part }).slice(0, 200) } }] };
-    }
-    if (!Object.keys(props).length) throw new Error("没有要更新的内容。");
-    await notion("PATCH", `/pages/${pageId}`, { properties: props });
-    json(res, 200, { ok: true });
-  },
-
-  // Create a new template row in Notion.
-  "POST /api/templates/create": async (req, res) => {
-    const tplDbId = String(notionConfig?.databases?.templates ?? "").replace(/[^a-fA-F0-9]/g, "");
-    if (!tplDbId) throw new Error("没有 templates database。");
-    const b = await readBody(req);
-    const name = String(b.templateName ?? "").trim()
-      || buildTemplateTitle({ project: b.project, flowTopic: b.flowTopic, language: b.language, part: b.part });
-    const props = { "Template Name": { title: [{ text: { content: name.slice(0, 200) } }] } };
-    if (b.project) props["Project"] = { select: { name: String(b.project) } };
-    if (b.flowTopic) props["Flow Topic"] = { select: { name: String(b.flowTopic) } };
-    if (b.language) props["Language"] = { select: { name: String(b.language) } };
-    if (b.part) props["Part"] = { select: { name: String(b.part) } };
-    const meta = flowMetaByTopic(b.flowTopic);
-    if (meta) {
-      props["Flow No"] = { number: meta.no };
-      if (meta.day) props["Cohort Day"] = { select: { name: meta.day } };
-    }
-    if (typeof b.messageText === "string") props["Message Text"] = { rich_text: [{ text: { content: b.messageText.slice(0, 1900) } }] };
-    props["Status"] = { select: { name: String(b.status || "Testing") } };
-    if (b.imageName) props["Image Name"] = { rich_text: [{ text: { content: String(b.imageName).slice(0, 300) } }] };
-    const page = await notion("POST", "/pages", { parent: { database_id: tplDbId }, properties: props });
-    json(res, 200, { ok: true, pageId: page.id });
-  },
-
-  // Upload an image for a template: save it into campaign-assets/images/, register
-  // the alias (Image Name -> filename), and stamp the template's Image Name in Notion.
-  "POST /api/templates/upload-image": async (req, res) => {
-    const b = await readBody(req);
-    const imageName = String(b.imageName ?? "").trim();
-    const rawName = String(b.filename ?? "").trim();
-    const base64 = String(b.base64 ?? "");
-    if (!imageName) throw new Error("缺少图片名(别名 key)。");
-    if (!rawName || !base64) throw new Error("缺少文件。");
-    const comma = base64.indexOf(",");
-    const b64 = base64.startsWith("data:") && comma >= 0 ? base64.slice(comma + 1) : base64;
-    // Prefix with the template's FULL pageId so two templates uploading files with
-    // the same name (e.g. "Image 01.jpg" across flows) can never overwrite each
-    // other. An 8-char slice was colliding and making one follow-up's image stick
-    // to another's. Fall back to a random id if there's no pageId, so a nameless
-    // upload also can't clobber an existing file.
-    const prefix = String(b.pageId ?? "").replace(/[^a-fA-F0-9]/g, "")
-      || Math.random().toString(16).slice(2, 12);
-    const safe = prefix + "_" + rawName.replace(/[^A-Za-z0-9._-]/g, "_");
-    const imagesDir = path.join(paths.rootDir, "campaign-assets", "images");
-    await fs.mkdir(imagesDir, { recursive: true });
-    await fs.writeFile(path.join(imagesDir, safe), Buffer.from(b64, "base64"));
-
-    // Force the alias key to be UNIQUE to this template: strip any trailing [hexid]
-    // the name may already carry (e.g. an Image Name copied from a duplicated
-    // template) and append THIS template's own full pageId. Without this, two
-    // templates sharing a name (common with Follow Ups) point at one alias, so
-    // uploading to one silently overwrites the other's image. A non-hex suffix
-    // like [v1] or [Assets] is preserved; only a real id suffix is replaced.
-    const fullPid = String(b.pageId ?? "").replace(/[^a-fA-F0-9]/g, "");
-    const baseKey = imageName.replace(/\s*\[[0-9a-fA-F]{6,}\]\s*$/, "").trim();
-    const key = fullPid ? `${baseKey}[${fullPid}]` : imageName;
-
-    imageAliases[key] = safe; // update in-memory map + the file
-    await fs.writeFile(path.join(paths.rootDir, "campaign-assets", "image_aliases.json"), JSON.stringify(imageAliases, null, 2) + "\n");
-    if (b.pageId) {
-      const pageId = String(b.pageId).replace(/[^a-fA-F0-9]/g, "");
-      await notion("PATCH", `/pages/${pageId}`, { properties: { "Image Name": { rich_text: [{ text: { content: key.slice(0, 300) } }] } } });
-    }
-    json(res, 200, { ok: true, filename: safe, imageName: key });
-  },
-
-  // Delete (archive) a template — moves it to Notion trash, recoverable there.
-  "POST /api/templates/delete": async (req, res) => {
-    const b = await readBody(req);
-    const pageId = String(b.pageId ?? "").replace(/[^a-fA-F0-9]/g, "");
-    if (!pageId) throw new Error("缺少 pageId。");
-    await notion("PATCH", `/pages/${pageId}`, { archived: true });
-    json(res, 200, { ok: true });
-  },
-
-  // Add a new project — registers it as a Project option in the 3 Notion DBs
-  // (Templates, Blast Leads, Campaign Runs) so you can tag templates/leads with it.
-  "POST /api/templates/add-project": async (req, res) => {
-    const b = await readBody(req);
-    const name = String(b.name ?? "").trim();
-    if (!name) throw new Error("缺少项目名。");
-    const dbs = {
-      templates: String(notionConfig?.databases?.templates ?? "").replace(/[^a-fA-F0-9]/g, ""),
-      blastLeads: String(notionConfig?.databases?.blastLeads ?? "").replace(/[^a-fA-F0-9]/g, ""),
-      campaignRuns: String(notionConfig?.databases?.campaignRuns ?? "").replace(/[^a-fA-F0-9]/g, ""),
-    };
-    const result = {};
-    for (const [k, id] of Object.entries(dbs)) {
-      if (!id) { result[k] = "no db"; continue; }
-      try { result[k] = await addProjectOption(id, name); }
-      catch (e) { result[k] = "err: " + e.message; }
-    }
-    json(res, 200, { ok: true, name, result });
-  },
-
 };
 
 // ---- Local Blast Leads snapshot (a cached copy of Notion for fast batch matching) ----
@@ -1562,6 +1308,32 @@ const runtime = await loadRuntime({
         cursor = data?.has_more ? data?.next_cursor : null;
       } while (cursor);
       return rows;
+    },
+  },
+  templates: {
+    rootDir: paths.rootDir,
+    env,
+    notionConfig,
+    notion,
+    nfTitle,
+    nfText,
+    nfSelect,
+    normalizePhone: nfNormalizePhone,
+    resolveMedia,
+    resolveTemplateProject,
+    flowMetaByTopic,
+    buildTemplateTitle,
+    fetchFlowTemplates,
+    pickPreviewLanguage,
+    flowSequence: FLOW_SEQUENCE,
+    personalize,
+    shortPause,
+    openInstances: () => openInstances(api),
+    createPreviewRunner: () => new CampaignRunner({ env }),
+    addProjectOption,
+    setImageAlias: async (key, filename) => {
+      imageAliases[key] = filename;
+      await fs.writeFile(path.join(paths.rootDir, "campaign-assets", "image_aliases.json"), JSON.stringify(imageAliases, null, 2) + "\n");
     },
   },
 });
