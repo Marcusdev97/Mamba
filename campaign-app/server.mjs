@@ -725,45 +725,6 @@ function buildCsv(state) {
 }
 
 const handlers = {
-  "GET /api/instances": async (_req, res) => {
-    try {
-      const instances = await listInstances(api);
-      json(res, 200, { ok: true, online: true, instances });
-    } catch (error) {
-      json(res, 200, { ok: true, online: false, error: error.message, instances: [] });
-    }
-  },
-
-  "POST /api/instance/create": async (req, res) => {
-    const body = await readBody(req);
-    const items = await listInstances(api);
-    let name = String(body.name ?? "").trim();
-    if (name && !/^wa_\d{2}$/.test(name)) throw new Error("标签格式应为 wa_NN，例如 wa_03。");
-    if (!name) name = nextInstanceName(items);
-    if (items.some((item) => item.name === name)) throw new Error(`${name} 已存在，换一个标签。`);
-    const result = await createInstance(api, name);
-    if (!result.qr) throw new Error("Evolution 没有返回二维码。");
-    json(res, 200, { ok: true, instanceName: name, qr: result.qr });
-  },
-
-  "GET /api/instance/qr": async (req, res) => {
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
-    const name = String(url.searchParams.get("name") ?? "").trim();
-    if (!name) throw new Error("缺少 name。");
-    const qr = await instanceQr(api, name);
-    if (!qr) throw new Error("无法获取二维码（可能已连接）。");
-    json(res, 200, { ok: true, qr });
-  },
-
-  "POST /api/instance/delete": async (req, res) => {
-    if (runner && runner.running) throw new Error("campaign 正在运行，请先停止再删除号码。");
-    const body = await readBody(req);
-    const name = String(body.name ?? "").trim();
-    if (!name) throw new Error("缺少 name。");
-    await deleteInstance(api, name);
-    json(res, 200, { ok: true });
-  },
-
   "POST /api/import": async (req, res) => {
     const body = await readBody(req);
     const { project } = await getProject(body.project);
@@ -1758,6 +1719,13 @@ const runtime = await loadRuntime({
     getFirstFlowTemplateOptions,
     firstFlowVariants,
     getLeadsCache: () => leadsCache,
+  },
+  whatsapp: {
+    listInstances: () => listInstances(api),
+    createInstance: (name) => createInstance(api, name),
+    instanceQr: (name) => instanceQr(api, name),
+    deleteInstance: (name) => deleteInstance(api, name),
+    nextInstanceName,
   },
 });
 const server = http.createServer(createApp(runtime));

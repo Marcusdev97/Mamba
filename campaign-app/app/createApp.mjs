@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRouter, json, notFound, text } from "../lib/http.mjs";
+import { registerInstancesRoutes } from "../routes/instances.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 
@@ -76,6 +77,7 @@ export function createApp(runtime) {
   const router = createRouter(runtime);
   registerSettingsRoutes(router);
   registerProjectsRoutes(router);
+  registerInstancesRoutes(router);
 
   return async function app(req, res) {
     try {
