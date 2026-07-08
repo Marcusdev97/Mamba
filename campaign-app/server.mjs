@@ -715,129 +715,6 @@ function buildCsv(state) {
 }
 
 const handlers = {
-  "POST /api/prepare": async (req, res) => {
-    if (runner && runner.running) {
-      json(res, 409, { ok: false, error: "已有 campaign 正在运行，请先停止。" });
-      return;
-    }
-    const body = await readBody(req);
-    const { project, config } = await getProject(body.project);
-    const mode = body.mode === "LIVE" ? "LIVE" : "TEST";
-
-    const open = await openInstances(api);
-    if (open.length === 0) throw new Error("没有处于 OPEN 状态的 WhatsApp 号码，无法发送。");
-
-    // All connected numbers blast the selected project together; body.instances can narrow it.
-    let selectedInstances = open;
-    if (Array.isArray(body.instances) && body.instances.length) {
-      const wanted = new Set(body.instances);
-      selectedInstances = open.filter((item) => wanted.has(item.name));
-      if (selectedInstances.length === 0) throw new Error("所选号码都不在线。");
-    }
-
-    const now = new Date();
-    const defaultEnd = new Date(now);
-    defaultEnd.setHours(21, 0, 0, 0);
-    if (defaultEnd <= now) defaultEnd.setTime(now.getTime() + 60 * 60 * 1000);
-
-    const startAt = resolveTime(body.startTime, now);
-    const endAt = resolveTime(body.endTime, defaultEnd);
-    if (endAt <= startAt) throw new Error("结束时间必须晚于开始时间。");
-    if (endAt.getTime() - startAt.getTime() <= config.delivery.partGapSeconds * 1000) {
-      throw new Error(`发送时间窗必须长于 ${config.delivery.partGapSeconds} 秒。`);
-    }
-
-    let selectedLeads;
-    if (mode === "TEST") {
-      selectedLeads = getTestLeads(body.testRecipients || undefined);
-      if (!selectedLeads.length) {
-        throw new Error("TEST 模式请先填写至少一个测试收件人。格式: 名字, 电话, 语言。");
-      }
-    } else {
-      if (!leadsCache || leadsCache.projectId !== project.id || !leadsCache.leads.length) {
-        throw new Error(`还没有导入 ${project.name} 的 leads，请先导入它的 Excel。`);
-      }
-      selectedLeads = leadsCache.leads;
-      const limit = Number(body.leadCount);
-      if (Number.isInteger(limit) && limit >= 1 && limit < selectedLeads.length) {
-        selectedLeads = selectedLeads.slice(0, limit);
-      }
-    }
-
-    runner = new CampaignRunner({ config, env });
-    await runner.prepare({ mode, startAt, endAt, instances: selectedInstances, leads: selectedLeads, project: project.name });
-    await applyNotionFlowTemplatesToState(runner.state, {
-      projectName: project.name,
-      flow: FIRST_FLOW_LABEL,
-      markFlowRun: false,
-      credit: false,
-    });
-    await runner.saveState();
-    json(res, 200, {
-      ok: true,
-      project: project.id,
-      schedule: { start: formatTime(startAt), end: formatTime(endAt) },
-      snapshot: runner.snapshot(),
-    });
-  },
-
-  "POST /api/start": async (req, res) => {
-    if (!runner || !runner.state) throw new Error("请先生成预览（prepare）。");
-    if (runner.running) {
-      json(res, 409, { ok: false, error: "campaign 已在运行。" });
-      return;
-    }
-    const body = await readBody(req);
-    if (runner.state.mode === "LIVE" && body.optIn !== true) {
-      throw new Error("LIVE 模式需要先确认收件人已 opt-in。");
-    }
-    if (runner.state.templateSource === "notion") {
-      await applyNotionFlowTemplatesToState(runner.state, {
-        projectName: runner.state.project,
-        flow: runner.state.templateFlow || FIRST_FLOW_LABEL,
-        overrides: body.overrides,
-        markFlowRun: false,
-        credit: false,
-      });
-    } else {
-      applyTemplateOverrides(runner.state, body.overrides, runner.config);
-    }
-    assertFirstConsoleRunUsesFlow1Only(runner.config, runner.state);
-    await runner.saveState();
-    const r = runner;
-    const autoAdvance = body.autoAdvance === true && r.state.mode === "LIVE";
-    r.run()
-      .then(() => (autoAdvance ? autoAdvanceFlow(r) : null))
-      .then(() => (autoAdvance ? creditSentCounts(r) : null))
-      .then(() => autoNotionUpload(r))
-      .catch((error) => r.pushLog(`运行出错：${error.message}`));
-    json(res, 200, { ok: true, snapshot: runner.snapshot() });
-  },
-
-  "POST /api/resume": async (_req, res) => {
-    if (!runner || !runner.state) throw new Error("没有可继续的 run。");
-    if (runner.running) {
-      json(res, 409, { ok: false, error: "campaign 已在运行。" });
-      return;
-    }
-    const remaining = runner.state.assignments.filter((j) => j.status === "QUEUED").length;
-    if (!remaining) throw new Error("没有待发送的客户了（都已处理）。");
-    const r = runner;
-    r.run()
-      .then(() => autoNotionUpload(r))
-      .catch((error) => r.pushLog(`运行出错：${error.message}`));
-    json(res, 200, { ok: true, snapshot: runner.snapshot() });
-  },
-
-  "POST /api/stop": async (_req, res) => {
-    if (runner) runner.stop();
-    json(res, 200, { ok: true });
-  },
-
-  "GET /api/status": async (_req, res) => {
-    json(res, 200, runner ? runner.snapshot() : emptySnapshot());
-  },
-
   // Real-time reply routing during a blast: scan Evolution for replies from THIS
   // run's leads, classify each (Reply Routes), colour them (red/green) + write to
   // Notion. Called repeatedly by the picker while a run is active.
@@ -1253,8 +1130,6 @@ const runtime = await loadRuntime({
   appDir,
   paths,
   handlers,
-  buildCsv,
-  getRunner: () => runner,
   settings: {
     env,
     snapshot: settingsSnapshot,
@@ -1335,6 +1210,27 @@ const runtime = await loadRuntime({
       imageAliases[key] = filename;
       await fs.writeFile(path.join(paths.rootDir, "campaign-assets", "image_aliases.json"), JSON.stringify(imageAliases, null, 2) + "\n");
     },
+  },
+  campaign: {
+    env,
+    getRunner: () => runner,
+    setRunner: (value) => { runner = value; },
+    getLeadsCache: () => leadsCache,
+    getProject,
+    openInstances: () => openInstances(api),
+    resolveTime,
+    formatTime,
+    getTestLeads,
+    createRunner: (config) => new CampaignRunner({ config, env }),
+    applyNotionFlowTemplatesToState,
+    firstFlowLabel: FIRST_FLOW_LABEL,
+    applyTemplateOverrides,
+    assertFirstConsoleRunUsesFlow1Only,
+    autoAdvanceFlow,
+    creditSentCounts,
+    autoNotionUpload,
+    emptySnapshot,
+    buildCsv,
   },
 });
 const server = http.createServer(createApp(runtime));
