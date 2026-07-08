@@ -1433,85 +1433,6 @@ const handlers = {
     json(res, 200, { ok: true, name, result });
   },
 
-  // Lead lookup: search Blast Leads by phone or name across ALL projects. Uses the
-  // local snapshot (instant, offline, no rate limits) if synced; else queries Notion.
-  "GET /api/lookup": async (req, res) => {
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
-    const q = String(url.searchParams.get("q") ?? "").trim();
-    if (!q) { json(res, 200, { ok: true, q: "", results: [] }); return; }
-    const digits = q.replace(/[^0-9]/g, "");
-    const isPhone = digits.length >= 5 && /^[0-9+\s()-]+$/.test(q);
-    const cache = await readBlastLeadsCache();
-    let rows;
-    if (cache.records.length) {
-      if (isPhone) {
-        const sig = digits.replace(/^0+/, "");
-        rows = cache.records.filter((r) => (r.phone || "").replace(/[^0-9]/g, "").includes(sig));
-      } else {
-        const ql = q.toLowerCase();
-        rows = cache.records.filter((r) => (r.name || "").toLowerCase().includes(ql));
-      }
-    } else {
-      if (!blastDsId) throw new Error("没有 Notion 配置。");
-      const filter = isPhone
-        ? { property: "Phone", phone_number: { contains: digits.replace(/^0+/, "") } }
-        : { property: "Name", title: { contains: q } };
-      rows = [];
-      let cursor;
-      do {
-        const data = await notion("POST", `/databases/${blastDsId}/query`, { filter, page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
-        for (const p of data?.results ?? []) rows.push(blastRowToRecord(p));
-        cursor = data?.has_more ? data?.next_cursor : null;
-      } while (cursor);
-    }
-    rows = rows.slice().sort((a, b) => String(b.lastBlastAt || b.firstBlastAt || "").localeCompare(String(a.lastBlastAt || a.firstBlastAt || "")));
-    json(res, 200, { ok: true, q, isPhone, count: rows.length, results: rows, cached: cache.records.length > 0, syncedAt: cache.syncedAt || null });
-  },
-
-  // How fresh is the local snapshot?
-  "GET /api/lookup/cache-info": async (_req, res) => {
-    const c = await readBlastLeadsCache();
-    json(res, 200, { ok: true, syncedAt: c.syncedAt, count: c.records.length });
-  },
-
-  // Pull the WHOLE Blast Leads DB into a local snapshot for fast batch matching.
-  "POST /api/lookup/sync": async (_req, res) => {
-    const payload = await syncBlastLeadsCache();
-    json(res, 200, { ok: true, syncedAt: payload.syncedAt, count: payload.count });
-  },
-
-  // Drag an Excel in → match every row against the local snapshot. Shows which of
-  // your leads were already blasted (which project + when) vs which are new.
-  "POST /api/lookup/match": async (req, res) => {
-    const b = await readBody(req);
-    const base64 = String(b.base64 ?? "");
-    if (!base64) throw new Error("缺少 Excel 文件。");
-    const comma = base64.indexOf(",");
-    const b64 = base64.startsWith("data:") && comma >= 0 ? base64.slice(comma + 1) : base64;
-    const tmp = path.join(paths.rootDir, "campaign-data", `._match_${Date.now()}.xlsx`);
-    await fs.mkdir(path.dirname(tmp), { recursive: true });
-    await fs.writeFile(tmp, Buffer.from(b64, "base64"));
-    let parsed;
-    try { parsed = await importLeads(tmp); } finally { fs.unlink(tmp).catch(() => {}); }
-    const cache = await readBlastLeadsCache();
-    const byPhone = new Map();
-    for (const r of cache.records) {
-      const n = nfNormalizePhone(r.phone);
-      if (!n) continue;
-      if (!byPhone.has(n)) byPhone.set(n, []);
-      byPhone.get(n).push(r);
-    }
-    const rows = parsed.leads.map((lead) => {
-      const n = nfNormalizePhone(lead.phone);
-      const matches = (byPhone.get(n) || []).slice().sort((a, b) => String(b.lastBlastAt || "").localeCompare(String(a.lastBlastAt || "")));
-      return { name: lead.name, phone: lead.phone, matched: matches.length > 0, records: matches };
-    });
-    const matched = rows.filter((r) => r.matched).length;
-    json(res, 200, {
-      ok: true, syncedAt: cache.syncedAt, cacheCount: cache.records.length,
-      total: rows.length, matched, fresh: rows.length - matched, rejected: parsed.rejected.length, rows,
-    });
-  },
 };
 
 // ---- Local Blast Leads snapshot (a cached copy of Notion for fast batch matching) ----
@@ -1623,6 +1544,25 @@ const runtime = await loadRuntime({
     normalizePhone: nfNormalizePhone,
     getLeadsCache: () => leadsCache,
     setLeadsCache: (value) => { leadsCache = value; },
+  },
+  lookup: {
+    rootDir: paths.rootDir,
+    hasBlastDatabase: Boolean(blastDsId),
+    importLeads,
+    normalizePhone: nfNormalizePhone,
+    readCache: readBlastLeadsCache,
+    syncCache: syncBlastLeadsCache,
+    queryNotionRows: async (filter) => {
+      if (!blastDsId) throw new Error("没有 Notion 配置。");
+      const rows = [];
+      let cursor;
+      do {
+        const data = await notion("POST", `/databases/${blastDsId}/query`, { filter, page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
+        for (const page of data?.results ?? []) rows.push(blastRowToRecord(page));
+        cursor = data?.has_more ? data?.next_cursor : null;
+      } while (cursor);
+      return rows;
+    },
   },
 });
 const server = http.createServer(createApp(runtime));
