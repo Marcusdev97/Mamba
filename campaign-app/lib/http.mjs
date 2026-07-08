@@ -34,7 +34,7 @@ export function httpError(status, message, details = {}) {
 export function safeRoute(handler) {
   return async (req, res, runtime, params) => {
     try {
-      await handler(req, res, runtime, params);
+      return await handler(req, res, runtime, params);
     } catch (error) {
       const status = error.statusCode || error.status || 500;
       if (status >= 500) console.error(error);
@@ -44,14 +44,19 @@ export function safeRoute(handler) {
         error: error.message || "Internal Server Error",
         ...(error.details && Object.keys(error.details).length ? { details: error.details } : {}),
       });
+      return true;
     }
   };
 }
 
 export function createRouter(runtime = {}) {
   const routes = new Map();
+  const middlewares = [];
 
   return {
+    use(handler) {
+      middlewares.push(handler);
+    },
     get(pathname, handler) {
       routes.set(`GET ${pathname}`, handler);
     },
@@ -63,6 +68,10 @@ export function createRouter(runtime = {}) {
     },
     async dispatch(req, res) {
       const url = new URL(req.url, `http://${runtime.host || "127.0.0.1"}:${runtime.port || 8787}`);
+      for (const middleware of middlewares) {
+        const handled = await safeRoute(middleware)(req, res, runtime, {});
+        if (handled) return true;
+      }
       const handler = routes.get(`${req.method} ${url.pathname}`);
       if (!handler) return false;
       await safeRoute(handler)(req, res, runtime, {});
