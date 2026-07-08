@@ -696,16 +696,6 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function safeUploadFilename(filename) {
-  const raw = path.basename(String(filename || "leads.xlsx"));
-  const ext = path.extname(raw).toLowerCase();
-  if (![".xlsx", ".xlsm", ".xls", ".csv", ".tsv"].includes(ext)) {
-    throw new Error("只支持 .xlsx / .xlsm / .xls / .csv / .tsv 文件。");
-  }
-  const base = path.basename(raw, ext).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "leads";
-  return `${Date.now()}_${base}${ext}`;
-}
-
 function emptySnapshot() {
   return { running: false, stopped: false, state: null, log: [] };
 }
@@ -725,109 +715,6 @@ function buildCsv(state) {
 }
 
 const handlers = {
-  "POST /api/import": async (req, res) => {
-    const body = await readBody(req);
-    const { project } = await getProject(body.project);
-    const source = String(body.sourcePath ?? "").trim() || path.join(paths.rootDir, project.excel);
-    const result = await importLeads(source);
-    // Skip anyone already in Notion's Blast Leads for THIS project (already blasted /
-    // already in the sequence), so we never double-blast. Set includeBlasted:true to override.
-    let skippedAlreadyBlasted = 0;
-    let leads = result.leads;
-    if (blastDsId && !body.includeBlasted) {
-      try {
-        const blasted = await fetchBlastedPhones(project.name);
-        leads = result.leads.filter((lead) => {
-          const n = nfNormalizePhone(lead.phone);
-          if (n && blasted.has(n)) { skippedAlreadyBlasted += 1; return false; }
-          return true;
-        });
-      } catch { /* if the lookup fails, fall back to importing everything */ }
-    }
-    // GLOBAL suppression gate (A1) — cross-project, cross-database. Anyone who
-    // said STOP anywhere never enters a new cohort. NOT overridable by
-    // includeBlasted (that flag is for re-blasting, not for ignoring opt-outs).
-    let skippedSuppressed = 0;
-    try {
-      const { syncSuppressionList, loadSuppressionSync } = await import("./suppression.mjs");
-      let suppressed;
-      try {
-        suppressed = (await syncSuppressionList()).set; // fresh from Notion
-      } catch {
-        suppressed = loadSuppressionSync().set; // Notion down -> last snapshot
-      }
-      leads = leads.filter((lead) => {
-        const n = nfNormalizePhone(lead.phone);
-        if (n && suppressed.has(n)) { skippedSuppressed += 1; return false; }
-        return true;
-      });
-    } catch (err) {
-      console.warn(`[suppression] gate unavailable: ${err?.message}`);
-    }
-    leadsCache = { projectId: project.id, ...result, leads };
-    json(res, 200, {
-      ok: true,
-      project: project.id,
-      imported: leads.length,
-      skippedAlreadyBlasted,
-      skippedSuppressed,
-      rejected: result.rejected.length,
-      sourcePath: result.sourcePath,
-      sample: leads.slice(0, 8).map((lead) => ({ name: lead.name, phone: lead.phone })),
-    });
-  },
-
-  "POST /api/import/upload-excel": async (req, res) => {
-    const body = await readBody(req);
-    const safe = safeUploadFilename(body.filename);
-    const base64 = String(body.base64 ?? "");
-    const comma = base64.indexOf(",");
-    const payload = base64.startsWith("data:") && comma >= 0 ? base64.slice(comma + 1) : base64;
-    if (!payload) throw new Error("没有收到文件内容。");
-    const uploadDir = path.join(paths.rootDir, "campaign-data", "uploads");
-    await fs.mkdir(uploadDir, { recursive: true });
-    const target = path.join(uploadDir, safe);
-    await fs.writeFile(target, Buffer.from(payload, "base64"));
-    json(res, 200, { ok: true, sourcePath: target, filename: safe });
-  },
-
-  // Full list of the currently imported leads, for in-console name editing.
-  "GET /api/leads": async (req, res) => {
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
-    const { project } = await getProject(url.searchParams.get("project") ?? undefined);
-    if (!leadsCache || leadsCache.projectId !== project.id) {
-      json(res, 200, { ok: true, project: project.id, leads: [] });
-      return;
-    }
-    json(res, 200, {
-      ok: true,
-      project: project.id,
-      leads: leadsCache.leads.map((lead) => ({ id: lead.id, name: lead.name, phone: lead.phone })),
-    });
-  },
-
-  // Edit lead display names after import. Updates the in-memory cache that
-  // prepare() reads, so previews and the actual blast use the corrected names.
-  // Blank names are ignored (we never overwrite a name with an empty value).
-  "POST /api/leads/update": async (req, res) => {
-    if (runner && runner.running) throw new Error("campaign 正在运行，请先停止再改名字。");
-    const body = await readBody(req);
-    const { project } = await getProject(body.project);
-    if (!leadsCache || leadsCache.projectId !== project.id) {
-      throw new Error("还没有导入这个 project 的 leads，请先导入。");
-    }
-    const edits = Array.isArray(body.edits) ? body.edits : [];
-    const byId = new Map(leadsCache.leads.map((lead) => [lead.id, lead]));
-    let updated = 0;
-    for (const edit of edits) {
-      const lead = byId.get(String(edit.id));
-      if (!lead) continue;
-      const name = String(edit.name ?? "").trim();
-      if (name && name !== lead.name) { lead.name = name; updated += 1; }
-    }
-    json(res, 200, { ok: true, updated });
-  },
-
   "POST /api/prepare": async (req, res) => {
     if (runner && runner.running) {
       json(res, 409, { ok: false, error: "已有 campaign 正在运行，请先停止。" });
@@ -1726,6 +1613,16 @@ const runtime = await loadRuntime({
     instanceQr: (name) => instanceQr(api, name),
     deleteInstance: (name) => deleteInstance(api, name),
     nextInstanceName,
+  },
+  imports: {
+    rootDir: paths.rootDir,
+    hasBlastDatabase: Boolean(blastDsId),
+    getProject,
+    importLeads,
+    fetchBlastedPhones,
+    normalizePhone: nfNormalizePhone,
+    getLeadsCache: () => leadsCache,
+    setLeadsCache: (value) => { leadsCache = value; },
   },
 });
 const server = http.createServer(createApp(runtime));
