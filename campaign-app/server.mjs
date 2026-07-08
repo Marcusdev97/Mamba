@@ -6,6 +6,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { exec, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createApp } from "./app/createApp.mjs";
+import { loadRuntime } from "./app/loadRuntime.mjs";
 import {
   paths,
   loadEnv,
@@ -723,76 +725,6 @@ function buildCsv(state) {
 }
 
 const handlers = {
-  "GET /api/settings": async (_req, res) => {
-    json(res, 200, { ok: true, settings: settingsSnapshot() });
-  },
-
-  "GET /api/settings/identity": async (_req, res) => {
-    json(res, 200, { ok: true, identity: await settingsIdentity() });
-  },
-
-  "POST /api/settings": async (req, res) => {
-    const body = await readBody(req);
-    const values = {};
-    const notionToken = String(body.notionToken ?? "").trim();
-    const telegramBotToken = String(body.telegramBotToken ?? "").trim();
-    const telegramChatId = String(body.telegramChatId ?? "").trim();
-    if (notionToken) values.NOTION_API_KEY = notionToken;
-    if (telegramBotToken) {
-      assertTelegramBotToken(telegramBotToken);
-      values.TELEGRAM_BOT_TOKEN = telegramBotToken;
-      if (!telegramChatId && !isTelegramChatId(env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "")) {
-        values.TELEGRAM_CHAT_ID = null;
-      }
-    }
-    if (telegramChatId) {
-      assertTelegramChatId(telegramChatId);
-      values.TELEGRAM_CHAT_ID = telegramChatId;
-    }
-    if (!Object.keys(values).length) throw new Error("没有填写任何要保存的 token。");
-    await writeEnvValues(values);
-    json(res, 200, { ok: true, settings: settingsSnapshot() });
-  },
-
-  "POST /api/settings/telegram-chat": async (req, res) => {
-    const body = await readBody(req);
-    const token = String(body.telegramBotToken ?? env.TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
-    if (!token) throw new Error("请先填 Telegram Bot Token。");
-    assertTelegramBotToken(token);
-    const updates = await telegramApi("getUpdates", token, {});
-    const chats = [];
-    for (const update of updates || []) {
-      const message = update.message ?? update.edited_message ?? update.channel_post;
-      const chat = message?.chat;
-      if (chat?.id && !chats.find((c) => c.id === chat.id)) {
-        chats.push({ id: chat.id, name: chat.username || chat.first_name || chat.title || "Telegram Chat" });
-      }
-    }
-    if (!chats.length) {
-      throw new Error("找不到 chat。先去 Telegram 打开你的 bot，发一句 hi，然后再点一次。");
-    }
-    const chosen = chats.at(-1);
-    await writeEnvValues({ TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: String(chosen.id) });
-    json(res, 200, { ok: true, chat: chosen, settings: settingsSnapshot() });
-  },
-
-  "POST /api/settings/test-telegram": async (req, res) => {
-    const body = await readBody(req);
-    const token = String(body.telegramBotToken ?? env.TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
-    const chatId = String(body.telegramChatId ?? env.TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? "").trim();
-    if (!token) throw new Error("请先填 Telegram Bot Token。");
-    if (!chatId) throw new Error("请先填 Telegram Chat ID，或点「自动找 Chat ID」。");
-    assertTelegramBotToken(token);
-    assertTelegramChatId(chatId);
-    const me = await telegramApi("getMe", token, {});
-    await telegramApi("sendMessage", token, {
-      chat_id: chatId,
-      text: "Mamba Telegram 已连接成功。",
-    });
-    await writeEnvValues({ TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: chatId });
-    json(res, 200, { ok: true, bot: me?.username || me?.first_name || "Telegram Bot", settings: settingsSnapshot() });
-  },
-
   "GET /api/projects": async (_req, res) => {
     const projects = await loadProjects();
     json(res, 200, {
@@ -1842,105 +1774,28 @@ async function addProjectOption(dbId, name) {
   return "added";
 }
 
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, `http://${HOST}:${PORT}`);
-    const key = `${req.method} ${url.pathname}`;
-
-    if (req.method === "GET" && url.pathname === "/") {
-      const html = await fs.readFile(path.join(appDir, "console.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/numbers") {
-      res.writeHead(302, { Location: "/settings" });
-      res.end();
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/next-flow") {
-      const html = await fs.readFile(path.join(appDir, "next-flow.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/templates") {
-      const html = await fs.readFile(path.join(appDir, "templates.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/lookup") {
-      const html = await fs.readFile(path.join(appDir, "lookup.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/settings") {
-      const html = await fs.readFile(path.join(appDir, "settings.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    // Serve the design system (mamba.css + fonts). See docs/MAMBA_UI_BIBLE.md.
-    if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
-      const rel = decodeURIComponent(url.pathname.slice("/assets/".length));
-      if (rel.includes("..")) { json(res, 400, { ok: false, error: "Bad path" }); return; }
-      const fp = path.join(appDir, "assets", rel);
-      const types = { ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
-      try {
-        const buf = await fs.readFile(fp);
-        res.writeHead(200, { "Content-Type": types[path.extname(fp)] || "application/octet-stream", "Cache-Control": "no-cache" });
-        res.end(buf);
-      } catch {
-        res.writeHead(404); res.end("Not found");
-      }
-      return;
-    }
-
-    // Serve local campaign images so the template panel can show thumbnails.
-    if (req.method === "GET" && url.pathname.startsWith("/images/")) {
-      const fname = decodeURIComponent(url.pathname.slice("/images/".length)).replace(/[^A-Za-z0-9._-]/g, "_");
-      try {
-        const buf = await fs.readFile(path.join(paths.rootDir, "campaign-assets", "images", fname));
-        const ext = (fname.split(".").pop() || "").toLowerCase();
-        const ct = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp"
-          : ext === "mp4" ? "video/mp4" : ext === "mov" ? "video/quicktime" : "image/jpeg";
-        res.writeHead(200, { "Content-Type": ct, "Cache-Control": "no-cache" });
-        res.end(buf);
-      } catch { res.writeHead(404); res.end("not found"); }
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/export") {
-      if (!runner || !runner.state) {
-        json(res, 404, { ok: false, error: "没有可导出的 run。" });
-        return;
-      }
-      res.writeHead(200, {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${runner.state.runId}.csv"`,
-      });
-      res.end("﻿" + buildCsv(runner.state));
-      return;
-    }
-
-    const handler = handlers[key];
-    if (!handler) {
-      json(res, 404, { ok: false, error: "Not found" });
-      return;
-    }
-    await handler(req, res);
-  } catch (error) {
-    json(res, 400, { ok: false, error: error.message });
-  }
+const runtime = await loadRuntime({
+  host: HOST,
+  port: PORT,
+  env,
+  api,
+  appDir,
+  paths,
+  handlers,
+  buildCsv,
+  getRunner: () => runner,
+  settings: {
+    env,
+    snapshot: settingsSnapshot,
+    identity: settingsIdentity,
+    writeEnvValues,
+    telegramApi,
+    isTelegramChatId,
+    assertTelegramBotToken,
+    assertTelegramChatId,
+  },
 });
+const server = http.createServer(createApp(runtime));
 
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
