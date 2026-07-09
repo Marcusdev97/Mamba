@@ -11,6 +11,7 @@ import { loadRuntime } from "./app/loadRuntime.mjs";
 import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
+import { createTemplateService } from "./lib/template-service.mjs";
 import {
   paths,
   loadEnv,
@@ -72,21 +73,6 @@ try {
 } catch { /* picker simply stays empty if config is missing */ }
 const blastDsId = String(notionConfig?.databases?.blastLeads ?? "").replace(/[^a-fA-F0-9]/g, "");
 
-// Map a template's "Image Name" to a local file the blaster can send.
-// campaign-assets/image_aliases.json maps the Notion image name -> a filename in
-// campaign-assets/images/. The blaster reads media as a path relative to campaign-assets.
-let imageAliases = {};
-try {
-  imageAliases = JSON.parse(await fs.readFile(path.join(paths.rootDir, "campaign-assets", "image_aliases.json"), "utf8"));
-} catch { /* no aliases -> images just won't attach */ }
-function resolveMedia(imageName) {
-  if (!imageName) return "";
-  const alias = imageAliases[imageName];
-  if (alias) return `images/${alias}`;
-  if (/\.(png|jpe?g|webp|gif|mp4|mov|3gp|m4v)$/i.test(imageName)) return `images/${imageName}`;
-  return "";
-}
-
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
 const blastCacheService = createBlastCacheService({
   rootDir: paths.rootDir,
@@ -96,44 +82,32 @@ const blastCacheService = createBlastCacheService({
   nfTitle,
   nfText,
 });
-
-// Fetch the Active templates for a Project + Cohort Day, grouped by language:
-// { EN: { p1:{text,media}, p2:{text,media} }, ZH:{...} }. Shared by the preview
-// (read-only) and the actual send (apply-templates).
-// A project may be rebranded (e.g. leads still say "Gen Starz" but templates
-// live under "Gen Starz"). notion_config.projectAlias maps lead-project -> template-project.
-function resolveTemplateProject(name) {
-  return notionConfig?.projectAlias?.[name] || name;
-}
-// "Flow 3 - Location" -> "Location" (matches the templates' Flow Topic).
-function flowTopicOf(flowLabel) {
-  const s = String(flowLabel || "");
-  return s.includes(" - ") ? s.split(" - ").slice(1).join(" - ").trim() : s.trim();
-}
-
-const FLOW_META = [
-  { no: 1, topic: "Project Template", day: "Day 0" },
-  { no: 2, topic: "Layout", day: "Day 2" },
-  { no: 3, topic: "Location", day: "Day 4" },
-  { no: 4, topic: "Package", day: "Day 6" },
-  { no: 5, topic: "Furnished List", day: "" },
-  { no: 6, topic: "Price", day: "Day 9" },
-  { no: 7, topic: "Facilities", day: "Day 12" },
-  { no: 8, topic: "Invitation", day: "Day 15" },
-  { no: 9, topic: "Rental", day: "" },
-  { no: 10, topic: "Surrounding", day: "" },
-];
-const FIRST_FLOW_LABEL = "Flow 1 - Project Template";
-
-function flowMetaByTopic(topic) {
-  return FLOW_META.find((flow) => flow.topic === String(topic || "").trim()) || null;
-}
-
-function buildTemplateTitle({ project, flowTopic, language, part, version = "v1" }) {
-  const meta = flowMetaByTopic(flowTopic);
-  const flowLabel = meta ? `Flow ${String(meta.no).padStart(2, "0")} - ${meta.topic}` : (flowTopic || "Flow");
-  return `[${project || "?"}][${flowLabel}][${String(language || "EN").toUpperCase()}][${part || "Part 1"}][${version}]`;
-}
+const templateService = await createTemplateService({
+  rootDir: paths.rootDir,
+  notionConfig,
+  notion,
+  nfTitle,
+  nfText,
+  nfSelect,
+  personalize,
+  firstFlowVariants,
+  firstFlowPart2Variants,
+});
+const {
+  firstFlowLabel: FIRST_FLOW_LABEL,
+  flowMetaByTopic,
+  buildTemplateTitle,
+  resolveTemplateProject,
+  resolveMedia,
+  fetchFlowTemplates,
+  getFirstFlowTemplateOptions,
+  applyNotionFlowTemplatesToState,
+  pickPreviewLanguage,
+  shortPause,
+  assertFirstConsoleRunUsesFlow1Only,
+  addProjectOption,
+  setImageAlias,
+} = templateService;
 
 // All normalized phone numbers already in Blast Leads for a project — used to skip
 // re-importing (and re-blasting) people who are already in the sequence.
@@ -154,240 +128,6 @@ async function fetchBlastedPhones(projectName) {
     cursor = q?.has_more ? q?.next_cursor : null;
   } while (cursor);
   return phones;
-}
-
-async function fetchFlowTemplates(projectName, flowLabel, { includeTesting = false } = {}) {
-  // The 2022-06-28 API's /databases/{id}/query wants the DATABASE id, not the
-  // data source (collection) id — using the collection id 404s.
-  const tplDbId = String(notionConfig?.databases?.templates ?? "").replace(/[^a-fA-F0-9]/g, "");
-  if (!tplDbId) throw new Error("notion_config 里没有 templates database。");
-  const topic = flowTopicOf(flowLabel);
-  const proj = resolveTemplateProject(projectName);
-  // Normal sending only pulls Active. Mobile Preview can opt into Testing drafts
-  // too (includeTesting) so half-built flows can still be previewed — Active is
-  // always preferred over Testing when both exist for the same part.
-  const statusFilter = includeTesting
-    ? { or: [
-        { property: "Status", select: { equals: "Active" } },
-        { property: "Status", select: { equals: "Testing" } },
-      ] }
-    : { property: "Status", select: { equals: "Active" } };
-  // Match by Flow Topic (which the templates are tagged with), not Cohort Day.
-  const data = await notion("POST", `/databases/${tplDbId}/query`, { filter: { and: [
-    { property: "Flow Topic", select: { equals: topic } },
-    { property: "Project", select: { equals: proj } },
-    statusFilter,
-  ] }, page_size: 100 });
-  const byLang = {};
-  for (const row of data?.results ?? []) {
-    const lang = (nfSelect(row, "Language") || "EN").toUpperCase();
-    const part = nfSelect(row, "Part");
-    const status = (nfSelect(row, "Status") || "").trim();
-    const text = nfText(row, "Message Text");
-    const imageName = nfText(row, "Image Name");
-    const media = resolveMedia(imageName);
-    if (!text && !media) continue;
-    const pageId = row.id;
-    const imagePageId = row.properties?.["Images"]?.relation?.[0]?.id || null;
-    // Key by part NUMBER (Part 1/2/3/...), so templates can have any number of
-    // parts. Each part holds all its active variants so the sender can rotate
-    // between them (anti-spam). Ordering rules:
-    //   "Part N"    -> N
-    //   "Follow Up" -> 900, a sentinel that always sorts LAST, so the follow-up
-    //                  re-prompt goes out after every numbered part in the flow.
-    //                  (You can write the Follow Up content later; until then the
-    //                  flow just sends its numbered parts.)
-    //   blank/other -> 1  (the main message)
-    const m = /(\d+)/.exec(part || "");
-    const pn = m ? Number(m[1]) : (/follow\s*up/i.test(part || "") ? 900 : 1);
-    byLang[lang] = byLang[lang] || { parts: {} };
-    byLang[lang].parts[pn] = byLang[lang].parts[pn] || [];
-    byLang[lang].parts[pn].push({
-      name: nfTitle(row, "Template Name"),
-      part,
-      partNo: pn,
-      text,
-      media,
-      pageId,
-      imagePageId,
-      status,
-    });
-  }
-  // Prefer Active variants first within each part so preview picks a live
-  // template over a Testing draft whenever one exists.
-  for (const lang of Object.keys(byLang)) {
-    for (const pn of Object.keys(byLang[lang].parts)) {
-      byLang[lang].parts[pn].sort((a, b) =>
-        (a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1));
-    }
-  }
-  // Legacy accessors so older readers (credit fallbacks, twoPart) still work.
-  for (const lang of Object.keys(byLang)) {
-    byLang[lang].p1 = byLang[lang].parts[1] || [];
-    byLang[lang].p2 = byLang[lang].parts[2] || [];
-  }
-  return byLang;
-}
-
-function pickTemplateVariant(variants) {
-  return variants[Math.floor(Math.random() * variants.length)];
-}
-
-function sortedTemplatePartNumbers(languageTemplates) {
-  return Object.keys(languageTemplates?.parts || {})
-    .map(Number)
-    .filter((n) => (languageTemplates.parts[n] || []).length)
-    .sort((a, b) => a - b);
-}
-
-function findTemplateVariant(byLang, pageId) {
-  const id = String(pageId || "");
-  if (!id) return null;
-  for (const [language, pack] of Object.entries(byLang || {})) {
-    for (const [partNo, variants] of Object.entries(pack?.parts || {})) {
-      const variant = (variants || []).find((item) => item.pageId === id);
-      if (variant) return { language, partNo: Number(partNo), variant };
-    }
-  }
-  return null;
-}
-
-async function getFirstFlowTemplateOptions(projectName) {
-  const byLang = await fetchFlowTemplates(projectName, FIRST_FLOW_LABEL);
-  const templates = [];
-  for (const [language, pack] of Object.entries(byLang || {})) {
-    for (const item of pack?.parts?.[1] || []) {
-      templates.push({
-        id: item.pageId,
-        language: language.toLowerCase(),
-        name: item.name || item.pageId,
-        status: item.status,
-      });
-    }
-  }
-  return templates;
-}
-
-async function applyNotionFlowTemplatesToState(state, { projectName, flow, overrides = [], markFlowRun = true, credit = true } = {}) {
-  const byLang = await fetchFlowTemplates(projectName, flow);
-  if (!Object.keys(byLang).length) {
-    throw new Error(`没有 Active 的「${flow}」模板(${projectName})。去 Templates 库确认 Flow Topic 对得上、Status=Active。`);
-  }
-
-  const overrideById = new Map((Array.isArray(overrides) ? overrides : []).map((item) => [String(item.id), item]));
-  const slug = flow.replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
-  const tally = {};
-  let overridden = 0;
-
-  for (const job of state.assignments || []) {
-    const override = overrideById.get(String(job.id));
-    const requested = override?.part1Variant ? findTemplateVariant(byLang, override.part1Variant) : null;
-    let language = requested?.language || String(job.language || "en").toUpperCase();
-    if (!byLang[language]) language = byLang.EN ? "EN" : Object.keys(byLang)[0];
-    const pack = byLang[language];
-    const nums = sortedTemplatePartNumbers(pack);
-    if (!nums.length) continue;
-
-    const mainPartNo = nums.includes(1) ? 1 : nums[0];
-    const main = (requested && requested.language === language && requested.partNo === mainPartNo)
-      ? requested.variant
-      : pickTemplateVariant(pack.parts[mainPartNo]);
-    const chosen = [
-      main,
-      ...nums.filter((n) => n !== mainPartNo).map((n) => pickTemplateVariant(pack.parts[n])),
-    ].filter(Boolean);
-    const second = chosen[1] || null;
-    const rest = chosen.slice(2);
-
-    job.language = language.toLowerCase();
-    job.part1Variant = main.pageId || `flow_${slug}_p1`;
-    job.part1Text = personalize(main.text, job.lead.name);
-    job.part1Media = main.media || "";
-    if (second) {
-      job.part2Variant = second.pageId || `flow_${slug}_p2`;
-      job.part2Text = personalize(second.text, job.lead.name);
-      job.part2Media = second.media || "";
-    } else {
-      job.part2Variant = null;
-      job.part2Text = "";
-      job.part2Media = "";
-    }
-    job.extraParts = rest.map((v, i) => ({
-      variant: v.pageId || `flow_${slug}_p${i + 3}`,
-      text: personalize(v.text, job.lead.name),
-      media: v.media || "",
-      sentInfo: null,
-    }));
-    job.tplCredit = chosen
-      .filter((item) => item && item.pageId)
-      .map((item) => ({ pageId: item.pageId, imagePageId: item.imagePageId }));
-    for (const c of job.tplCredit) {
-      tally[c.pageId] = tally[c.pageId] || { count: 0, imagePageId: c.imagePageId };
-      tally[c.pageId].count += 1;
-    }
-    overridden += 1;
-  }
-
-  state.templateSource = "notion";
-  state.templateFlow = flow;
-  state.templateProject = resolveTemplateProject(projectName);
-  state.templateLanguages = Object.keys(byLang);
-  if (markFlowRun) {
-    state.flowLabel = flow;
-    state.advanceDone = false;
-  }
-  if (credit) {
-    state.creditPlan = Object.entries(tally).map(([pageId, v]) => ({ pageId, imagePageId: v.imagePageId, count: v.count }));
-    state.creditByLang = byLang;
-    state.credited = false;
-  }
-  return { byLang, overridden, tally };
-}
-
-function pickPreviewLanguage(byLang, requestedLanguage) {
-  const languages = Object.keys(byLang || {});
-  if (!languages.length) return { language: "", parts: [] };
-  const preferred = String(requestedLanguage || "EN").trim().toUpperCase();
-  const language = byLang[preferred] ? preferred : (byLang.EN ? "EN" : languages[0]);
-  const parts = Object.keys(byLang[language]?.parts || {})
-    .map(Number)
-    .filter((n) => (byLang[language].parts[n] || []).length)
-    .sort((a, b) => a - b)
-    .map((n) => byLang[language].parts[n][0])
-    .filter(Boolean);
-  const usedTesting = parts.some((p) => p && p.status === "Testing");
-  return { language, parts, usedTesting };
-}
-
-async function shortPause(ms = 650) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function assertFirstConsoleRunUsesFlow1Only(config, state) {
-  if (state?.flowLabel) return; // next-flow picker runs already carry a specific flow.
-  if (state?.templateSource === "notion") {
-    if (state.templateFlow !== FIRST_FLOW_LABEL) {
-      throw new Error(`这个预览不是 Flow 1 模板(${state.templateFlow || "未知"})，请重新「生成预览」。`);
-    }
-    return;
-  }
-  const allowedP1 = new Set(firstFlowVariants(config).map((variant) => variant.id));
-  const byP1 = new Map((config?.part1?.variants || []).map((variant) => [variant.id, variant]));
-  const bad = [];
-  for (const job of state?.assignments || []) {
-    if (job.part1Variant && !allowedP1.has(job.part1Variant)) {
-      bad.push(`${job.lead?.name || job.name || job.id}: ${job.part1Variant}`);
-      continue;
-    }
-    if (job.part2Variant) {
-      const part1 = byP1.get(job.part1Variant);
-      const allowedP2 = new Set(firstFlowPart2Variants(config, part1).map((variant) => variant.id));
-      if (!allowedP2.has(job.part2Variant)) bad.push(`${job.lead?.name || job.name || job.id}: ${job.part2Variant}`);
-    }
-  }
-  if (bad.length) {
-    throw new Error(`这个预览混到非 Flow 1 模板，请重新「生成预览」。例子: ${bad.slice(0, 3).join(" / ")}`);
-  }
 }
 
 // After a picker LIVE run finishes, push each sent lead's flow state forward in
@@ -528,21 +268,6 @@ function buildCsv(state) {
 
 const handlers = {};
 
-// Add a "Project" select/multi_select option to a Notion database, if missing.
-async function addProjectOption(dbId, name) {
-  const db = await notion("GET", `/databases/${dbId}`);
-  const prop = db?.properties?.Project;
-  if (!prop) return "no Project prop";
-  const kind = prop.type; // "select" | "multi_select"
-  const cfg = prop[kind];
-  if (!cfg) return "not select";
-  const opts = (cfg.options || []).slice();
-  if (opts.some((o) => o.name === name)) return "existed";
-  opts.push({ name });
-  await notion("PATCH", `/databases/${dbId}`, { properties: { Project: { [kind]: { options: opts } } } });
-  return "added";
-}
-
 const runtime = await loadRuntime({
   host: HOST,
   port: PORT,
@@ -608,10 +333,7 @@ const runtime = await loadRuntime({
     openInstances: () => openInstances(api),
     createPreviewRunner: () => new CampaignRunner({ env }),
     addProjectOption,
-    setImageAlias: async (key, filename) => {
-      imageAliases[key] = filename;
-      await fs.writeFile(path.join(paths.rootDir, "campaign-assets", "image_aliases.json"), JSON.stringify(imageAliases, null, 2) + "\n");
-    },
+    setImageAlias,
   },
   campaign: {
     env,
