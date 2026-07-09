@@ -173,10 +173,11 @@ function render() {
   root.innerHTML = order.map((flow) => {
     const rows = groups[flow].map((l) => `
       <tr>
-        <td><input type="checkbox" class="rowchk" data-id="${esc(l.pageId)}" data-name="${esc(l.name)}" data-phone="${esc(l.phone)}" data-flow="${esc(l.nextFlow)}" onchange="refreshCount()"></td>
+        <td><input type="checkbox" class="rowchk" data-id="${esc(l.pageId)}" data-name="${esc(l.name)}" data-phone="${esc(l.phone)}" data-flow="${esc(l.nextFlow)}" data-sender="${esc(l.senderInstance || "")}" onchange="refreshCount()"></td>
         <td>${esc(l.name)}</td>
         <td>${esc(l.phone)}</td>
         <td>${esc(l.cohortDay || "")}</td>
+        <td>${esc(l.senderInstance || "-")}</td>
         <td class="reply">${esc((l.lastReply || "").slice(0, 80))}</td>
         <td><button class="noflag" onclick="redflag('${esc(l.pageId)}', this)">不发</button></td>
       </tr>`).join("");
@@ -195,7 +196,7 @@ function render() {
           <button class="ghost" onclick="setGroup('${esc(flow)}', this)">应用</button></span>
       </div>
       <table>
-        <thead><tr><th></th><th>名字</th><th>电话</th><th>Cohort</th><th>上次回复</th><th></th></tr></thead>
+        <thead><tr><th></th><th>名字</th><th>电话</th><th>Cohort</th><th>Sender</th><th>上次回复</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -220,7 +221,7 @@ async function redflag(pageId, btn) {
 }
 
 function selectedLeads() {
-  return selectedRows().map((c) => ({ pageId: c.dataset.id, name: c.dataset.name, phone: c.dataset.phone }));
+  return selectedRows().map((c) => ({ pageId: c.dataset.id, name: c.dataset.name, phone: c.dataset.phone, senderInstance: c.dataset.sender || "" }));
 }
 function checkedInstances() {
   return [...document.querySelectorAll(".instchk:checked")].map((c) => c.value);
@@ -345,7 +346,7 @@ async function startBlast(mode) {
 async function doSend(mode, proj, rows, flow, limitCount) {
   try {
     if (mode === "LIVE") {
-      const sel = rows.map((r) => ({ pageId: r.dataset.id, name: r.dataset.name, phone: r.dataset.phone }));
+      const sel = rows.map((r) => ({ pageId: r.dataset.id, name: r.dataset.name, phone: r.dataset.phone, senderInstance: r.dataset.sender || "" }));
       await api("/api/next-flow/load", { project: proj.id, leads: sel });
     }
     const instances = checkedInstances();

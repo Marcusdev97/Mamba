@@ -350,7 +350,13 @@ export function applyTemplateOverrides(state, overrides, config) {
 export function buildAssignments(leads, instances, startAt, endAt, config) {
   const part1Variants = firstFlowVariants(config);
   const assignments = leads.map((lead, index) => {
-    const instance = instances[index % instances.length];
+    const preferredSender = String(lead.senderInstance || "").trim();
+    const instance = preferredSender
+      ? instances.find((item) => item.name === preferredSender)
+      : instances[index % instances.length];
+    if (!instance) {
+      throw new Error(`Sender Instance ${preferredSender} 不在线或没有被勾选。请到 Settings reconnect，或不要勾选这个客户。`);
+    }
     let language = lead.language ?? chooseLanguage(config);
 
     // Fall back to a language that actually has templates (projects may be EN-only, etc.).

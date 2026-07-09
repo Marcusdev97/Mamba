@@ -91,6 +91,7 @@ const SCHEMA_REQUIREMENTS = [
   { name: "AI Category", types: ["select", "status"], level: "reply", reason: "回复分类" },
   { name: "Next Action", types: ["select", "status"], level: "reply", reason: "下一步动作" },
   { name: "AI Summary", types: ["rich_text"], level: "reply", reason: "回复摘要/建议" },
+  { name: "Sender Instance", types: ["select", "status"], level: "sender", reason: "记录这个客户由哪个 WhatsApp connection 发出" },
   { name: "Last Flow Sent", types: ["select", "status"], level: "flow", reason: "显示已发 Flow" },
   { name: "Next Flow", types: ["select", "status"], level: "flow", reason: "显示下一轮 Flow" },
   { name: "Cohort Day", types: ["select", "status"], level: "flow", reason: "显示发送节奏" },
@@ -207,6 +208,7 @@ async function latestInboundMessages(conversations, instances, recordsByPhone) {
       const phone = conversations.phoneFromJid(message?.key?.remoteJid);
       const record = phone && recordsByPhone.get(phone);
       if (!record) continue;
+      if (record.senderInstance && record.senderInstance !== instance.name) continue;
 
       const at = conversations.messageTime(message);
       if (!at) continue;
@@ -290,6 +292,8 @@ export function registerConversationsRoutes(router) {
     if (!openInstances.length) {
       throw httpError(400, "没有 OPEN 的 WhatsApp connection。请到 Settings 检查 Phone Health。");
     }
+    const openNames = new Set(openInstances.map((instance) => instance.name));
+    const senderOffline = records.filter((record) => record.senderInstance && !openNames.has(record.senderInstance)).length;
 
     const { inbound, instanceErrors } = await latestInboundMessages(conversations, openInstances, byPhone);
     if (instanceErrors.length === openInstances.length) {
@@ -324,7 +328,7 @@ export function registerConversationsRoutes(router) {
       area: "conversations",
       event: "refresh_replies",
       message: `Refresh replies updated ${updated.length} lead(s).`,
-      context: { scannedPhones: byPhone.size, updated: updated.length, failed: failed.length, instanceErrors, duplicateRows },
+      context: { scannedPhones: byPhone.size, updated: updated.length, failed: failed.length, instanceErrors, duplicateRows, senderOffline },
     }).catch(() => {});
 
     const refreshed = await conversations.queryNotionRows(undefined).catch(() => records);
@@ -338,6 +342,7 @@ export function registerConversationsRoutes(router) {
       failed,
       instanceErrors,
       duplicateRows,
+      senderOffline,
       updates: updated.slice(0, 50),
     });
   });

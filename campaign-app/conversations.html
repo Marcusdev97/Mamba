@@ -117,10 +117,10 @@
         <table>
           <thead>
             <tr>
-              <th>Customer</th><th>Project</th><th>Status</th><th>Sequence</th><th>Next Action</th><th>Latest Reply</th><th>Reply At</th>
+              <th>Customer</th><th>Project</th><th>Sender</th><th>Status</th><th>Sequence</th><th>Next Action</th><th>Latest Reply</th><th>Reply At</th>
             </tr>
           </thead>
-          <tbody id="rows"><tr><td colspan="7" class="muted">Loading...</td></tr></tbody>
+          <tbody id="rows"><tr><td colspan="8" class="muted">Loading...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -135,6 +135,7 @@
         <div class="kv">
           <div>Project</div><div id="dProject"></div>
           <div>Status</div><div id="dStatus"></div>
+          <div>Sender</div><div id="dSender"></div>
           <div>Sequence</div><div id="dSequence"></div>
           <div>Last Flow</div><div id="dLastFlow"></div>
           <div>Next Flow</div><div id="dNextFlow"></div>
@@ -202,6 +203,7 @@ function row(record) {
   return `<tr class="${active}" data-id="${esc(record.id)}">
     <td><div class="name">${esc(record.name || "(No name)")}</div><div class="phone">${esc(record.phone || "-")}</div></td>
     <td>${esc(record.project || "-")}</td>
+    <td>${esc(record.senderInstance || "-")}</td>
     <td>${pill(record.status || "-", toneFor(record))}</td>
     <td>${pill(record.sequenceStatus || "-")}</td>
     <td>${esc(record.nextAction || "-")}</td>
@@ -213,7 +215,7 @@ function row(record) {
 function renderRows() {
   $("rows").innerHTML = records.length
     ? records.map(row).join("")
-    : '<tr><td colspan="7" class="muted">没有客户。</td></tr>';
+    : '<tr><td colspan="8" class="muted">没有客户。</td></tr>';
   document.querySelectorAll("#rows tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => selectRecord(tr.dataset.id));
   });
@@ -243,6 +245,7 @@ function selectRecord(id, silent = false) {
   ].join("");
   $("dProject").textContent = record.project || "-";
   $("dStatus").textContent = record.status || "-";
+  $("dSender").textContent = record.senderInstance || "-";
   $("dSequence").textContent = record.sequenceStatus || "-";
   $("dLastFlow").textContent = record.lastFlowSent || "-";
   $("dNextFlow").textContent = record.nextFlow || "-";
@@ -330,6 +333,7 @@ async function refreshReplies() {
     ];
     if (data.failed?.length) bits.push(`failed ${data.failed.length}`);
     if (data.instanceErrors?.length) bits.push(`instance errors ${data.instanceErrors.length}`);
+    if (data.senderOffline) bits.push(`sender offline ${data.senderOffline}`);
     $("refreshReplyMeta").textContent = bits.join(" · ");
     if (data.failed?.length || data.instanceErrors?.length) {
       $("refreshReplyErr").textContent = [
@@ -369,7 +373,7 @@ async function load() {
     renderRows();
   } catch (error) {
     $("err").textContent = error.message;
-    $("rows").innerHTML = '<tr><td colspan="7" class="muted">读取失败。</td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="8" class="muted">读取失败。</td></tr>';
   } finally {
     $("refresh").disabled = false;
     $("refresh").textContent = "刷新";

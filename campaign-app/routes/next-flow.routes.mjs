@@ -96,6 +96,7 @@ async function latestInboundReplies(nextFlow, instances, leadsByPhone, sinceForL
       const phone = nextFlow.phoneFromJid(message?.key?.remoteJid);
       const lead = phone && leadsByPhone.get(phone);
       if (!lead) continue;
+      if (lead.senderInstance && lead.senderInstance !== instance.name) continue;
 
       const at = nextFlow.messageTime(message);
       const sinceMs = sinceForLead(lead);
@@ -215,6 +216,7 @@ export function registerNextFlowRoutes(router) {
             cohortDay: nextFlow.nfSelect(page, "Cohort Day"),
             lastReply: nextFlow.nfText(page, "Last Reply Text"),
             lastBlastAt: page?.properties?.["Last Blast At"]?.date?.start || null,
+            senderInstance: nextFlow.nfSelect(page, "Sender Instance"),
           });
         }
         cursor = data?.has_more ? data?.next_cursor : null;
@@ -318,6 +320,7 @@ export function registerNextFlowRoutes(router) {
         id: `pick_${String(leads.length + 1).padStart(5, "0")}`,
         name: String(item.name ?? "").trim() || "there",
         phone,
+        senderInstance: String(item.senderInstance ?? "").trim(),
       });
     }
     if (!leads.length) throw httpError(400, "没有可发送的选中客户。");
