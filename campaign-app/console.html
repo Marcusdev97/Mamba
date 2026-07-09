@@ -114,6 +114,7 @@
     <div style="margin-bottom:14px; display:flex; gap:10px">
       <button class="btn danger" id="btnStop">停止</button>
       <button class="btn primary hidden" id="btnResume">▶ 继续发送</button>
+      <button class="btn live hidden" id="btnRetryFailed">重试失败客户</button>
       <button class="btn" id="btnExport">导出 CSV（含发送时间）</button>
     </div>
     <div class="log" id="logBox"></div>
@@ -431,6 +432,14 @@ $("btnResume").addEventListener("click", async () => {
   if (!r.ok) { alert(r.error); return; }
   startPolling();
 });
+$("btnRetryFailed").addEventListener("click", async () => {
+  const count = Number($("btnRetryFailed").dataset.count || 0);
+  if (!count) return;
+  if (!confirm("只补发 " + count + " 个 FAILED 客户？已成功、手动跳过、客户已回复的人都不会重发。timeout 客户请先确认 WhatsApp 没收到再补发。")) return;
+  const r = await post("/api/retry-failed", {});
+  if (!r.ok) { alert(r.error); return; }
+  startPolling();
+});
 
 // ---- progress polling ----
 function startPolling() {
@@ -460,6 +469,8 @@ async function pollStatus() {
   $("btnStop").disabled = !snap.running;
   // Show "继续发送" when paused/stopped and there are still QUEUED leads.
   $("btnResume").classList.toggle("hidden", snap.running || (c.QUEUED || 0) === 0);
+  $("btnRetryFailed").dataset.count = c.FAILED || 0;
+  $("btnRetryFailed").classList.toggle("hidden", snap.running || (c.FAILED || 0) === 0);
 }
 
 // ---- project switching ----

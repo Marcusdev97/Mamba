@@ -374,6 +374,16 @@ async function stopSend() {
   } catch (e) { toast("停止失败:" + e.message, true); }
 }
 
+async function retryFailedNextFlow(count) {
+  if (!count) return;
+  if (!confirm(`只补发 ${count} 个 FAILED 客户?已成功/已回复/手动不发的人不会重发。timeout 客户请先确认 WhatsApp 没收到再补发。`)) return;
+  try {
+    await api("/api/retry-failed", { autoAdvance: true });
+    toast(`已重新排队 ${count} 个失败客户,发送成功后会自动推进 Notion。`);
+    setTimeout(pollStatus, 1200);
+  } catch (e) { toast("补发失败:" + e.message, true); }
+}
+
 // Real-time reply routing during a blast: scan Evolution, colour repliers red/green.
 async function scanReplies() {
   try {
@@ -420,8 +430,11 @@ async function pollStatus() {
     const stopBtn = running
       ? ` <button class="ghost" style="padding:3px 12px; margin-left:10px; border-color:#dc2626; color:#f87171;" onclick="stopSend()">⏸ 停止发送</button>`
       : "";
+    const retryBtn = !running && failed
+      ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="retryFailedNextFlow(${failed})">重试失败客户</button>`
+      : "";
     box.innerHTML =
-      `<div class="statushead">${head} · ${sent}/${a.length} 已发${failed ? ` · ❌ ${failed} 失败` : ""}${stopBtn}</div>` +
+      `<div class="statushead">${head} · ${sent}/${a.length} 已发${failed ? ` · ❌ ${failed} 失败` : ""}${stopBtn}${retryBtn}</div>` +
       `<div class="muted" style="margin:4px 0;">${esc(sumStr)}</div>` +
       `<div class="loglist">${recent}</div>`;
 

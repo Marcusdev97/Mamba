@@ -215,6 +215,30 @@ export function registerCampaignRoutes(router) {
     json(res, 200, { ok: true, snapshot: runner.snapshot() });
   });
 
+  router.post("/api/retry-failed", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    const runner = campaign.getRunner();
+    if (!runner || !runner.state) throw httpError(400, "没有可补发的 run。");
+    if (runner.running) throw httpError(409, "campaign 已在运行。");
+
+    const failed = runner.state.assignments.filter((job) => job.status === "FAILED").length;
+    if (!failed) throw httpError(400, "没有失败客户需要补发。");
+
+    const queued = runner.retryFailedOnly();
+    if (!queued) throw httpError(400, "没有失败客户需要补发。");
+    runner.pushLog(`Retry Failed only: ${queued} 个失败客户已重新排队；已成功/手动跳过的客户不会重发。`);
+    await runner.saveState();
+
+    const autoAdvance = body.autoAdvance === true && runner.state.mode === "LIVE";
+    runner.run()
+      .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
+      .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
+      .then(() => campaign.autoNotionUpload(runner))
+      .catch((error) => runner.pushLog(`运行出错：${error.message}`));
+    json(res, 200, { ok: true, retried: queued, snapshot: runner.snapshot() });
+  });
+
   router.post("/api/stop", async (_req, res, runtime) => {
     const campaign = requireCampaign(runtime);
     const runner = campaign.getRunner();

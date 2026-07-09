@@ -690,10 +690,14 @@ export class CampaignRunner {
     }
 
     try {
-      job.status = "SENDING_PART1";
-      await this.saveState();
-      this.showProgress(`Part 1 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
-      job.part1 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part1Text, job.part1Media);
+      if (!job.part1?.sentAt) {
+        job.status = "SENDING_PART1";
+        await this.saveState();
+        this.showProgress(`Part 1 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
+        job.part1 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part1Text, job.part1Media);
+      } else {
+        this.showProgress(`Part 1 already sent → ${job.lead.name}; resume from next unfinished part.`);
+      }
       job.status = "WAITING_PART2";
       await this.saveState();
 
@@ -722,17 +726,22 @@ export class CampaignRunner {
         return;
       }
 
-      job.status = "SENDING_PART2";
-      await this.saveState();
-      this.showProgress(`Part 2 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
-      job.part2 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part2Text, job.part2Media);
-      await this.saveState();
+      if (!job.part2?.sentAt) {
+        job.status = "SENDING_PART2";
+        await this.saveState();
+        this.showProgress(`Part 2 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
+        job.part2 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part2Text, job.part2Media);
+        await this.saveState();
+      } else {
+        this.showProgress(`Part 2 already sent → ${job.lead.name}; resume from next unfinished part.`);
+      }
 
       // Dynamic extra parts (Part 3, 4, ...): same pacing + reply-cancel as Part 2.
       const extras = Array.isArray(job.extraParts) ? job.extraParts : [];
       for (let k = 0; k < extras.length; k++) {
         const ep = extras[k];
         if (!ep || (!ep.text && !ep.media)) continue;
+        if (ep.sentInfo?.sentAt) continue;
         await wait(this.config.delivery.partGapSeconds * 1000);
         if (this.stopped) { await this.saveState(); return; }
         if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
@@ -764,6 +773,19 @@ export class CampaignRunner {
     }
   }
 
+  retryFailedOnly() {
+    if (!this.state?.assignments) throw new Error("没有可补发的 run。");
+    let count = 0;
+    for (const job of this.state.assignments) {
+      if (job.status !== "FAILED") continue;
+      job.status = "QUEUED";
+      job.error = null;
+      job.retryCount = (job.retryCount ?? 0) + 1;
+      count += 1;
+    }
+    return count;
+  }
+
   async runQueue() {
     for (let index = 0; index < this.state.assignments.length; index += 1) {
       if (this.stopped) return;
@@ -771,7 +793,8 @@ export class CampaignRunner {
       if (this.state.assignments[index].status !== "QUEUED") continue;
       await this.processJob(this.state.assignments[index]);
       if (this.stopped || index === this.state.assignments.length - 1) return;
-      const next = this.state.assignments[index + 1];
+      const next = this.state.assignments.slice(index + 1).find((job) => job.status === "QUEUED");
+      if (!next) return;
       // Pacing is enforced by processJob -> waitUntil(next.scheduledAt). The
       // schedule is rebased to real wall-clock time in rebaseSchedule(), so we
       // must NOT add an extra fixed wait here (that was collapsing the spread
