@@ -18,6 +18,8 @@ export const paths = {
 
 export const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 export const pick = (items) => items[Math.floor(Math.random() * items.length)];
+const DEFAULT_API_TIMEOUT_MS = 15000;
+const SEND_API_TIMEOUT_MS = 45000;
 
 export function maskPhone(phone) {
   return `${phone.slice(0, 2)}******${phone.slice(-4)}`;
@@ -25,6 +27,20 @@ export function maskPhone(phone) {
 
 export function personalize(text, name) {
   return text.replaceAll("[Name]", name).replaceAll("[名字]", name);
+}
+
+export function isTimeoutError(error) {
+  const name = String(error?.name ?? "");
+  const message = String(error?.message ?? "");
+  return name === "TimeoutError" || name === "AbortError" || /timeout|timed out|ETIMEDOUT|aborted/i.test(message);
+}
+
+export class UnconfirmedSendError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UnconfirmedSendError";
+    this.code = "SEND_TIMEOUT_UNCONFIRMED";
+  }
 }
 
 // A template becomes a WhatsApp POLL (tappable options) when its Message Text
@@ -123,10 +139,11 @@ export function makeApi(env) {
   const apiBase = "http://127.0.0.1:8080";
   const apiHeaders = { "Content-Type": "application/json", apikey: env.AUTHENTICATION_API_KEY };
   return async function api(pathname, options = {}) {
+    const { timeoutMs = DEFAULT_API_TIMEOUT_MS, ...fetchOptions } = options;
     const response = await fetch(`${apiBase}${pathname}`, {
-      ...options,
-      headers: { ...apiHeaders, ...(options.headers ?? {}) },
-      signal: AbortSignal.timeout(15000),
+      ...fetchOptions,
+      headers: { ...apiHeaders, ...(fetchOptions.headers ?? {}) },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`${pathname}: HTTP ${response.status} ${JSON.stringify(body)}`);
@@ -541,6 +558,14 @@ export class CampaignRunner {
         if (/"exists"\s*:\s*false/.test(error.message) || /not.*whatsapp/i.test(error.message)) {
           throw new Error("不是 WhatsApp 号码 (not on WhatsApp)");
         }
+        // Timeout is dangerous to retry: Evolution/WhatsApp may have received the
+        // send request but failed to answer in time. Retrying can duplicate the
+        // same customer message, so stop and let the user verify before resending.
+        if (isTimeoutError(error)) {
+          throw new UnconfirmedSendError(
+            `发送 timeout：Evolution/WhatsApp ${Math.round(SEND_API_TIMEOUT_MS / 1000)} 秒内没有确认。为避免重复发送，系统已停止自动重试；请先检查客户 WhatsApp 是否已收到，再决定是否补发。`,
+          );
+        }
         if (attempt < attempts) {
           this.showProgress(`Send failed (try ${attempt}/${attempts}): ${error.message} — retrying in 4s`);
           await wait(4000);
@@ -563,6 +588,7 @@ export class CampaignRunner {
       : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg";
     const result = await this.api(`/message/sendMedia/${encodeURIComponent(instanceName)}`, {
       method: "POST",
+      timeoutMs: SEND_API_TIMEOUT_MS,
       body: JSON.stringify({
         number,
         mediatype,
@@ -592,6 +618,7 @@ export class CampaignRunner {
     }
     const result = await this.api(`/message/sendText/${encodeURIComponent(instanceName)}`, {
       method: "POST",
+      timeoutMs: SEND_API_TIMEOUT_MS,
       body: JSON.stringify({ number, text, delay: 1000 }),
     });
     return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
@@ -610,6 +637,7 @@ export class CampaignRunner {
     }
     const result = await this.api(`/message/sendPoll/${encodeURIComponent(instanceName)}`, {
       method: "POST",
+      timeoutMs: SEND_API_TIMEOUT_MS,
       body: JSON.stringify({ number, name: String(question || "?").slice(0, 255), selectableCount: 1, values, delay: 1000 }),
     });
     return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };

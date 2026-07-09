@@ -67,6 +67,26 @@ function ensureRunnableStart(runner, body) {
   }
 }
 
+function applyManualSkips(runner, skipIds) {
+  const skipped = new Set((Array.isArray(skipIds) ? skipIds : []).map(String).filter(Boolean));
+  if (!skipped.size) return 0;
+
+  const jobs = runner.state.assignments || [];
+  const matching = jobs.filter((job) => skipped.has(String(job.id)));
+  const remaining = jobs.filter((job) => job.status === "QUEUED" && !skipped.has(String(job.id))).length;
+  if (!remaining) {
+    throw httpError(400, "你把全部收件人都设为不发送了。请至少保留 1 个收件人。");
+  }
+
+  let count = 0;
+  for (const job of matching) {
+    job.status = "SKIPPED_MANUAL";
+    job.error = "手动跳过：本次不发送。";
+    count += 1;
+  }
+  return count;
+}
+
 export function registerCampaignRoutes(router) {
   router.post("/api/prepare", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
@@ -134,6 +154,10 @@ export function registerCampaignRoutes(router) {
     const body = await readJson(req);
     const runner = campaign.getRunner();
     ensureRunnableStart(runner, body);
+    const skippedCount = applyManualSkips(runner, body.skipIds);
+    if (skippedCount) {
+      runner.pushLog(`手动跳过 ${skippedCount} 个收件人，本轮不会发送给他们。`);
+    }
 
     if (runner.state.templateSource === "notion") {
       try {

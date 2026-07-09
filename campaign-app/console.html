@@ -98,7 +98,7 @@
       </label>
     </div>
     <table style="margin:10px 0">
-      <thead><tr><th>时间</th><th>姓名</th><th>号码</th><th>号</th><th>语言</th><th>模板</th></tr></thead>
+      <thead><tr><th>发送</th><th>时间</th><th>姓名</th><th>号码</th><th>号</th><th>语言</th><th>模板</th></tr></thead>
       <tbody id="previewBody"></tbody>
     </table>
     <button class="btn primary" id="btnStartTest">开始测试发送</button>
@@ -246,7 +246,7 @@ function fmtSec(iso) {
 function badge(status) {
   const map = {
     QUEUED: "b-queued", SENDING_PART1: "b-go", WAITING_PART2: "b-go", SENDING_PART2: "b-go",
-    SENT: "b-sent", REPLIED_WARM: "b-warm", PART1_ONLY_END_TIME: "b-warm", SKIPPED_END_TIME: "b-warm", FAILED: "b-fail",
+    SENT: "b-sent", REPLIED_WARM: "b-warm", PART1_ONLY_END_TIME: "b-warm", SKIPPED_END_TIME: "b-warm", SKIPPED_MANUAL: "b-warm", FAILED: "b-fail",
   };
   const cls = map[status] || (/^SENDING_PART\d+$/.test(status) ? "b-go" : "b-queued");
   return '<span class="badge ' + cls + '">' + status + "</span>";
@@ -377,7 +377,8 @@ function renderPreview(r) {
     '<div class="chip">Connection <b>' + s.assignments.map(a=>a.instanceKey || a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>" +
     '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>";
   $("previewBody").innerHTML = s.assignments.map((a) =>
-    "<tr><td>" + fmtTime(a.scheduledAt) + "</td><td>" + a.name + "</td><td>" + a.phone + "</td><td>" + a.instanceName +
+    '<tr><td><label style="display:flex;align-items:center;gap:7px;white-space:nowrap"><input type="checkbox" class="sendToggle" data-id="' + a.id + '" checked> 发</label></td><td>' +
+    fmtTime(a.scheduledAt) + "</td><td>" + a.name + "</td><td>" + a.phone + "</td><td>" + a.instanceName +
     '</td><td id="lang_' + a.id + '">' + a.language + "</td><td>" + tplSelect(a.id, a.part1Variant) + "</td></tr>"
   ).join("");
   const live = s.mode === "LIVE";
@@ -393,22 +394,31 @@ function renderPreview(r) {
 function collectOverrides() {
   return [...document.querySelectorAll("select.tpl")].map((sel) => ({ id: sel.dataset.id, part1Variant: sel.value }));
 }
+function collectSkipIds() {
+  return [...document.querySelectorAll(".sendToggle:not(:checked)")].map((input) => input.dataset.id);
+}
+function selectedSendCount() {
+  return document.querySelectorAll(".sendToggle:checked").length;
+}
 async function startCampaign(optIn) {
   $("startErr").textContent = "";
-  const r = await post("/api/start", { optIn, overrides: collectOverrides() });
+  if (selectedSendCount() < 1) { $("startErr").textContent = "请至少保留 1 个收件人。"; return; }
+  const r = await post("/api/start", { optIn, overrides: collectOverrides(), skipIds: collectSkipIds() });
   if (!r.ok) { $("startErr").textContent = r.error; return; }
   $("progressCard").classList.remove("hidden");
   $("progressCard").scrollIntoView({ behavior: "smooth" });
   startPolling();
 }
 $("btnStartTest").addEventListener("click", () => {
-  const total = document.querySelectorAll("#previewBody tr").length;
+  const total = selectedSendCount();
   if (!confirm("开始测试发送给 " + total + " 个测试收件人？")) return;
   startCampaign(false);
 });
 $("btnStartLive").addEventListener("click", () => {
   if (!$("optIn").checked) { $("startErr").textContent = "请先勾选 opt-in 确认。"; return; }
-  if (!confirm("⚠️ LIVE：确认向所有真实号码发送？此操作会真实发出 WhatsApp 消息。")) return;
+  const total = selectedSendCount();
+  const skipped = collectSkipIds().length;
+  if (!confirm("⚠️ LIVE：确认向 " + total + " 个真实号码发送？" + (skipped ? " 已手动跳过 " + skipped + " 个。" : "") + " 此操作会真实发出 WhatsApp 消息。")) return;
   startCampaign(true);
 });
 $("btnStop").addEventListener("click", async () => {
@@ -433,11 +443,11 @@ async function pollStatus() {
   if (!snap || !snap.state) return;
   const s = snap.state;
   const c = s.summary || {};
-  const order = ["QUEUED","SENDING_PART1","WAITING_PART2","SENDING_PART2","SENT","REPLIED_WARM","PART1_ONLY_END_TIME","SKIPPED_END_TIME","FAILED"];
+  const order = ["QUEUED","SENDING_PART1","WAITING_PART2","SENDING_PART2","SENT","REPLIED_WARM","PART1_ONLY_END_TIME","SKIPPED_END_TIME","SKIPPED_MANUAL","FAILED"];
   $("statusChips").innerHTML =
     '<div class="chip">状态 <b>' + s.status + "</b></div>" +
     order.filter((k) => c[k]).map((k) => '<div class="chip">' + k + " <b>" + c[k] + "</b></div>").join("");
-  const done = (c.SENT||0)+(c.REPLIED_WARM||0)+(c.FAILED||0)+(c.SKIPPED_END_TIME||0)+(c.PART1_ONLY_END_TIME||0);
+  const done = (c.SENT||0)+(c.REPLIED_WARM||0)+(c.FAILED||0)+(c.SKIPPED_END_TIME||0)+(c.SKIPPED_MANUAL||0)+(c.PART1_ONLY_END_TIME||0);
   $("progFill").style.width = s.total ? Math.round(done / s.total * 100) + "%" : "0%";
   $("jobBody").innerHTML = s.assignments.map((a) => {
     const extra = (a.extraPartsAt || []).map((t, i) => t ? "P" + (i + 3) + " " + fmtSec(t) : "").filter(Boolean).join("  ");
