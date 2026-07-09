@@ -1,5 +1,6 @@
 import { createRouter, json, notFound } from "../lib/http.mjs";
 import { registerCampaignRoutes } from "../routes/campaign.routes.mjs";
+import { registerConversationsRoutes } from "../routes/conversations.routes.mjs";
 import { registerImportRoutes } from "../routes/import.routes.mjs";
 import { registerInstancesRoutes } from "../routes/instances.routes.mjs";
 import { registerLookupRoutes } from "../routes/lookup.routes.mjs";
@@ -21,6 +22,7 @@ export function createApp(runtime) {
   registerTemplatesRoutes(router);
   registerCampaignRoutes(router);
   registerNextFlowRoutes(router);
+  registerConversationsRoutes(router);
   registerSystemLogsRoutes(router);
 
   return async function app(req, res) {

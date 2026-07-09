@@ -7,6 +7,7 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
   function rowToRecord(page) {
     const props = page.properties || {};
     return {
+      id: page.id,
       project: nfSelect(page, "Project") || "",
       name: nfTitle(page, "Name") || "",
       phone: props["Phone"]?.phone_number || "",
@@ -17,11 +18,14 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
       cohortDay: nfSelect(page, "Cohort Day") || "",
       sequenceStatus: nfSelect(page, "Sequence Status") || "",
       status: nfSelect(page, "Status") || "",
+      nextAction: nfSelect(page, "Next Action") || "",
       stopFlag: props["Stop Flag"]?.checkbox === true,
       stopReason: nfText(page, "Stop Reason") || "",
       replyCount: props["Reply Count"]?.number ?? null,
       lastReplyAt: props["Last Reply At"]?.date?.start || null,
+      replyCheckedAt: props["Reply Checked At"]?.date?.start || null,
       aiCategory: nfSelect(page, "AI Category") || "",
+      aiSummary: nfText(page, "AI Summary") || "",
       lastReplyText: nfText(page, "Last Reply Text") || "",
       senderInstance: nfSelect(page, "Sender Instance") || "",
       url: `https://www.notion.so/${String(page.id).replace(/-/g, "")}`,
@@ -46,10 +50,7 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
 
   async function sync() {
     const records = await queryRows(undefined);
-    const payload = { syncedAt: new Date().toISOString(), count: records.length, records };
-    await fs.mkdir(path.dirname(cachePath()), { recursive: true });
-    await fs.writeFile(cachePath(), JSON.stringify(payload));
-    return payload;
+    return writeCache(records);
   }
 
   async function read() {
@@ -61,10 +62,19 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
     }
   }
 
+  async function writeCache(records) {
+    const safeRecords = Array.isArray(records) ? records : [];
+    const payload = { syncedAt: new Date().toISOString(), count: safeRecords.length, records: safeRecords };
+    await fs.mkdir(path.dirname(cachePath()), { recursive: true });
+    await fs.writeFile(cachePath(), JSON.stringify(payload));
+    return payload;
+  }
+
   return {
     rowToRecord,
     queryRows,
     sync,
     read,
+    writeCache,
   };
 }

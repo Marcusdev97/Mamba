@@ -9,6 +9,7 @@ const HTML_ROUTES = {
   "/lookup": "lookup.html",
   "/settings": "settings.html",
   "/logs": "logs.html",
+  "/conversations": "conversations.html",
 };
 
 async function serveHtml(res, appDir, filename) {
