@@ -8,7 +8,9 @@
 //     -> flow_sequence classifyReplyText (12 routes)
 //        ├─ simple route  -> canned suggestedReply sent immediately
 //        ├─ complaint     -> silent + Telegram alert (人工接管)
-//        └─ complex route -> Verified-only brain cache -> Claude drafts
+//        └─ complex route -> Claude drafts when ANTHROPIC_API_KEY exists;
+//                            otherwise classifier suggestedReply is used as a
+//                            rule-only draft
 //                            -> Telegram draft + [✅照发 | ✏️改后发 | 🙋接管]
 //                            -> your button decides -> Evolution sends
 //                            -> Mamba | AI Reply Log records the loop
@@ -17,7 +19,7 @@
 //   AUTHENTICATION_API_KEY  (Evolution — already there)
 //   NOTION_API_KEY          (already there)
 //   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID  (run Setup Telegram)
-//   ANTHROPIC_API_KEY       (console.anthropic.com)
+//   ANTHROPIC_API_KEY       optional; without it brain runs Rule-only mode
 //
 // Run:  node campaign-app/brain_service.mjs            # live service
 //       node campaign-app/brain_service.mjs --simulate "这个多少钱?"
@@ -127,6 +129,17 @@ async function draftWithClaude({ system, user }, model) {
   const data = await r.json().catch(() => null);
   if (!r.ok) throw new Error(`Anthropic ${r.status}: ${data?.error?.message ?? "unknown"}`);
   return (data?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+}
+
+function anthropicKeyConfigured() {
+  return Boolean(env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY);
+}
+
+function useAiDrafts() {
+  const mode = String(env.BRAIN_DRAFT_MODE || process.env.BRAIN_DRAFT_MODE || "auto").trim().toLowerCase();
+  if (["rules", "rule", "off", "none"].includes(mode)) return false;
+  if (["ai", "anthropic", "claude"].includes(mode)) return anthropicKeyConfigured();
+  return anthropicKeyConfigured();
 }
 
 // ---------- Notion: AI Reply Log + Stop Flag ----------
@@ -264,13 +277,19 @@ async function handleEvent(event) {
     return;
   }
 
-  // 3c) complex route: knowledge -> draft -> human buttons.
-  const cache = loadBrainCacheSync();
-  const prompt = buildPrompt({ event, classified, cache, lead });
-  const model = pickModel(policy.tier, env);
+  // 3c) complex route: AI draft when configured; otherwise Rule-only suggestedReply.
+  const aiEnabled = useAiDrafts();
+  const model = aiEnabled ? pickModel(policy.tier, env) : "rule-only";
   let draft;
+  let draftTier = aiEnabled ? policy.tier : "rules";
   try {
-    draft = SIMULATE ? `[simulate:${model}] ${classified.suggestedReply}` : await draftWithClaude(prompt, model);
+    if (aiEnabled) {
+      const cache = loadBrainCacheSync();
+      const prompt = buildPrompt({ event, classified, cache, lead });
+      draft = SIMULATE ? `[simulate:${model}] ${classified.suggestedReply}` : await draftWithClaude(prompt, model);
+    } else {
+      draft = classified.suggestedReply;
+    }
     if (!draft) throw new Error("empty draft");
   } catch (error) {
     console.log(`[ai] draft failed: ${error.message} — falling back to handoff alert.`);
@@ -280,8 +299,8 @@ async function handleEvent(event) {
   }
 
   const pendingId = crypto.randomBytes(6).toString("base64url");
-  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: policy.tier }), pendingId);
-  pending[pendingId] = { event, classified, draft, tier: policy.tier, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
+  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier }), pendingId);
+  pending[pendingId] = { event, classified, draft, tier: draftTier, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
   await savePending();
 }
 
@@ -415,7 +434,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({
         ok: true, service: "mamba-brain", pending: Object.keys(pending).length,
-        telegram: tg.enabled && tg.hasChatId, anthropic: Boolean(env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY),
+        telegram: tg.enabled && tg.hasChatId, anthropic: anthropicKeyConfigured(), draftMode: useAiDrafts() ? "ai" : "rules",
       }));
       return;
     }
@@ -442,13 +461,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, async () => {
-  console.log("MAMBA | BRAIN SERVICE (B6) — Phase 1: AI 建议 + 人工按钮批准");
+  console.log("MAMBA | BRAIN SERVICE (B6) — Phase 1: 关键词检测 + 人工按钮批准");
   console.log("==========================================================");
   console.log(`Status:    http://127.0.0.1:${PORT}/`);
   console.log(`Webhook:   ${PUBLIC_URL}`);
   console.log(`Forward:   ${TRACKER_FORWARD_URL} (tracker, stats only)`);
   console.log(`Telegram:  ${tg.enabled && tg.hasChatId ? "ON" : "OFF — 跑 Setup Telegram"}`);
-  console.log(`Anthropic: ${env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY ? "ON" : "OFF — .env 加 ANTHROPIC_API_KEY"}`);
+  console.log(`Drafting:  ${useAiDrafts() ? "AI" : "Rule-only (no AI API needed)"}`);
+  console.log(`Anthropic: ${anthropicKeyConfigured() ? "ON" : "OFF"}`);
   const cache = loadBrainCacheSync();
   console.log(`Brain:     ${cache.knowledge.count} facts / ${cache.golden.count} golden / ${cache.objections.count} objections${cache.knowledge.count === 0 ? "  ⚠️ 库是空的 — 先做缺口 1" : ""}`);
 

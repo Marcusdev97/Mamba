@@ -39,6 +39,13 @@ export function safeRoute(handler) {
       const status = error.statusCode || error.status || 500;
       if (status >= 500) console.error(error);
       else console.warn(`[route] ${status} ${error.message || "Request failed"}`);
+      await runtime.systemLogs?.write({
+        level: status >= 500 ? "error" : "warn",
+        area: "api",
+        event: `${req.method} ${new URL(req.url, `http://${runtime.host || "127.0.0.1"}:${runtime.port || 8787}`).pathname}`,
+        message: error.message || "Request failed",
+        context: { status },
+      }).catch(() => {});
       json(res, status, {
         ok: false,
         error: error.message || "Internal Server Error",

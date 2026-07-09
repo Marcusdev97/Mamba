@@ -405,11 +405,12 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
 // Drives one campaign run. Holds state in memory and mirrors it to disk so the
 // web console can poll progress and other tools can read active-run.json.
 export class CampaignRunner {
-  constructor({ config, env, onLog } = {}) {
+  constructor({ config, env, onLog, systemLogs } = {}) {
     this.config = config;
     this.env = env;
     this.api = makeApi(env);
     this.onLog = onLog;
+    this.systemLogs = systemLogs;
     this.state = null;
     this.runPath = null;
     this.stopped = false;
@@ -425,6 +426,26 @@ export class CampaignRunner {
     if (this.log.length > 500) this.log.shift();
     if (this.onLog) this.onLog(entry);
     return entry;
+  }
+
+  async systemLog(level, event, message, context = {}) {
+    if (!this.systemLogs) return;
+    try {
+      await this.systemLogs.write({
+        level,
+        area: "campaign",
+        event,
+        message,
+        context: {
+          runId: this.state?.runId ?? null,
+          project: this.state?.project ?? this.config?.campaignName ?? null,
+          mode: this.state?.mode ?? null,
+          ...context,
+        },
+      });
+    } catch {
+      // System logs must never block or break a campaign send.
+    }
   }
 
   async atomicWrite(filePath, value) {
@@ -541,6 +562,11 @@ export class CampaignRunner {
         await fs.access(path.join(paths.campaignDir, relativeMediaPath));
       } catch {
         this.showProgress(`⚠️ 图片缺失,改为只发文字:${relativeMediaPath}`);
+        await this.systemLog("warn", "missing_media", "Configured media missing; sending text only.", {
+          instanceName,
+          phone: number,
+          media: relativeMediaPath,
+        });
         relativeMediaPath = "";
       }
     }
@@ -562,12 +588,25 @@ export class CampaignRunner {
         // send request but failed to answer in time. Retrying can duplicate the
         // same customer message, so stop and let the user verify before resending.
         if (isTimeoutError(error)) {
+          await this.systemLog("warn", "send_timeout_unconfirmed", "Send timeout without confirmation; automatic retry stopped to avoid duplicates.", {
+            instanceName,
+            phone: number,
+            timeoutMs: SEND_API_TIMEOUT_MS,
+            error: error.message,
+          });
           throw new UnconfirmedSendError(
             `发送 timeout：Evolution/WhatsApp ${Math.round(SEND_API_TIMEOUT_MS / 1000)} 秒内没有确认。为避免重复发送，系统已停止自动重试；请先检查客户 WhatsApp 是否已收到，再决定是否补发。`,
           );
         }
         if (attempt < attempts) {
           this.showProgress(`Send failed (try ${attempt}/${attempts}): ${error.message} — retrying in 4s`);
+          await this.systemLog("warn", "send_retry", "Send failed; retrying.", {
+            instanceName,
+            phone: number,
+            attempt,
+            attempts,
+            error: error.message,
+          });
           await wait(4000);
         }
       }
@@ -686,6 +725,12 @@ export class CampaignRunner {
       job.error = "Global STOP list (opted out — possibly in another project).";
       await this.saveState();
       this.showProgress(`⛔ ${job.lead.name} skipped — global STOP list.`);
+      await this.systemLog("info", "suppression_skip", "Lead skipped by global STOP list.", {
+        jobId: job.id,
+        name: job.lead.name,
+        phone: job.lead.phone,
+        instanceName: job.instanceName,
+      });
       return;
     }
 
@@ -766,8 +811,19 @@ export class CampaignRunner {
       this.consecutiveFailures += 1;
       await this.saveState();
       this.showProgress(`FAILED → ${job.lead.name}: ${error.message}（已跳过，继续下一个）`);
+      await this.systemLog("error", "campaign_job_failed", "Lead failed and was skipped.", {
+        jobId: job.id,
+        name: job.lead.name,
+        phone: job.lead.phone,
+        instanceName: job.instanceName,
+        error: error.message,
+        consecutiveFailures: this.consecutiveFailures,
+      });
       if (this.consecutiveFailures >= 3) {
         this.showProgress("连续 3 个失败，已自动停止（可能号码被封或服务异常，请检查）。");
+        await this.systemLog("error", "campaign_auto_stop", "Campaign stopped after 3 consecutive failures.", {
+          consecutiveFailures: this.consecutiveFailures,
+        });
         this.stopped = true;
       }
     }

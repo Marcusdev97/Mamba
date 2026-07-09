@@ -7,6 +7,7 @@ import { registerNextFlowRoutes } from "../routes/next-flow.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
+import { registerSystemLogsRoutes } from "../routes/system-logs.routes.mjs";
 import { registerTemplatesRoutes } from "../routes/templates.routes.mjs";
 
 export function createApp(runtime) {
@@ -20,6 +21,7 @@ export function createApp(runtime) {
   registerTemplatesRoutes(router);
   registerCampaignRoutes(router);
   registerNextFlowRoutes(router);
+  registerSystemLogsRoutes(router);
 
   return async function app(req, res) {
     try {
@@ -37,6 +39,13 @@ export function createApp(runtime) {
       }
       await handler(req, res);
     } catch (error) {
+      await runtime.systemLogs?.write({
+        level: "error",
+        area: "api",
+        event: "app_unhandled_error",
+        message: error.message || "Unhandled app error",
+        context: { method: req.method, url: req.url },
+      }).catch(() => {});
       json(res, 400, { ok: false, error: error.message });
     }
   };

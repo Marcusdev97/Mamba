@@ -19,6 +19,8 @@ const launcherDir = path.join(rootDir, "launchers");
 const PORT = Number(process.env.CONTROL_PORT ?? 8810);
 const HOST = "127.0.0.1";
 const LOCAL_URL = `http://${HOST}:${PORT}`;
+const CONSOLE_PORT = Number(process.env.CONSOLE_PORT ?? 8787);
+const CONSOLE_URL = `http://${HOST}:${CONSOLE_PORT}`;
 const SELF = "Mamba Control Center.command"; // don't list the launcher that started us
 
 // Design system (docs/MAMBA_UI_BIBLE.md) — inlined because this server has no /assets route.
@@ -38,6 +40,7 @@ const KNOWN = {
   "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
   "Settings.command":                  { emoji: "⚙️", label: "Settings", desc: "直接填 Notion / Telegram token,保存到本机 .env", group: "设置 & 工具", order: 27 },
+  "System Logs.command":               { emoji: "🧾", label: "System Logs", desc: "查看系统错误、timeout、Notion/Telegram/Evolution 问题记录", group: "设置 & 工具", order: 28 },
   "Import Recycle Leads.command":      { emoji: "♻️", label: "导入回收名单", desc: "从 Excel/CSV 导入回收 leads", group: "设置 & 工具", order: 50 },
   "Sync Templates.command":            { emoji: "🔄", label: "同步模板到 Notion", desc: "把话术模板同步到 Notion", group: "设置 & 工具", order: 50 },
   "Sync Cloudflare Assets.command":    { emoji: "☁️", label: "同步 Cloudflare 图片", desc: "把 assets/ 和 campaign 图片上传到 Cloudflare R2,给 AI 和其他电脑共用", group: "设置 & 工具", order: 49 },
@@ -74,6 +77,22 @@ async function readBody(req) {
   for await (const chunk of req) chunks.push(chunk);
   if (!chunks.length) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return {}; }
+}
+
+async function ensureCampaignConsole() {
+  try {
+    const response = await fetch(`${CONSOLE_URL}/`, { signal: AbortSignal.timeout(1200) });
+    if (response.ok) return true;
+  } catch {
+    // Start it below.
+  }
+  const child = execFile(process.execPath, [path.join(appDir, "server.mjs")], {
+    cwd: rootDir,
+    env: { ...process.env, MAMBA_AUTO_OPEN: "0" },
+  });
+  child.unref?.();
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  return true;
 }
 
 function page() {
@@ -150,6 +169,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(page());
+      return;
+    }
+    if (req.method === "GET" && ["/logs", "/settings", "/lookup", "/templates", "/next-flow"].includes(url.pathname)) {
+      await ensureCampaignConsole();
+      res.writeHead(302, { Location: `${CONSOLE_URL}${url.pathname}` });
+      res.end();
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/tasks") {

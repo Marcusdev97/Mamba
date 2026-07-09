@@ -13,6 +13,7 @@ import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createProjectService } from "./lib/project-service.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
+import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createTemplateService } from "./lib/template-service.mjs";
 import {
   paths,
@@ -76,6 +77,7 @@ try {
 const blastDsId = String(notionConfig?.databases?.blastLeads ?? "").replace(/[^a-fA-F0-9]/g, "");
 
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
+const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const blastCacheService = createBlastCacheService({
   rootDir: paths.rootDir,
   blastDatabaseId: blastDsId,
@@ -149,6 +151,7 @@ const runtime = await loadRuntime({
   paths,
   handlers,
   getRunner: () => runner,
+  systemLogs: systemLogService,
   settings: settingsService,
   projects: {
     alias: notionConfig?.projectAlias || {},
@@ -204,7 +207,7 @@ const runtime = await loadRuntime({
     personalize,
     shortPause,
     openInstances: () => openInstances(api),
-    createPreviewRunner: () => new CampaignRunner({ env }),
+    createPreviewRunner: () => new CampaignRunner({ env, systemLogs: systemLogService }),
     addProjectOption,
     setImageAlias,
   },
@@ -218,7 +221,7 @@ const runtime = await loadRuntime({
     resolveTime,
     formatTime,
     getTestLeads,
-    createRunner: (config) => new CampaignRunner({ config, env }),
+    createRunner: (config) => new CampaignRunner({ config, env, systemLogs: systemLogService }),
     applyNotionFlowTemplatesToState,
     firstFlowLabel: FIRST_FLOW_LABEL,
     applyTemplateOverrides,

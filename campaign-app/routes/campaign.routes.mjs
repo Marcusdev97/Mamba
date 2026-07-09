@@ -87,6 +87,15 @@ function applyManualSkips(runner, skipIds) {
   return count;
 }
 
+async function writeCampaignLog(runtime, level, event, message, context = {}) {
+  if (!runtime.systemLogs) return;
+  try {
+    await runtime.systemLogs.write({ level, area: "campaign", event, message, context });
+  } catch {
+    // Logging is diagnostic only; campaign controls should continue working.
+  }
+}
+
 export function registerCampaignRoutes(router) {
   router.post("/api/prepare", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
@@ -157,6 +166,12 @@ export function registerCampaignRoutes(router) {
     const skippedCount = applyManualSkips(runner, body.skipIds);
     if (skippedCount) {
       runner.pushLog(`手动跳过 ${skippedCount} 个收件人，本轮不会发送给他们。`);
+      await writeCampaignLog(runtime, "info", "manual_skip_recipients", "Recipients manually skipped before campaign start.", {
+        runId: runner.state?.runId ?? null,
+        project: runner.state?.project ?? null,
+        mode: runner.state?.mode ?? null,
+        skippedCount,
+      });
     }
 
     if (runner.state.templateSource === "notion") {
@@ -195,7 +210,10 @@ export function registerCampaignRoutes(router) {
       .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
       .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
       .then(() => campaign.autoNotionUpload(runner))
-      .catch((error) => runner.pushLog(`运行出错：${error.message}`));
+      .catch(async (error) => {
+        runner.pushLog(`运行出错：${error.message}`);
+        await runner.systemLog?.("error", "campaign_run_error", "Campaign background run failed.", { error: error.message });
+      });
 
     json(res, 200, { ok: true, snapshot: runner.snapshot() });
   });
@@ -211,7 +229,10 @@ export function registerCampaignRoutes(router) {
 
     runner.run()
       .then(() => campaign.autoNotionUpload(runner))
-      .catch((error) => runner.pushLog(`运行出错：${error.message}`));
+      .catch(async (error) => {
+        runner.pushLog(`运行出错：${error.message}`);
+        await runner.systemLog?.("error", "campaign_resume_error", "Campaign resume failed.", { error: error.message });
+      });
     json(res, 200, { ok: true, snapshot: runner.snapshot() });
   });
 
@@ -228,6 +249,12 @@ export function registerCampaignRoutes(router) {
     const queued = runner.retryFailedOnly();
     if (!queued) throw httpError(400, "没有失败客户需要补发。");
     runner.pushLog(`Retry Failed only: ${queued} 个失败客户已重新排队；已成功/手动跳过的客户不会重发。`);
+    await writeCampaignLog(runtime, "info", "retry_failed_only", "Failed recipients queued for retry.", {
+      runId: runner.state?.runId ?? null,
+      project: runner.state?.project ?? null,
+      mode: runner.state?.mode ?? null,
+      queued,
+    });
     await runner.saveState();
 
     const autoAdvance = body.autoAdvance === true && runner.state.mode === "LIVE";
@@ -235,7 +262,10 @@ export function registerCampaignRoutes(router) {
       .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
       .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
       .then(() => campaign.autoNotionUpload(runner))
-      .catch((error) => runner.pushLog(`运行出错：${error.message}`));
+      .catch(async (error) => {
+        runner.pushLog(`运行出错：${error.message}`);
+        await runner.systemLog?.("error", "campaign_retry_failed_error", "Retry failed campaign run failed.", { error: error.message });
+      });
     json(res, 200, { ok: true, retried: queued, snapshot: runner.snapshot() });
   });
 

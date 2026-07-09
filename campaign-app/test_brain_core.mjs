@@ -87,6 +87,8 @@ check("action -> Notion select", ["ok", "edit", "take"].map(logActionOf), ["Sent
 const card = draftCard({ event: { ...event, text: "<b>hi</b>" }, classified, draft: "a & b", lead: { name: "Ali" }, tier: "complex" });
 checkTrue("card escapes customer text", card.includes("&lt;b&gt;hi&lt;/b&gt;"));
 checkTrue("card escapes draft", card.includes("a &amp; b"));
+const rulesCard = draftCard({ event, classified, draft: classified.suggestedReply, lead: { name: "Ali" }, tier: "rules" });
+checkTrue("rule-only card is labelled", rulesCard.includes("Rule-only"));
 
 console.log(fail ? `${fail} test(s) failed` : "✅ all brain-core tests passed");
 process.exitCode = fail ? 1 : 0;

@@ -4,7 +4,7 @@
 // brain_service.mjs does the wiring (HTTP, Evolution, Telegram, Anthropic,
 // Notion); THIS file decides WHAT happens:
 //
-//   route  -> auto-send canned reply | AI draft + human buttons | forced handoff
+//   route  -> auto-send canned reply | AI/rule draft + human buttons | forced handoff
 //   text   -> language guess (for the AI Reply Log)
 //   event  -> the exact prompt the model sees (guardrails hardcoded HERE)
 //   button -> ok / edit / take transition
@@ -18,7 +18,8 @@
 //
 // mode:
 //   "auto"    -> send the classifier's canned suggestedReply immediately.
-//   "ai"      -> retrieve knowledge -> model drafts -> Telegram buttons -> human decides.
+//   "ai"      -> model drafts when an AI key exists; otherwise rule suggestion ->
+//                Telegram buttons -> human decides.
 //   "handoff" -> no reply at all; Telegram alert; human takes over (情绪负面).
 // tier: which model drafts ("complex" = high-value negotiation, "simple" = routine).
 export const ROUTE_POLICY = {
@@ -133,11 +134,12 @@ export function buildPrompt({ event, classified, cache, lead }) {
 // ---------- Telegram draft card ----------
 export function draftCard({ event, classified, draft, lead, tier }) {
   const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const source = tier === "rules" ? " (Rule-only)" : tier === "complex" ? " (Sonnet)" : "";
   return [
     `🧠 <b>${esc(classified.route)}</b> · ${esc(lead?.name ?? event.pushName ?? "Unknown")} (${esc(event.phone)})`,
     `💬 客户: ${esc(event.text)}`,
     "",
-    `📝 <b>草稿${tier === "complex" ? " (Sonnet)" : ""}</b>:`,
+    `📝 <b>草稿${source}</b>:`,
     esc(draft),
     "",
     `✏️ 要改的话: 按「改后发」再 <b>回复这条消息</b> 输入新文本。`,
