@@ -45,6 +45,12 @@
   .schema-top { display:flex; justify-content:space-between; gap:10px; align-items:center; }
   .schema-name { font-weight:750; }
   .schema-meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .history-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:14px; }
+  .history-head h3 { font-size:14px; margin:0; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .history-list { margin-top:8px; display:grid; gap:8px; }
+  .history-item { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:10px; }
+  .history-meta { color:var(--muted); font-size:12px; display:flex; gap:8px; flex-wrap:wrap; }
+  .history-text { margin-top:6px; white-space:pre-wrap; word-break:break-word; }
   @media (max-width: 980px) {
     .filters { grid-template-columns:1fr 1fr; }
     .layout { grid-template-columns:1fr; }
@@ -147,6 +153,11 @@
         </div>
         <div class="replybox" id="dReply"></div>
         <div class="replybox" id="dSummary" style="min-height:80px"></div>
+        <div class="history-head">
+          <h3>History</h3>
+          <button id="historyRefresh" class="btn sm" type="button">刷新</button>
+        </div>
+        <div id="historyList" class="history-list"><div class="mutedline">No local history yet.</div></div>
         <a id="dNotion" class="btn" href="#" target="_blank" style="display:inline-block;text-decoration:none;margin-top:12px">Open Notion</a>
       </div>
     </aside>
@@ -157,6 +168,7 @@
 const $ = (id) => document.getElementById(id);
 let records = [];
 let selectedId = "";
+let selectedPhone = "";
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -232,6 +244,7 @@ function selectRecord(id, silent = false) {
     return;
   }
   selectedId = id;
+  selectedPhone = record.phone || "";
   if (!silent) renderRows();
   $("emptyDetail").style.display = "none";
   $("detail").style.display = "";
@@ -257,6 +270,44 @@ function selectRecord(id, silent = false) {
   $("dReply").textContent = record.lastReplyText || "No latest reply.";
   $("dSummary").textContent = record.aiSummary || "No summary.";
   $("dNotion").href = record.url || "#";
+  loadHistory(record.phone);
+}
+
+function historyTone(entry) {
+  if (entry.signal === "RED" || entry.status === "Stop" || entry.status === "Not Interested") return "red";
+  if (entry.signal === "GREEN" || entry.status === "Warm" || entry.status === "Appointment") return "green";
+  return "";
+}
+
+function renderHistory(entries) {
+  $("historyList").innerHTML = entries.length ? entries.map((entry) => `
+    <div class="history-item">
+      <div class="history-meta">
+        <span>${esc(fmt(entry.at))}</span>
+        <span>${esc(entry.instanceName || entry.senderInstance || "-")}</span>
+        ${pill(entry.route || entry.aiCategory || entry.status || "reply", historyTone(entry))}
+        ${entry.nextAction ? pill(entry.nextAction, "") : ""}
+      </div>
+      <div class="history-text">${esc(entry.text || "[reply]")}</div>
+      ${entry.suggestedReply ? `<div class="schema-meta">建议: ${esc(entry.suggestedReply)}</div>` : ""}
+    </div>
+  `).join("") : '<div class="mutedline">No local history yet.</div>';
+}
+
+async function loadHistory(phone = selectedPhone) {
+  if (!phone) {
+    renderHistory([]);
+    return;
+  }
+  $("historyList").innerHTML = '<div class="mutedline">Loading history...</div>';
+  try {
+    const res = await fetch("/api/conversations/history?phone=" + encodeURIComponent(phone) + "&limit=80");
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "History load failed");
+    renderHistory(data.entries || []);
+  } catch (error) {
+    $("historyList").innerHTML = `<div class="err">${esc(error.message)}</div>`;
+  }
 }
 
 function params() {
@@ -382,6 +433,7 @@ async function load() {
 
 $("schemaHealth").addEventListener("click", loadSchemaHealth);
 $("refreshReplies").addEventListener("click", refreshReplies);
+$("historyRefresh").addEventListener("click", () => loadHistory());
 $("refresh").addEventListener("click", load);
 ["project", "status", "sequenceStatus", "onlyReplied"].forEach((id) => $(id).addEventListener("change", load));
 $("q").addEventListener("keydown", (event) => { if (event.key === "Enter") load(); });

@@ -190,6 +190,7 @@ function readableEvolutionError(error, action, instanceName = "") {
 
 async function latestInboundMessages(conversations, instances, recordsByPhone) {
   const inbound = new Map();
+  const historyEvents = [];
   const instanceErrors = [];
   for (const instance of instances) {
     let response;
@@ -215,14 +216,22 @@ async function latestInboundMessages(conversations, instances, recordsByPhone) {
       const minMs = Math.max(latestReplyMs(record) + 1, latestBlastMs(record));
       if (at < minMs) continue;
 
+      const event = {
+        phone,
+        at: new Date(at).toISOString(),
+        text: conversations.extractText(message) || "[reply]",
+        record,
+        instanceName: instance.name,
+        messageId: message?.key?.id || null,
+      };
+      historyEvents.push(event);
       const previous = inbound.get(phone);
       if (!previous || at > previous.at) {
-        const text = conversations.extractText(message) || "[reply]";
-        inbound.set(phone, { at, text, record, instanceName: instance.name });
+        inbound.set(phone, { at, text: event.text, record, instanceName: instance.name, messageId: event.messageId });
       }
     }
   }
-  return { inbound, instanceErrors };
+  return { inbound, historyEvents, instanceErrors };
 }
 
 function replyProperties(schema, verdict, event, record) {
@@ -246,6 +255,18 @@ function replyProperties(schema, verdict, event, record) {
 }
 
 export function registerConversationsRoutes(router) {
+  router.get("/api/conversations/history", async (req, res, runtime) => {
+    const conversations = requireConversations(runtime);
+    if (!conversations.history) {
+      throw httpError(500, "Conversation history service 没有载入。请重启 Mamba server。");
+    }
+    const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
+    const phone = conversations.normalizePhone(url.searchParams.get("phone"));
+    if (!phone) throw httpError(400, "缺少有效 phone。");
+    const entries = await conversations.history.read(phone, { limit: url.searchParams.get("limit") || 100 });
+    json(res, 200, { ok: true, phone, entries });
+  });
+
   router.get("/api/conversations/schema-health", async (_req, res, runtime) => {
     const conversations = requireConversations(runtime);
     if (!conversations.hasBlastDatabase) {
@@ -295,10 +316,34 @@ export function registerConversationsRoutes(router) {
     const openNames = new Set(openInstances.map((instance) => instance.name));
     const senderOffline = records.filter((record) => record.senderInstance && !openNames.has(record.senderInstance)).length;
 
-    const { inbound, instanceErrors } = await latestInboundMessages(conversations, openInstances, byPhone);
+    const { inbound, historyEvents, instanceErrors } = await latestInboundMessages(conversations, openInstances, byPhone);
     if (instanceErrors.length === openInstances.length) {
       throw httpError(502, `所有 OPEN WhatsApp connection 都读取失败。${instanceErrors.join(" | ")}`);
     }
+    const historyPayloads = historyEvents.map((event) => {
+      const verdict = conversations.classifyReplyText(event.text);
+      return {
+        phone: event.phone,
+        name: event.record.name,
+        project: event.record.project,
+        senderInstance: event.record.senderInstance || "",
+        instanceName: event.instanceName,
+        messageId: event.messageId,
+        at: event.at,
+        text: event.text,
+        route: verdict.route,
+        signal: verdict.signal,
+        status: verdict.status,
+        sequenceStatus: verdict.sequenceStatus,
+        aiCategory: verdict.aiCategory,
+        nextAction: verdict.nextAction,
+        suggestedReply: verdict.suggestedReply,
+        source: "refresh_replies",
+      };
+    });
+    const historyResult = conversations.history
+      ? await conversations.history.appendMany(historyPayloads).catch(() => ({ added: 0, skipped: historyPayloads.length }))
+      : { added: 0, skipped: 0 };
     const updated = [];
     const failed = [];
     for (const [phone, event] of inbound) {
@@ -328,7 +373,16 @@ export function registerConversationsRoutes(router) {
       area: "conversations",
       event: "refresh_replies",
       message: `Refresh replies updated ${updated.length} lead(s).`,
-      context: { scannedPhones: byPhone.size, updated: updated.length, failed: failed.length, instanceErrors, duplicateRows, senderOffline },
+      context: {
+        scannedPhones: byPhone.size,
+        updated: updated.length,
+        failed: failed.length,
+        historyAdded: historyResult.added,
+        historySkipped: historyResult.skipped,
+        instanceErrors,
+        duplicateRows,
+        senderOffline,
+      },
     }).catch(() => {});
 
     const refreshed = await conversations.queryNotionRows(undefined).catch(() => records);
@@ -343,6 +397,8 @@ export function registerConversationsRoutes(router) {
       instanceErrors,
       duplicateRows,
       senderOffline,
+      historyAdded: historyResult.added,
+      historySkipped: historyResult.skipped,
       updates: updated.slice(0, 50),
     });
   });

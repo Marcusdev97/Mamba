@@ -10,6 +10,7 @@ import { createApp } from "./app/createApp.mjs";
 import { loadRuntime } from "./app/loadRuntime.mjs";
 import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
+import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createProjectService } from "./lib/project-service.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
@@ -78,6 +79,7 @@ const blastDsId = String(notionConfig?.databases?.blastLeads ?? "").replace(/[^a
 
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
+const conversationHistoryService = createConversationHistoryService({ rootDir: paths.rootDir });
 const blastCacheService = createBlastCacheService({
   rootDir: paths.rootDir,
   blastDatabaseId: blastDsId,
@@ -201,6 +203,7 @@ const runtime = await loadRuntime({
     messageTime,
     classifyReplyText,
     systemLogs: systemLogService,
+    history: conversationHistoryService,
     readCache: blastCacheService.read,
     writeCache: blastCacheService.writeCache,
     queryNotionRows: blastCacheService.queryRows,
