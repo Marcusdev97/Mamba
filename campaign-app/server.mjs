@@ -684,18 +684,6 @@ async function getProject(id) {
   return { project, config: await loadProjectConfig(project) };
 }
 
-function json(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(data));
-}
-
-async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
 function emptySnapshot() {
   return { running: false, stopped: false, state: null, log: [] };
 }
@@ -714,349 +702,7 @@ function buildCsv(state) {
   return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
-const handlers = {
-  // Real-time reply routing during a blast: scan Evolution for replies from THIS
-  // run's leads, classify each (Reply Routes), colour them (red/green) + write to
-  // Notion. Called repeatedly by the picker while a run is active.
-  "POST /api/next-flow/scan-replies": async (_req, res) => {
-    if (!runner || !runner.state) { json(res, 200, { ok: true, replies: [] }); return; }
-    const state = runner.state;
-    state.repliesSeen = state.repliesSeen || {};
-    const startMs = new Date(state.startAt || Date.now()).getTime();
-    const runPhones = new Map(); // phone -> name
-    for (const j of state.assignments) {
-      const p = nfNormalizePhone(j.lead?.phone);
-      if (p) runPhones.set(p, j.lead?.name || p);
-    }
-    let instances = [];
-    try { instances = await openInstances(api); }
-    catch { json(res, 200, { ok: true, replies: Object.values(state.repliesSeen), evoOffline: true }); return; }
-
-    const inbound = new Map(); // phone -> { at, text }
-    for (const inst of instances) {
-      let resp;
-      try { resp = await api(`/chat/findMessages/${encodeURIComponent(inst.name)}`, { method: "POST", body: JSON.stringify({ where: {} }) }); }
-      catch { continue; }
-      for (const m of collectMessageObjects(resp)) {
-        const at = messageTime(m);
-        if (at < startMs || m?.key?.fromMe) continue;
-        const phone = phoneFromJid(m?.key?.remoteJid);
-        if (!phone || !runPhones.has(phone)) continue;
-        const prev = inbound.get(phone);
-        if (!prev || at > prev.at) inbound.set(phone, { at, text: extractText(m) });
-      }
-    }
-
-    for (const [phone, ev] of inbound) {
-      if (state.repliesSeen[phone]) continue; // handled already
-      const v = classifyReplyText(ev.text);
-      const rec = { phone, name: runPhones.get(phone), signal: v.signal, route: v.route, status: v.status, text: (ev.text || "").slice(0, 80) };
-      state.repliesSeen[phone] = rec;
-      try {
-        const q = await notion("POST", `/databases/${blastDsId}/query`, { filter: { property: "Phone", phone_number: { equals: phone } }, page_size: 1 });
-        const page = q?.results?.[0];
-        if (page) {
-          const props = {
-            Status: { select: { name: v.status } },
-            "Sequence Status": { select: { name: v.sequenceStatus } },
-            "Next Action": { select: { name: v.nextAction } },
-            "AI Category": { select: { name: v.aiCategory } },
-            "Last Reply At": { date: { start: new Date(ev.at).toISOString() } },
-            "Last Reply Text": { rich_text: [{ text: { content: (ev.text || "").slice(0, 1900) } }] },
-            "Reply Checked At": { date: { start: new Date().toISOString() } },
-            "AI Summary": { rich_text: [{ text: { content: `[${v.signal}] ${v.route} · 建议:${v.suggestedReply}` } }] },
-          };
-          if (v.stopFlag) { props["Stop Flag"] = { checkbox: true }; props["Stop Reason"] = { rich_text: [{ text: { content: `Auto: ${v.route}` } }] }; }
-          await notion("PATCH", `/pages/${String(page.id).replace(/[^a-fA-F0-9]/g, "")}`, { properties: props });
-        }
-      } catch { /* keep the in-memory record even if Notion write fails */ }
-
-      // credit the template(s) this lead received: Response / Warm / Stop counts.
-      try {
-        const job = state.assignments.find((j) => nfNormalizePhone(j.lead?.phone) === phone);
-        let credits = job?.tplCredit; // the exact variants this lead got (rotation-safe)
-        if (!credits) {
-          const L = String(job?.language || "en").toUpperCase();
-          const t = (state.creditByLang || {})[L] || Object.values(state.creditByLang || {})[0] || {};
-          credits = [(t.p1 || [])[0], (t.p2 || [])[0]].filter((x) => x && x.pageId)
-            .map((x) => ({ pageId: x.pageId, imagePageId: x.imagePageId }));
-        }
-        for (const part of credits) {
-          if (!part?.pageId) continue;
-          await incPageNumber(part.pageId, "Response Count", 1);
-          if (v.signal === "GREEN") await incPageNumber(part.pageId, "Warm Count", 1);
-          else if (v.signal === "RED") await incPageNumber(part.pageId, "Stop Count", 1);
-          if (part.imagePageId) {
-            await incPageNumber(part.imagePageId, "Response Count", 1);
-            if (v.signal === "GREEN") await incPageNumber(part.imagePageId, "Warm Count", 1);
-            else if (v.signal === "RED") await incPageNumber(part.imagePageId, "Stop Count", 1);
-          }
-        }
-      } catch { /* analytics best-effort */ }
-    }
-    json(res, 200, { ok: true, replies: Object.values(state.repliesSeen) });
-  },
-
-  // --- Next-flow picker: list everyone DUE for their next flow ---------------
-  "GET /api/next-flow/list": async (_req, res) => {
-    if (!blastDsId) { json(res, 200, { ok: true, leads: [] }); return; }
-    const today = klTodayKL();
-    const filter = { and: [
-      { property: "Sequence Status", select: { equals: "Running" } },
-      { property: "Follow Up Due", date: { on_or_before: today } },
-      { property: "Stop Flag", checkbox: { equals: false } },
-      { property: "Status", select: { does_not_equal: "Stop" } },
-      { property: "Status", select: { does_not_equal: "Not Interested" } },
-      { property: "Status", select: { does_not_equal: "Appointment" } },
-      { property: "Status", select: { does_not_equal: "Invalid" } },
-    ] };
-    const leads = [];
-    let cursor;
-    do {
-      const body = { filter, page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
-      const data = await notion("POST", `/databases/${blastDsId}/query`, body);
-      for (const pg of data?.results ?? []) {
-        const phone = nfNormalizePhone(nfPhone(pg, "Phone"));
-        const nextFlow = nfSelect(pg, "Next Flow");
-        if (!phone || !nextFlow || nextFlow === "Completed") continue;
-        leads.push({
-          pageId: pg.id,
-          name: nfTitle(pg, "Name") || phone,
-          phone,
-          project: nfSelect(pg, "Project") || "Unknown",
-          nextFlow,
-          cohortDay: nfSelect(pg, "Cohort Day"),
-          lastReply: nfText(pg, "Last Reply Text"),
-          lastBlastAt: pg?.properties?.["Last Blast At"]?.date?.start || null,
-        });
-      }
-      cursor = data?.has_more ? data?.next_cursor : null;
-    } while (cursor);
-
-    // 🛡 开单前回复检测:Notion 侧的 Stop/Warm 已经被上面的 filter 挡掉了,
-    // 这里补最后一道闸门 —— 客户在 WhatsApp 回复了、但还没结算进 Notion 的人。
-    // 发现回复 -> 分类 -> 写回 Notion(退出序列/红旗)-> 从本次名单剔除。
-    const skipped = [];
-    let evoOffline = false;
-    if (leads.length) {
-      let instances = [];
-      try { instances = await openInstances(api); } catch { evoOffline = true; }
-      if (!evoOffline && instances.length) {
-        const byPhone = new Map(leads.map((l) => [l.phone, l]));
-        const inbound = new Map(); // phone -> { at, text }
-        for (const inst of instances) {
-          let resp;
-          try { resp = await api(`/chat/findMessages/${encodeURIComponent(inst.name)}`, { method: "POST", body: JSON.stringify({ where: {} }) }); }
-          catch { continue; }
-          for (const m of collectMessageObjects(resp)) {
-            if (m?.key?.fromMe) continue;
-            const phone = phoneFromJid(m?.key?.remoteJid);
-            const lead = phone && byPhone.get(phone);
-            if (!lead) continue;
-            const at = messageTime(m);
-            // 只认「上次 blast 之后」的回复;没有 Last Blast At 就看最近 7 天
-            const sinceMs = lead.lastBlastAt ? new Date(lead.lastBlastAt).getTime() : Date.now() - 7 * 864e5;
-            if (at < sinceMs) continue;
-            const prev = inbound.get(phone);
-            if (!prev || at > prev.at) inbound.set(phone, { at, text: extractText(m) });
-          }
-        }
-        for (const [phone, ev] of inbound) {
-          const lead = byPhone.get(phone);
-          const v = classifyReplyText(ev.text);
-          skipped.push({ name: lead.name, phone, signal: v.signal, route: v.route, text: (ev.text || "").slice(0, 80) });
-          try {
-            const props = {
-              Status: { select: { name: v.status } },
-              "Sequence Status": { select: { name: v.sequenceStatus } },
-              "Next Action": { select: { name: v.nextAction } },
-              "AI Category": { select: { name: v.aiCategory } },
-              "Last Reply At": { date: { start: new Date(ev.at).toISOString() } },
-              "Last Reply Text": { rich_text: [{ text: { content: (ev.text || "").slice(0, 1900) } }] },
-              "Reply Checked At": { date: { start: new Date().toISOString() } },
-              "AI Summary": { rich_text: [{ text: { content: `[${v.signal}] ${v.route} · 建议:${v.suggestedReply}` } }] },
-            };
-            if (v.stopFlag) { props["Stop Flag"] = { checkbox: true }; props["Stop Reason"] = { rich_text: [{ text: { content: `Auto: ${v.route}(picker 开单前检测)` } }] }; }
-            await notion("PATCH", `/pages/${String(lead.pageId).replace(/[^a-fA-F0-9]/g, "")}`, { properties: props });
-            await new Promise((r) => setTimeout(r, 200));
-          } catch { /* Notion 写失败也照样剔除,宁可少发不错发 */ }
-        }
-        if (skipped.length) {
-          const skipPhones = new Set(skipped.map((s) => s.phone));
-          for (let i = leads.length - 1; i >= 0; i--) if (skipPhones.has(leads[i].phone)) leads.splice(i, 1);
-        }
-      } else {
-        evoOffline = true;
-      }
-    }
-    json(res, 200, { ok: true, today, leads, skipped, evoOffline });
-  },
-
-  // Red-flag people right from the picker: stop their automatic sequence.
-  "POST /api/next-flow/redflag": async (req, res) => {
-    const body = await readBody(req);
-    const ids = Array.isArray(body.pageIds) ? body.pageIds : [];
-    let done = 0;
-    for (const id of ids) {
-      try {
-        await notion("PATCH", `/pages/${String(id).replace(/[^a-fA-F0-9]/g, "")}`, { properties: {
-          "Stop Flag": { checkbox: true },
-          "Sequence Status": { select: { name: "Stopped" } },
-          "Stop Reason": { rich_text: [{ text: { content: "Manual: marked 不发 in picker" } }] },
-        } });
-        done += 1;
-        await new Promise((r) => setTimeout(r, 200));
-      } catch { /* skip failures, report count */ }
-    }
-    json(res, 200, { ok: true, flagged: done });
-  },
-
-  // Load the ticked leads into leadsCache so the normal prepare/start pipeline
-  // blasts exactly them. projectId must be a real Console project id.
-  "POST /api/next-flow/load": async (req, res) => {
-    if (runner && runner.running) throw new Error("campaign 正在运行，请先停止。");
-    const body = await readBody(req);
-    const { project } = await getProject(body.project);
-    const incoming = Array.isArray(body.leads) ? body.leads : [];
-    const seen = new Set();
-    const leads = [];
-    for (const item of incoming) {
-      const phone = nfNormalizePhone(item.phone);
-      if (!phone || seen.has(phone)) continue;
-      seen.add(phone);
-      leads.push({ id: `pick_${String(leads.length + 1).padStart(5, "0")}`, name: String(item.name ?? "").trim() || "there", phone });
-    }
-    if (!leads.length) throw new Error("没有可发送的选中客户。");
-    leadsCache = { projectId: project.id, leads, rejected: [], sourcePath: "(next-flow picker)" };
-    json(res, 200, { ok: true, project: project.id, loaded: leads.length });
-  },
-
-  // Bulk-set which flow a list of phones should get next. Paste a compiled list
-  // (e.g. everyone who already received Flow 2) and set them to "Flow 3 - ..."
-  // so they move to that group and get the right template on the next blast.
-  "POST /api/next-flow/set-flow": async (req, res) => {
-    if (!blastDsId) throw new Error("没有 Notion 配置。");
-    const body = await readBody(req);
-    const nextFlow = String(body.nextFlow ?? "").trim();
-    const target = flowByLabel(nextFlow);
-    if (!target) throw new Error(`未知的 Next Flow:${nextFlow}`);
-    const prev = FLOW_SEQUENCE.find((f) => f.next === target.key); // the flow they just received
-
-    const raw = Array.isArray(body.phones) ? body.phones : String(body.phones ?? "").split(/[\s,;]+/);
-    const phones = [...new Set(raw.map(nfNormalizePhone).filter(Boolean))];
-    if (!phones.length) throw new Error("没有有效的电话号码。");
-
-    const props = {
-      "Next Flow": { select: { name: target.label } },
-      "Sequence Status": { select: { name: "Running" } },
-      "Cohort Day": { select: { name: prev ? prev.cohortDay : "Day 0" } },
-      "Follow Up Due": { date: { start: klTodayKL() } }, // due now so it shows in the picker
-    };
-    if (prev) props["Last Flow Sent"] = { select: { name: prev.label } };
-
-    let set = 0, skippedStop = 0;
-    const notFound = [];
-    for (const phone of phones) {
-      const q = await notion("POST", `/databases/${blastDsId}/query`, {
-        filter: { property: "Phone", phone_number: { equals: phone } }, page_size: 1,
-      });
-      const page = q?.results?.[0];
-      if (!page) { notFound.push(phone); continue; }
-      if (page.properties?.["Stop Flag"]?.checkbox === true) { skippedStop += 1; continue; } // never re-activate opted-out
-      await notion("PATCH", `/pages/${String(page.id).replace(/[^a-fA-F0-9]/g, "")}`, { properties: props });
-      set += 1;
-      await new Promise((r) => setTimeout(r, 220));
-    }
-    json(res, 200, { ok: true, nextFlow: target.label, set, skippedStop, notFound: notFound.length, notFoundSample: notFound.slice(0, 15) });
-  },
-
-  // Shift an ENTIRE group to another flow: everyone in <project> whose Next Flow
-  // is <fromFlow> (and still Running) becomes <toFlow>. One click for "this whole
-  // batch already got that flow — bump them all forward." No phone list needed.
-  "POST /api/next-flow/set-group": async (req, res) => {
-    if (!blastDsId) throw new Error("没有 Notion 配置。");
-    const body = await readBody(req);
-    const projectName = String(body.projectName ?? "").trim();
-    const fromFlow = String(body.fromFlow ?? "").trim();
-    const toFlow = String(body.toFlow ?? "").trim();
-    const target = flowByLabel(toFlow);
-    if (!projectName || !fromFlow) throw new Error("缺少 projectName / fromFlow。");
-    if (!target) throw new Error(`未知的目标 Flow:${toFlow}`);
-    const prev = FLOW_SEQUENCE.find((f) => f.next === target.key);
-
-    const props = {
-      "Next Flow": { select: { name: target.label } },
-      "Sequence Status": { select: { name: "Running" } },
-      "Cohort Day": { select: { name: prev ? prev.cohortDay : "Day 0" } },
-      "Follow Up Due": { date: { start: klTodayKL() } },
-    };
-    if (prev) props["Last Flow Sent"] = { select: { name: prev.label } };
-
-    let cursor, set = 0, skippedStop = 0;
-    do {
-      const q = await notion("POST", `/databases/${blastDsId}/query`, {
-        filter: { and: [
-          { property: "Project", select: { equals: projectName } },
-          { property: "Next Flow", select: { equals: fromFlow } },
-          { property: "Sequence Status", select: { equals: "Running" } },
-        ] },
-        page_size: 100,
-        ...(cursor ? { start_cursor: cursor } : {}),
-      });
-      for (const page of q?.results ?? []) {
-        if (page.properties?.["Stop Flag"]?.checkbox === true) { skippedStop += 1; continue; }
-        await notion("PATCH", `/pages/${String(page.id).replace(/[^a-fA-F0-9]/g, "")}`, { properties: props });
-        set += 1;
-        await new Promise((r) => setTimeout(r, 200));
-      }
-      cursor = q?.has_more ? q?.next_cursor : null;
-    } while (cursor);
-
-    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop });
-  },
-
-  // Read-only preview:看这一轮实际会发的模板文案(不写任何东西、不发送)。
-  "POST /api/next-flow/preview-template": async (req, res) => {
-    if (!blastDsId) throw new Error("没有 Notion 配置。");
-    const body = await readBody(req);
-    const projectName = String(body.projectName ?? "").trim();
-    const flow = String(body.flow ?? "").trim();
-    if (!projectName || !flow) throw new Error("缺少 projectName / flow。");
-    const languages = await fetchFlowTemplates(projectName, flow);
-    json(res, 200, { ok: true, projectName, flow, languages });
-  },
-
-  // Override the prepared run's message text/media with the templates tagged for
-  // this Cohort Day + Project in Notion (Status = Active). Call AFTER prepare,
-  // BEFORE start, so the blast sends the right flow's copy automatically.
-  "POST /api/next-flow/apply-templates": async (req, res) => {
-    if (!runner || !runner.state) throw new Error("请先 prepare。");
-    if (runner.running) throw new Error("campaign 正在运行。");
-    if (!blastDsId) throw new Error("没有 Notion 配置。");
-    const body = await readBody(req);
-    const projectName = String(body.projectName ?? "").trim();
-    const flow = String(body.flow ?? "").trim();
-    if (!projectName || !flow) throw new Error("缺少 projectName 或 flow。");
-
-    const { byLang, overridden } = await applyNotionFlowTemplatesToState(runner.state, {
-      projectName,
-      flow,
-      markFlowRun: true,
-      credit: true,
-    });
-    await runner.saveState();
-    const sample = runner.state.assignments[0];
-    json(res, 200, {
-      ok: true, flow, project: projectName,
-      languages: Object.keys(byLang),
-      overridden,
-      twoPart: Object.values(byLang).some((v) => v.parts && Object.keys(v.parts).filter((n) => (v.parts[n] || []).length).length >= 2),
-      sample: sample ? String(sample.part1Text || "").slice(0, 120) : "",
-    });
-  },
-
-};
+const handlers = {};
 
 // ---- Local Blast Leads snapshot (a cached copy of Notion for fast batch matching) ----
 const BLAST_CACHE_PATH = () => path.join(paths.rootDir, "campaign-data", "blast_leads_cache.json");
@@ -1231,6 +877,31 @@ const runtime = await loadRuntime({
     autoNotionUpload,
     emptySnapshot,
     buildCsv,
+  },
+  nextFlow: {
+    blastDatabaseId: blastDsId,
+    api,
+    notion,
+    normalizePhone: nfNormalizePhone,
+    nfPhone,
+    nfSelect,
+    nfTitle,
+    nfText,
+    klTodayKL,
+    openInstances: () => openInstances(api),
+    collectMessageObjects,
+    extractText,
+    phoneFromJid,
+    messageTime,
+    classifyReplyText,
+    incPageNumber,
+    getRunner: () => runner,
+    getProject,
+    setLeadsCache: (value) => { leadsCache = value; },
+    flowByLabel,
+    flowSequence: FLOW_SEQUENCE,
+    fetchFlowTemplates,
+    applyNotionFlowTemplatesToState,
   },
 });
 const server = http.createServer(createApp(runtime));
