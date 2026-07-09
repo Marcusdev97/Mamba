@@ -8,6 +8,9 @@ import { exec, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createApp } from "./app/createApp.mjs";
 import { loadRuntime } from "./app/loadRuntime.mjs";
+import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
+import { createNotionService } from "./lib/notion-service.mjs";
+import { createSettingsService } from "./lib/settings-service.mjs";
 import {
   paths,
   loadEnv,
@@ -45,16 +48,24 @@ for (const [k, v] of Object.entries(env)) {
   if (v !== "" && process.env[k] === undefined) process.env[k] = v;
 }
 const api = makeApi(env);
+const notionService = createNotionService({ env });
+const {
+  notionTokenValue,
+  notion,
+  klTodayKL,
+  nfTitle,
+  nfText,
+  nfPhone,
+  nfSelect,
+  nfNormalizePhone,
+  nfAddDaysKL,
+} = notionService;
 
 let leadsCache = null; // { projectId, leads, rejected, sourcePath } | null
 let runner = null;
 
 // --- Notion access (for the "选人发下一轮" picker) --------------------------
-const NOTION_VERSION = "2022-06-28";
 const envPath = path.join(paths.rootDir, "evolution-pilot", ".env");
-function notionTokenValue() {
-  return env.NOTION_API_KEY || env.NOTION_TOKEN || process.env.NOTION_API_KEY || process.env.NOTION_TOKEN || "";
-}
 let notionConfig = {};
 try {
   notionConfig = JSON.parse(await fs.readFile(path.join(paths.rootDir, "campaign-data", "notion_config.json"), "utf8"));
@@ -76,202 +87,15 @@ function resolveMedia(imageName) {
   return "";
 }
 
-async function notion(method, pathname, body, attempt = 0) {
-  const token = notionTokenValue();
-  if (!token) throw new Error("没有 Notion token。先运行 Set Notion Token。");
-  const r = await fetch(`https://api.notion.com/v1${pathname}`, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Notion-Version": NOTION_VERSION },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20000),
-  });
-  // Auto-retry on rate limit / transient errors so heavy blasts don't drop updates.
-  if ((r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504) && attempt < 5) {
-    const retryAfter = Number(r.headers.get("retry-after")) || (attempt + 1);
-    await new Promise((res) => setTimeout(res, Math.min(retryAfter + 0.5, 10) * 1000));
-    return notion(method, pathname, body, attempt + 1);
-  }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`Notion HTTP ${r.status} ${JSON.stringify(data)}`);
-  return data;
-}
-
-const klTodayKL = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
-const nfTitle = (p, n) => (p?.properties?.[n]?.title ?? []).map((t) => t.plain_text).join("").trim();
-const nfText = (p, n) => (p?.properties?.[n]?.rich_text ?? []).map((t) => t.plain_text).join("").trim();
-const nfPhone = (p, n) => String(p?.properties?.[n]?.phone_number ?? "").trim();
-const nfSelect = (p, n) => p?.properties?.[n]?.select?.name ?? p?.properties?.[n]?.status?.name ?? "";
-function nfNormalizePhone(value) {
-  let d = String(value ?? "").replace(/\D/g, "");
-  if (d.startsWith("0")) d = `60${d.slice(1)}`;
-  return /^\d{8,15}$/.test(d) ? d : null;
-}
-function nfAddDaysKL(days) {
-  const d = new Date(`${klTodayKL()}T00:00:00+08:00`);
-  d.setUTCDate(d.getUTCDate() + Number(days || 0));
-  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
-}
-
-function maskSecret(value) {
-  const s = String(value || "");
-  if (!s) return "";
-  if (s.length <= 10) return `${s.slice(0, 2)}***${s.slice(-2)}`;
-  return `${s.slice(0, 6)}...${s.slice(-4)}`;
-}
-
-async function writeEnvValues(values) {
-  let text = "";
-  try {
-    text = await fs.readFile(envPath, "utf8");
-  } catch {
-    await fs.mkdir(path.dirname(envPath), { recursive: true });
-  }
-  const lines = text.split(/\r?\n/);
-  for (const [key, value] of Object.entries(values)) {
-    const clean = value === null ? null : String(value ?? "").trim();
-    if (clean !== null && !clean) continue;
-    const line = `${key}=${clean}`;
-    let replaced = false;
-    for (let index = 0; index < lines.length; index += 1) {
-      if (lines[index].startsWith(`${key}=`)) {
-        if (clean === null) {
-          lines.splice(index, 1);
-          index -= 1;
-          replaced = true;
-          continue;
-        }
-        lines[index] = line;
-        replaced = true;
-      }
-    }
-    if (clean !== null && !replaced) {
-      if (lines.length && lines.at(-1) !== "") lines.push("");
-      lines.push(line);
-    }
-    if (clean === null) {
-      delete env[key];
-      delete process.env[key];
-    } else {
-      env[key] = clean;
-      process.env[key] = clean;
-    }
-  }
-  await fs.writeFile(envPath, `${lines.join("\n").replace(/\n+$/, "")}\n`);
-}
-
-function isTelegramBotToken(value) {
-  return /^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(String(value || "").trim());
-}
-
-function isTelegramChatId(value) {
-  const s = String(value || "").trim();
-  return /^-?\d{5,}$/.test(s) || /^@[A-Za-z0-9_]{5,}$/.test(s);
-}
-
-function assertTelegramBotToken(value) {
-  if (!isTelegramBotToken(value)) {
-    throw new Error("Telegram Bot Token 格式不对。Bot token 长这样: 123456789:ABC...，请放在 Bot Token 栏位。");
-  }
-}
-
-function assertTelegramChatId(value) {
-  const s = String(value || "").trim();
-  if (!s) return;
-  if (isTelegramBotToken(s)) {
-    throw new Error("你把 Bot Token 放进 Chat ID 了。Chat ID 是数字；先对 bot 发 hi，再点「自动找 Chat ID」。");
-  }
-  if (/^[A-Za-z0-9_]+_bot$/i.test(s) || /^@[A-Za-z0-9_]+_bot$/i.test(s)) {
-    throw new Error("Chat ID 不是 bot username。先在 Telegram 对这个 bot 发一句 hi，然后点「自动找 Chat ID」。");
-  }
-  if (!isTelegramChatId(s)) {
-    throw new Error("Chat ID 格式不对。私人聊天通常是数字；group/channel 可以是 @username。");
-  }
-}
-
-function settingsSnapshot() {
-  const botToken = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
-  const chatId = env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
-  const botValid = isTelegramBotToken(botToken);
-  const chatValid = isTelegramChatId(chatId);
-  return {
-    notion: {
-      configured: Boolean(notionTokenValue()),
-      masked: maskSecret(notionTokenValue()),
-    },
-    telegram: {
-      botConfigured: botValid,
-      botInvalid: Boolean(botToken && !botValid),
-      botMasked: maskSecret(botToken),
-      chatConfigured: chatValid,
-      chatInvalid: Boolean(chatId && !chatValid),
-      chatId: chatValid ? chatId : "",
-    },
-  };
-}
-
-async function telegramApi(method, token, body = {}) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20000),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!data.ok) throw new Error(`Telegram ${method}: ${JSON.stringify(data)}`);
-  return data.result;
-}
-
-function telegramName(value) {
-  if (!value) return "";
-  const handle = value.username ? `@${value.username}` : "";
-  const full = [value.first_name, value.last_name].filter(Boolean).join(" ").trim();
-  return value.title || full || handle || String(value.id || "");
-}
-
-async function settingsIdentity() {
-  const identity = {
-    notion: { ok: false, label: "", error: "" },
-    telegram: { botOk: false, botLabel: "", chatOk: false, chatLabel: "", error: "" },
-  };
-
-  const token = notionTokenValue();
-  if (token) {
-    try {
-      const me = await notion("GET", "/users/me");
-      identity.notion.ok = true;
-      identity.notion.label = me?.name || me?.bot?.owner?.workspace_name || me?.id || "Notion integration";
-    } catch (error) {
-      identity.notion.error = error.message;
-    }
-  }
-
-  const botToken = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
-  const chatId = env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
-  if (isTelegramBotToken(botToken)) {
-    try {
-      const bot = await telegramApi("getMe", botToken, {});
-      identity.telegram.botOk = true;
-      identity.telegram.botLabel = `${telegramName(bot)}${bot.username ? "" : ""}`;
-    } catch (error) {
-      identity.telegram.error = error.message;
-    }
-    if (isTelegramChatId(chatId)) {
-      try {
-        const chat = await telegramApi("getChat", botToken, { chat_id: chatId });
-        identity.telegram.chatOk = true;
-        const name = telegramName(chat);
-        const username = chat.username ? `@${chat.username}` : "";
-        identity.telegram.chatLabel = [name, username && username !== name ? username : "", chat.type ? `(${chat.type})` : ""]
-          .filter(Boolean)
-          .join(" ");
-      } catch (error) {
-        identity.telegram.error = error.message;
-      }
-    }
-  }
-
-  return identity;
-}
+const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
+const blastCacheService = createBlastCacheService({
+  rootDir: paths.rootDir,
+  blastDatabaseId: blastDsId,
+  notion,
+  nfSelect,
+  nfTitle,
+  nfText,
+});
 
 // Fetch the Active templates for a Project + Cohort Day, grouped by language:
 // { EN: { p1:{text,media}, p2:{text,media} }, ZH:{...} }. Shared by the preview
@@ -704,55 +528,6 @@ function buildCsv(state) {
 
 const handlers = {};
 
-// ---- Local Blast Leads snapshot (a cached copy of Notion for fast batch matching) ----
-const BLAST_CACHE_PATH = () => path.join(paths.rootDir, "campaign-data", "blast_leads_cache.json");
-
-function blastRowToRecord(p) {
-  const pr = p.properties || {};
-  return {
-    project: nfSelect(p, "Project") || "",
-    name: nfTitle(p, "Name") || "",
-    phone: pr["Phone"]?.phone_number || "",
-    firstBlastAt: pr["First Blast At"]?.date?.start || null,
-    lastBlastAt: pr["Last Blast At"]?.date?.start || null,
-    lastFlowSent: nfSelect(p, "Last Flow Sent") || "",
-    nextFlow: nfSelect(p, "Next Flow") || "",
-    cohortDay: nfSelect(p, "Cohort Day") || "",
-    sequenceStatus: nfSelect(p, "Sequence Status") || "",
-    status: nfSelect(p, "Status") || "",
-    stopFlag: pr["Stop Flag"]?.checkbox === true,
-    stopReason: nfText(p, "Stop Reason") || "",
-    replyCount: pr["Reply Count"]?.number ?? null,
-    lastReplyAt: pr["Last Reply At"]?.date?.start || null,
-    aiCategory: nfSelect(p, "AI Category") || "",
-    lastReplyText: nfText(p, "Last Reply Text") || "",
-    senderInstance: nfSelect(p, "Sender Instance") || "",
-    url: `https://www.notion.so/${String(p.id).replace(/-/g, "")}`,
-  };
-}
-
-async function syncBlastLeadsCache() {
-  if (!blastDsId) throw new Error("没有 Notion 配置。");
-  const records = [];
-  let cursor;
-  do {
-    const data = await notion("POST", `/databases/${blastDsId}/query`, { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
-    for (const p of data?.results ?? []) records.push(blastRowToRecord(p));
-    cursor = data?.has_more ? data?.next_cursor : null;
-  } while (cursor);
-  const payload = { syncedAt: new Date().toISOString(), count: records.length, records };
-  await fs.mkdir(path.dirname(BLAST_CACHE_PATH()), { recursive: true });
-  await fs.writeFile(BLAST_CACHE_PATH(), JSON.stringify(payload));
-  return payload;
-}
-
-async function readBlastLeadsCache() {
-  try {
-    const c = JSON.parse(await fs.readFile(BLAST_CACHE_PATH(), "utf8"));
-    return { syncedAt: c.syncedAt || null, records: Array.isArray(c.records) ? c.records : [] };
-  } catch { return { syncedAt: null, records: [] }; }
-}
-
 // Add a "Project" select/multi_select option to a Notion database, if missing.
 async function addProjectOption(dbId, name) {
   const db = await notion("GET", `/databases/${dbId}`);
@@ -776,16 +551,7 @@ const runtime = await loadRuntime({
   appDir,
   paths,
   handlers,
-  settings: {
-    env,
-    snapshot: settingsSnapshot,
-    identity: settingsIdentity,
-    writeEnvValues,
-    telegramApi,
-    isTelegramChatId,
-    assertTelegramBotToken,
-    assertTelegramChatId,
-  },
+  settings: settingsService,
   projects: {
     alias: notionConfig?.projectAlias || {},
     firstFlowLabel: FIRST_FLOW_LABEL,
@@ -817,19 +583,9 @@ const runtime = await loadRuntime({
     hasBlastDatabase: Boolean(blastDsId),
     importLeads,
     normalizePhone: nfNormalizePhone,
-    readCache: readBlastLeadsCache,
-    syncCache: syncBlastLeadsCache,
-    queryNotionRows: async (filter) => {
-      if (!blastDsId) throw new Error("没有 Notion 配置。");
-      const rows = [];
-      let cursor;
-      do {
-        const data = await notion("POST", `/databases/${blastDsId}/query`, { filter, page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
-        for (const page of data?.results ?? []) rows.push(blastRowToRecord(page));
-        cursor = data?.has_more ? data?.next_cursor : null;
-      } while (cursor);
-      return rows;
-    },
+    readCache: blastCacheService.read,
+    syncCache: blastCacheService.sync,
+    queryNotionRows: blastCacheService.queryRows,
   },
   templates: {
     rootDir: paths.rootDir,
