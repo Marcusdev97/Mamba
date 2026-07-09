@@ -7,6 +7,16 @@ function requireConversations(runtime) {
   return runtime.conversations;
 }
 
+async function writeConversationLog(conversations, level, event, message, context = {}) {
+  await conversations.systemLogs?.write({
+    level,
+    area: "conversations",
+    event,
+    message,
+    context,
+  }).catch(() => {});
+}
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -277,7 +287,24 @@ export function registerConversationsRoutes(router) {
     }
 
     const database = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
-    json(res, 200, { ok: true, ...checkSchema(database) });
+    const health = checkSchema(database);
+    await writeConversationLog(
+      conversations,
+      health.ok ? "info" : "warn",
+      "schema_health",
+      health.ok ? "Blast Leads schema is healthy." : "Blast Leads schema needs attention.",
+      {
+        databaseTitle: health.databaseTitle,
+        ok: health.counts.ok,
+        missing: health.counts.missing,
+        wrongType: health.counts.wrongType,
+        missingFields: health.checks.filter((item) => item.status === "missing").map((item) => item.name),
+        wrongTypeFields: health.checks
+          .filter((item) => item.status === "wrong_type")
+          .map((item) => ({ name: item.name, current: item.actual, need: item.types.join(" / ") })),
+      },
+    );
+    json(res, 200, { ok: true, ...health });
   });
 
   router.post("/api/conversations/refresh-replies", async (_req, res, runtime) => {
@@ -316,7 +343,21 @@ export function registerConversationsRoutes(router) {
     const openNames = new Set(openInstances.map((instance) => instance.name));
     const senderOffline = records.filter((record) => record.senderInstance && !openNames.has(record.senderInstance)).length;
 
+    await writeConversationLog(conversations, "info", "refresh_replies_start", "Started scanning WhatsApp replies.", {
+      notionRows: records.length,
+      scannedPhones: byPhone.size,
+      openInstances: openInstances.map((instance) => instance.name),
+      duplicateRows,
+      senderOffline,
+    });
+
     const { inbound, historyEvents, instanceErrors } = await latestInboundMessages(conversations, openInstances, byPhone);
+    if (instanceErrors.length) {
+      await writeConversationLog(conversations, "warn", "refresh_replies_instance_errors", "Some WhatsApp connections could not be scanned.", {
+        failedConnections: instanceErrors.length,
+        errors: instanceErrors,
+      });
+    }
     if (instanceErrors.length === openInstances.length) {
       throw httpError(502, `所有 OPEN WhatsApp connection 都读取失败。${instanceErrors.join(" | ")}`);
     }
@@ -341,9 +382,26 @@ export function registerConversationsRoutes(router) {
         source: "refresh_replies",
       };
     });
+    let historyWriteError = "";
     const historyResult = conversations.history
-      ? await conversations.history.appendMany(historyPayloads).catch(() => ({ added: 0, skipped: historyPayloads.length }))
+      ? await conversations.history.appendMany(historyPayloads).catch((error) => {
+          historyWriteError = error.message || String(error);
+          return { added: 0, skipped: historyPayloads.length };
+        })
       : { added: 0, skipped: 0 };
+    if (historyWriteError) {
+      await writeConversationLog(conversations, "warn", "refresh_replies_history_failed", "Reply history could not be saved locally.", {
+        attempted: historyPayloads.length,
+        error: historyWriteError,
+      });
+    } else if (historyPayloads.length) {
+      await writeConversationLog(conversations, "info", "refresh_replies_history", "Reply history was saved locally.", {
+        foundMessages: historyPayloads.length,
+        added: historyResult.added,
+        skipped: historyResult.skipped,
+      });
+    }
+
     const updated = [];
     const failed = [];
     for (const [phone, event] of inbound) {
@@ -368,13 +426,22 @@ export function registerConversationsRoutes(router) {
       }
     }
 
-    await conversations.systemLogs?.write({
-      level: failed.length ? "warn" : "info",
-      area: "conversations",
-      event: "refresh_replies",
-      message: `Refresh replies updated ${updated.length} lead(s).`,
-      context: {
+    if (failed.length) {
+      await writeConversationLog(conversations, "warn", "refresh_replies_notion_failed", "Some replies were found but could not update Notion.", {
+        failed: failed.length,
+        examples: failed.slice(0, 10),
+      });
+    }
+
+    await writeConversationLog(
+      conversations,
+      failed.length || instanceErrors.length || senderOffline ? "warn" : "info",
+      "refresh_replies_complete",
+      `Refresh Replies completed: ${updated.length} updated, ${failed.length} failed.`,
+      {
         scannedPhones: byPhone.size,
+        scannedInstances: openInstances.map((instance) => instance.name),
+        foundReplies: inbound.size,
         updated: updated.length,
         failed: failed.length,
         historyAdded: historyResult.added,
@@ -383,7 +450,7 @@ export function registerConversationsRoutes(router) {
         duplicateRows,
         senderOffline,
       },
-    }).catch(() => {});
+    );
 
     const refreshed = await conversations.queryNotionRows(undefined).catch(() => records);
     await conversations.writeCache(refreshed).catch(() => {});

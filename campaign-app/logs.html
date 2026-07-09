@@ -6,12 +6,25 @@
 <title>System Logs · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
-  .toolbar { display:grid; grid-template-columns: 140px 160px 1fr auto; gap:10px; align-items:end; }
+  .toolbar { display:grid; grid-template-columns: 140px 160px 160px 1fr auto; gap:10px; align-items:end; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+  .chips .btn { padding:10px 12px; min-height:0; font-size:14px; }
+  .chips .active { border-color:var(--green); color:var(--green); }
   .level { font-weight:800; text-transform:uppercase; }
   .level.info { color:var(--blue); }
   .level.warn { color:var(--amber); }
   .level.error { color:var(--red); }
   .ctx { max-width:420px; white-space:pre-wrap; word-break:break-word; font-family:var(--font-mono); font-size:12px; color:var(--muted); }
+  input[type="date"] {
+    width:100%;
+    min-height:48px;
+    border-radius:10px;
+    border:1px solid var(--line);
+    background:var(--panel2);
+    color:var(--text);
+    padding:0 12px;
+    font:inherit;
+  }
   @media (max-width: 820px) { .toolbar { grid-template-columns:1fr; } }
 </style>
 </head>
@@ -39,9 +52,21 @@
           <option value="error">Error</option>
         </select>
       </label>
-      <label class="fld"><span>Area</span><input id="area" type="text" placeholder="api / campaign" /></label>
+      <label class="fld"><span>Area</span><input id="area" type="text" placeholder="api / campaign / conversations" /></label>
+      <label class="fld"><span>Date</span><input id="date" type="date" /></label>
       <label class="fld"><span>Search</span><input id="q" type="search" placeholder="timeout / Notion / Telegram..." /></label>
       <button class="btn primary" id="refresh">刷新</button>
+    </div>
+    <div class="chips" id="areaChips">
+      <button class="btn active" data-area="">All</button>
+      <button class="btn" data-area="api">API</button>
+      <button class="btn" data-area="system">System</button>
+      <button class="btn" data-area="campaign">Campaign</button>
+      <button class="btn" data-area="conversations">Conversations</button>
+      <button class="btn" data-area="settings">Settings</button>
+      <button class="btn" data-area="whatsapp">WhatsApp</button>
+      <button class="btn" data-area="notion">Notion</button>
+      <button class="btn" data-area="telegram">Telegram</button>
     </div>
     <div class="muted" id="meta"></div>
     <div class="err" id="err"></div>
@@ -67,6 +92,7 @@ async function loadLogs() {
   const params = new URLSearchParams({ limit: "200" });
   if ($("level").value) params.set("level", $("level").value);
   if ($("area").value.trim()) params.set("area", $("area").value.trim());
+  if ($("date").value) params.set("date", $("date").value);
   if ($("q").value.trim()) params.set("q", $("q").value.trim());
   try {
     const res = await fetch("/api/system-logs?" + params.toString());
@@ -85,8 +111,25 @@ async function loadLogs() {
   }
 }
 $("refresh").addEventListener("click", loadLogs);
-["level","area","q"].forEach((id) => $(id).addEventListener("change", loadLogs));
+function syncAreaChips() {
+  const area = $("area").value.trim();
+  document.querySelectorAll("#areaChips .btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.area === area);
+  });
+}
+document.querySelectorAll("#areaChips .btn").forEach((button) => {
+  button.addEventListener("click", () => {
+    $("area").value = button.dataset.area;
+    syncAreaChips();
+    loadLogs();
+  });
+});
+["level","area","date","q"].forEach((id) => $(id).addEventListener("change", () => {
+  syncAreaChips();
+  loadLogs();
+}));
 $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") loadLogs(); });
+syncAreaChips();
 loadLogs();
 </script>
 </body>
