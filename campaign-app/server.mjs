@@ -11,6 +11,7 @@ import { loadRuntime } from "./app/loadRuntime.mjs";
 import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
+import { createProjectService } from "./lib/project-service.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
 import { createTemplateService } from "./lib/template-service.mjs";
 import {
@@ -128,35 +129,14 @@ const {
   emptySnapshot,
   buildCsv,
 } = campaignRunService;
-
-// All normalized phone numbers already in Blast Leads for a project — used to skip
-// re-importing (and re-blasting) people who are already in the sequence.
-async function fetchBlastedPhones(projectName) {
-  const phones = new Set();
-  if (!blastDsId || !projectName) return phones;
-  let cursor;
-  do {
-    const q = await notion("POST", `/databases/${blastDsId}/query`, {
-      filter: { property: "Project", select: { equals: projectName } },
-      page_size: 100,
-      ...(cursor ? { start_cursor: cursor } : {}),
-    });
-    for (const page of q?.results ?? []) {
-      const n = nfNormalizePhone(page.properties?.["Phone"]?.phone_number);
-      if (n) phones.add(n);
-    }
-    cursor = q?.has_more ? q?.next_cursor : null;
-  } while (cursor);
-  return phones;
-}
-
-// Read fresh each time so "Sync Templates" changes show up without restarting.
-async function getProject(id) {
-  const projects = await loadProjects();
-  const project = projects.find((p) => p.id === id) || projects[0];
-  if (!project) throw new Error("campaign-assets/projects.json 里没有配置任何 project。");
-  return { project, config: await loadProjectConfig(project) };
-}
+const projectService = createProjectService({
+  blastDatabaseId: blastDsId,
+  loadProjects,
+  loadProjectConfig,
+  notion,
+  normalizePhone: nfNormalizePhone,
+});
+const { getProject, fetchBlastedPhones } = projectService;
 
 const handlers = {};
 
@@ -168,6 +148,7 @@ const runtime = await loadRuntime({
   appDir,
   paths,
   handlers,
+  getRunner: () => runner,
   settings: settingsService,
   projects: {
     alias: notionConfig?.projectAlias || {},
