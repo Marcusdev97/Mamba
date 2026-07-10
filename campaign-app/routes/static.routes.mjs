@@ -10,6 +10,9 @@ const HTML_ROUTES = {
   "/settings": "settings.html",
   "/logs": "logs.html",
   "/conversations": "conversations.html",
+  "/follow-up": "follow-up.html",
+  "/bot-rules": "bot-rules.html",
+  "/flow-map": "flow-map.html",
 };
 
 async function serveHtml(res, appDir, filename) {

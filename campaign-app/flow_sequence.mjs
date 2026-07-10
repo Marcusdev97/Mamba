@@ -10,6 +10,14 @@
 // Flow 10 (Surrounding) runs as the final touch AFTER Flow 8 (Invitation), so the
 // day-by-day drip is: 1 -> 2 -> 3 -> 4 -> 6 -> 7 -> 8 -> 10 (Day 0 ... Day 18).
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(appDir, "..");
+const botRulesPath = path.join(rootDir, "campaign-data", "bot_rules.json");
+
 export const FLOW_SEQUENCE = [
   { key: "flow_1", label: "Flow 1 - Project Template", next: "flow_2", dueDays: 2, cohortDay: "Day 0" },
   { key: "flow_2", label: "Flow 2 - Layout", next: "flow_3", dueDays: 2, cohortDay: "Day 2" },
@@ -54,6 +62,57 @@ export function flowStateAfter(key) {
   };
 }
 
+function normalizeRuleList(payload) {
+  return Array.isArray(payload?.rules) ? payload.rules : [];
+}
+
+function loadBotRulesSync() {
+  try {
+    return normalizeRuleList(JSON.parse(fs.readFileSync(botRulesPath, "utf8")));
+  } catch {
+    return [];
+  }
+}
+
+function matchRule(rule, text, cleaned) {
+  if (!rule?.enabled) return false;
+  const match = String(rule.match || "contains");
+  const keywords = Array.isArray(rule.keywords) ? rule.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  if (!keywords.length) return false;
+  if (match === "regex") {
+    return keywords.some((keyword) => {
+      try { return new RegExp(keyword, "i").test(text); } catch { return false; }
+    });
+  }
+  if (match === "exact_short") {
+    return cleaned.length <= Number(rule.maxLength || 25) && keywords.some((keyword) => cleaned === keyword.toLowerCase());
+  }
+  return keywords.some((keyword) => cleaned.includes(keyword.toLowerCase()));
+}
+
+function verdictFromRule(rule) {
+  return {
+    route: rule.route || "CUSTOM_RULE",
+    status: rule.status || "Replied",
+    sequenceStatus: rule.sequenceStatus || "Human Takeover",
+    nextAction: rule.nextAction || "Human Takeover",
+    aiCategory: rule.aiCategory || "Unknown",
+    stopFlag: rule.stopFlag === true,
+    signal: rule.signal || "GREY",
+    suggestedReply: rule.suggestedReply || "人工查看客户回复。",
+  };
+}
+
+export function classifyByBotRules(text) {
+  const raw = String(text || "");
+  const cleaned = raw.toLowerCase().trim();
+  if (!cleaned) return null;
+  for (const rule of loadBotRulesSync().sort((a, b) => Number(a.order || 100) - Number(b.order || 100))) {
+    if (matchRule(rule, raw, cleaned)) return verdictFromRule(rule);
+  }
+  return null;
+}
+
 // Deterministic, rule-based reply classifier. Rule-based on purpose for the MVP
 // (safer/cheaper than AI). Returns the four values the rest of the system needs.
 // Option names below MUST match the Notion select options exactly:
@@ -62,6 +121,8 @@ export function flowStateAfter(key) {
 //   nextAction     -> Blast Leads "Next Action"     (Send Price List/Ask Viewing/Human Takeover/No Action)
 export function classifyReplyText(text) {
   const cleaned = String(text || "").toLowerCase();
+  const custom = classifyByBotRules(text);
+  if (custom) return custom;
 
   // --- Reply Routes (from "Mamba | Reply Routes") — priority order matters ---
   // Each returns: route, status, sequenceStatus, nextAction, aiCategory, stopFlag, signal, suggestedReply.

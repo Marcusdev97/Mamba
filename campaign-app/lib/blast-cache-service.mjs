@@ -28,6 +28,14 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
       aiSummary: nfText(page, "AI Summary") || "",
       lastReplyText: nfText(page, "Last Reply Text") || "",
       senderInstance: nfSelect(page, "Sender Instance") || "",
+      followUpAt: props["Follow Up At"]?.date?.start || null,
+      priority: nfSelect(page, "Priority") || "",
+      appointmentDate: props["Appointment Date"]?.date?.start || null,
+      appointmentTime: nfText(page, "Appointment Time") || "",
+      appointmentPlace: nfText(page, "Appointment Place") || "",
+      appointmentStatus: nfSelect(page, "Appointment Status") || "",
+      assignedSales: nfSelect(page, "Assigned Sales") || nfText(page, "Assigned Sales") || "",
+      salesNotes: nfText(page, "Sales Notes") || "",
       url: `https://www.notion.so/${String(page.id).replace(/-/g, "")}`,
     };
   }

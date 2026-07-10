@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bot Rules · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .wrap { max-width: 1440px; }
+  .nav { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .rules-tools {
+    display:grid;
+    grid-template-columns:minmax(180px, 1fr) auto;
+    gap:8px 16px;
+    align-items:center;
+    padding:14px 16px;
+  }
+  .rules-tools h2 { margin:0; }
+  .rules-tools .toolbar { grid-column:2; grid-row:1 / span 2; justify-content:flex-end; }
+  .rules-tools .mutedline { grid-column:1; margin-top:0; }
+  .rules-tools .err, .rules-tools .ok { grid-column:1 / -1; margin-top:0; }
+  .rules-tools .err:empty, .rules-tools .ok:empty { display:none; }
+  .brain-layout { display:grid; grid-template-columns:minmax(0, 1fr) 340px; gap:16px; align-items:start; }
+  .rules-list { display:grid; gap:12px; }
+  .rule-card {
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:var(--radius-l);
+    padding:14px;
+  }
+  .rule-card.off { opacity:.64; }
+  .rule-head {
+    display:grid;
+    grid-template-columns:128px 92px minmax(220px, 1fr) 92px;
+    gap:10px;
+    align-items:end;
+    margin-bottom:12px;
+  }
+  .rule-grid {
+    display:grid;
+    grid-template-columns:repeat(6, minmax(0, 1fr));
+    gap:10px;
+  }
+  .rule-grid .wide { grid-column:span 3; }
+  .rule-grid .full { grid-column:1 / -1; }
+  .rule-grid select { width:100%; }
+  .rule-card textarea { min-height:92px; resize:vertical; }
+  .rule-card textarea.keywords { min-height:116px; font-family:var(--font-mono); font-size:12.5px; }
+  .rule-card label.fld { margin-bottom:0; }
+  .checkline.compact, .toggle-box {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    height:42px;
+    padding:0 12px;
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    background:var(--panel-2);
+    color:var(--text);
+    font-weight:650;
+  }
+  .toggle-box { justify-content:flex-start; }
+  .toggle-field .toggle-box { width:100%; }
+  .rule-delete { align-self:end; white-space:nowrap; }
+  .empty {
+    border:1px dashed var(--line);
+    border-radius:var(--radius-l);
+    padding:22px;
+    color:var(--muted);
+    background:rgba(255,255,255,.02);
+  }
+  .test-panel { position:sticky; top:16px; }
+  .result { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:12px; margin-top:12px; white-space:pre-wrap; }
+  .err { color:var(--red); margin-top:10px; }
+  .ok { color:var(--green); margin-top:10px; }
+  .mutedline { color:var(--muted); margin-top:8px; }
+  @media (max-width: 1180px) {
+    .brain-layout { grid-template-columns:1fr; }
+    .test-panel { position:static; }
+  }
+  @media (max-width: 980px) {
+    .rules-tools { grid-template-columns:1fr; }
+    .rules-tools .toolbar { grid-column:1; grid-row:auto; justify-content:flex-start; }
+  }
+  @media (max-width: 900px) {
+    .rule-head { grid-template-columns:1fr 1fr; }
+    .rule-delete { width:100%; }
+    .rule-grid { grid-template-columns:1fr 1fr; }
+    .rule-grid .wide { grid-column:1 / -1; }
+  }
+  @media (max-width: 620px) {
+    .rule-head, .rule-grid { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Bot Rules</h1>
+      <div class="sub">可视化编辑大脑关键词 · Warm / Cold / STOP / Spam trigger</div>
+    </div>
+    <div class="nav">
+      <a class="btn" href="/" style="text-decoration:none">Campaign Console</a>
+      <a class="btn" href="/conversations" style="text-decoration:none">Conversations</a>
+      <a class="btn" href="/follow-up" style="text-decoration:none">Follow-Up Desk</a>
+    </div>
+  </header>
+
+  <section class="card rules-tools">
+    <h2>Rules</h2>
+    <div class="toolbar">
+      <button id="addRule" class="btn">+ Add Rule</button>
+      <button id="saveRules" class="btn primary">Save Rules</button>
+      <button id="applyRules" class="btn">Apply to Conversations</button>
+      <label class="checkline compact"><input id="onlyUnclassified" type="checkbox" checked /> 只补空白分类</label>
+    </div>
+    <div class="mutedline" id="meta"></div>
+    <div class="err" id="err"></div>
+    <div class="ok" id="ok"></div>
+  </section>
+
+  <div class="brain-layout">
+    <section id="rows" class="rules-list">
+      <div class="empty">Loading rules...</div>
+    </section>
+
+    <aside class="card test-panel">
+      <h2>Test Brain</h2>
+      <label class="fld"><span>Customer Reply</span><textarea id="testText" placeholder="例: Nope / What you mean by RM2,100?"></textarea></label>
+      <div class="toolbar" style="margin-top:10px">
+        <button id="testRule" class="btn primary">Test</button>
+      </div>
+      <div id="testResult" class="result muted">输入一句客户回复测试分类。</div>
+      <div class="mutedline">
+        保存后，Conversations / Follow-Up / Tracker 会使用这些规则。按 Apply to Conversations 会把现有 Notion latest replies 重新分类并写回 Notion。
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[char]));
+let rules = [];
+
+function newRule() {
+  const n = rules.length + 1;
+  return {
+    id: `custom_${Date.now()}`,
+    enabled: true,
+    order: n * 10,
+    label: "New Rule",
+    match: "contains",
+    keywords: ["keyword"],
+    route: "CUSTOM_RULE",
+    status: "Warm",
+    sequenceStatus: "Human Takeover",
+    nextAction: "Human Takeover",
+    aiCategory: "Warm",
+    signal: "GREEN",
+    stopFlag: false,
+    suggestedReply: "人工查看客户回复。",
+  };
+}
+
+function rowInput(i, field, value, extra = "") {
+  const type = extra.includes("type=") ? "" : 'type="text"';
+  return `<input ${type} ${extra} data-i="${i}" data-field="${field}" value="${esc(value)}" />`;
+}
+
+function rowSelect(i, field, value, options) {
+  return `<select data-i="${i}" data-field="${field}">${options.map((item) => `<option value="${esc(item)}" ${item === value ? "selected" : ""}>${esc(item)}</option>`).join("")}</select>`;
+}
+
+function render() {
+  if (!rules.length) {
+    $("rows").innerHTML = '<div class="empty">还没有 rules。点 Add Rule 开始加一个关键词 trigger。</div>';
+    return;
+  }
+  $("rows").innerHTML = rules.map((rule, i) => `
+    <article class="rule-card ${rule.enabled === false ? "off" : ""}">
+      <div class="rule-head">
+        <label class="fld toggle-field"><span>Enabled</span><div class="toggle-box"><input type="checkbox" data-i="${i}" data-field="enabled" ${rule.enabled !== false ? "checked" : ""}> Active</div></label>
+        <label class="fld"><span>Order</span>${rowInput(i, "order", rule.order ?? (i + 1) * 10, 'type="number"')}</label>
+        <label class="fld"><span>Rule Label</span>${rowInput(i, "label", rule.label || "")}</label>
+        <button class="btn danger rule-delete" data-delete="${i}">Delete</button>
+      </div>
+      <div class="rule-grid">
+        <label class="fld"><span>Match</span>${rowSelect(i, "match", rule.match || "contains", ["contains", "exact_short", "regex"])}</label>
+        <label class="fld"><span>Status</span>${rowSelect(i, "status", rule.status || "Warm", ["Warm", "Hot", "Cold", "Replied", "Follow Up", "Appointment", "Not Interested", "Stop"])}</label>
+        <label class="fld"><span>AI Category</span>${rowInput(i, "aiCategory", rule.aiCategory || "")}</label>
+        <label class="fld"><span>Next Action</span>${rowSelect(i, "nextAction", rule.nextAction || "Human Takeover", ["Human Takeover", "Send Price List", "Send Brochure", "Ask Viewing", "Ask Budget", "Follow Up", "No Action", "Stop"])}</label>
+        <label class="fld"><span>Signal</span>${rowSelect(i, "signal", rule.signal || "GREY", ["GREEN", "GREY", "RED"])}</label>
+        <label class="fld toggle-field"><span>Stop</span><div class="toggle-box"><input type="checkbox" data-i="${i}" data-field="stopFlag" ${rule.stopFlag ? "checked" : ""}> Stop sequence</div></label>
+        <label class="fld wide"><span>Keywords / Regex (one per line)</span><textarea class="keywords" data-i="${i}" data-field="keywords">${esc((rule.keywords || []).join("\n"))}</textarea></label>
+        <label class="fld wide"><span>Suggested Reply / Sales Note</span><textarea class="reply" data-i="${i}" data-field="suggestedReply">${esc(rule.suggestedReply || "")}</textarea></label>
+      </div>
+    </article>
+  `).join("");
+  document.querySelectorAll("[data-field]").forEach((el) => {
+    el.addEventListener("input", syncFromDom);
+    el.addEventListener("change", syncFromDom);
+  });
+  document.querySelectorAll("[data-delete]").forEach((btn) => btn.addEventListener("click", () => {
+    rules.splice(Number(btn.dataset.delete), 1);
+    render();
+  }));
+}
+
+function syncFromDom(event) {
+  const el = event.target;
+  const rule = rules[Number(el.dataset.i)];
+  if (!rule) return;
+  const field = el.dataset.field;
+  if (field === "enabled" || field === "stopFlag") rule[field] = el.checked;
+  else if (field === "order") rule[field] = Number(el.value || 0);
+  else if (field === "keywords") rule[field] = el.value.split(/\n|,/).map((item) => item.trim()).filter(Boolean);
+  else rule[field] = el.value;
+  if (field === "status") {
+    if (el.value === "Stop") { rule.signal = "RED"; rule.stopFlag = true; rule.sequenceStatus = "Stopped"; rule.nextAction = "Stop"; }
+    else if (["Warm", "Hot", "Appointment", "Follow Up"].includes(el.value)) { rule.signal = "GREEN"; rule.sequenceStatus = "Human Takeover"; }
+    else { rule.signal = "GREY"; rule.sequenceStatus = "Not Interested"; }
+    render();
+  }
+}
+
+async function load() {
+  $("err").textContent = "";
+  const res = await fetch("/api/bot-rules");
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Load failed");
+  rules = data.rules || [];
+  $("meta").textContent = `${rules.length} rules · updated ${data.updatedAt || "-"}`;
+  render();
+}
+
+async function save() {
+  syncFromDom({ target: document.activeElement });
+  $("err").textContent = "";
+  $("ok").textContent = "";
+  const res = await fetch("/api/bot-rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rules }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Save failed");
+  rules = data.rules || [];
+  $("ok").textContent = "Rules saved";
+  $("meta").textContent = `${rules.length} rules · updated ${data.updatedAt || "-"}`;
+  render();
+}
+
+async function testRule() {
+  $("testResult").textContent = "Testing...";
+  const res = await fetch("/api/bot-rules/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: $("testText").value }),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "Test failed");
+  const v = data.verdict || {};
+  $("testResult").innerHTML = [
+    `<b>${esc(v.route)}</b>`,
+    `Status: ${esc(v.status)} · Category: ${esc(v.aiCategory)} · Signal: ${esc(v.signal)}`,
+    `Next Action: ${esc(v.nextAction)} · Stop: ${v.stopFlag ? "YES" : "NO"}`,
+    "",
+    esc(v.suggestedReply || ""),
+  ].join("<br>");
+}
+
+async function applyToConversations() {
+  $("err").textContent = "";
+  $("ok").textContent = "";
+  await save();
+  $("applyRules").disabled = true;
+  $("applyRules").textContent = "Applying...";
+  try {
+    const res = await fetch("/api/conversations/classify-replies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ onlyUnclassified: $("onlyUnclassified").checked }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Apply failed");
+    $("ok").textContent = `Applied to Notion: classified ${data.classified || 0}, candidates ${data.candidates || 0}`;
+  } finally {
+    $("applyRules").disabled = false;
+    $("applyRules").textContent = "Apply to Conversations";
+  }
+}
+
+$("addRule").addEventListener("click", () => { rules.push(newRule()); render(); });
+$("saveRules").addEventListener("click", () => save().catch((error) => $("err").textContent = error.message));
+$("testRule").addEventListener("click", () => testRule().catch((error) => $("testResult").textContent = error.message));
+$("applyRules").addEventListener("click", () => applyToConversations().catch((error) => $("err").textContent = error.message));
+load().catch((error) => $("err").textContent = error.message);
+</script>
+</body>
+</html>

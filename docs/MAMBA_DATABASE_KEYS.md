@@ -144,6 +144,14 @@ This is the main customer state table.
 | `Send Lock` | Concurrency lock | checked while a PC is sending |
 | `Locked By Device` | Lock owner | `office_pc_01` |
 | `Lock Until` | Lock expiry | date/time |
+| `Follow Up At` | Tracking date | date/time customer should be followed up |
+| `Priority` | Tracking priority | `HIGH`, `MED`, `LOW` |
+| `Appointment Date` | Appointment date | showroom / call date |
+| `Appointment Time` | Appointment time | `15:00` |
+| `Appointment Place` | Appointment place | `Showroom`, `WhatsApp`, `Call` |
+| `Appointment Status` | Appointment state | `Pending`, `Confirmed`, `Done`, `No Show` |
+| `Assigned Sales` | Sales owner | `Marcus` |
+| `Sales Notes` | Sales notes | next human action notes |
 
 Current behavior:
 
@@ -175,6 +183,19 @@ Best fields to add in Notion:
 | `Send Lock` | Checkbox | true while sending |
 | `Locked By Device` | Text or Select | `cici_macbook_pro` |
 | `Lock Until` | Date | lock expiry time |
+
+Follow-up tracking fields to add next:
+
+| Field | Type | Value |
+| --- | --- | --- |
+| `Follow Up At` | Date | next human follow-up time |
+| `Priority` | Select | `HIGH`, `MED`, `LOW` |
+| `Appointment Date` | Date | appointment date/time |
+| `Appointment Time` | Rich Text | human-readable time if needed |
+| `Appointment Place` | Rich Text | showroom / call / WhatsApp |
+| `Appointment Status` | Select | `Pending`, `Confirmed`, `Done`, `No Show` |
+| `Assigned Sales` | Select or Rich Text | sales owner |
+| `Sales Notes` | Rich Text | sales notes |
 
 Multi-PC send rule:
 
@@ -648,4 +669,39 @@ Backend becomes:
 
 ```text
 Permission + lock + send queue + audit truth
+```
+
+## Bot Rules Brain
+
+Current rule brain lives in:
+
+```text
+campaign-data/bot_rules.json
+```
+
+The visual editor is:
+
+```text
+/bot-rules
+```
+
+Rule output writes into Blast Leads through the existing classifier flow:
+
+| Rule Output | Notion Field |
+| --- | --- |
+| `status` | `Status` |
+| `sequenceStatus` | `Sequence Status` |
+| `nextAction` | `Next Action` |
+| `aiCategory` | `AI Category` |
+| `suggestedReply` / route summary | `AI Summary` |
+| `stopFlag` | `Stop Flag` |
+
+Recommended operating flow:
+
+```text
+1. Edit / test rules in Bot Rules.
+2. Save Rules.
+3. Apply to Conversations.
+4. Conversations writes the classification back to Notion.
+5. Follow-Up Desk only shows replied/actionable customers.
 ```

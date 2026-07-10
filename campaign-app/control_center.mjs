@@ -40,6 +40,9 @@ const KNOWN = {
   "Update Notion Blast Leads.command": { emoji: "⬆️", label: "④ 上传 Blast 名单到 Notion(手动补跑)", desc: "群发完成后会自动上传;只有自动上传失败时才需要点这个补跑", group: "日常", order: 4 },
   "Live Reply Tracker.command":        { emoji: "💬", label: "实时回复追踪", desc: "实时接住客户回复并更新 Notion", group: "日常", order: 6 },
   "Conversations.command":             { emoji: "💬", label: "Conversations", desc: "从 Notion 查看全部客户、latest reply、状态和下一步动作", group: "日常", order: 7 },
+  "Follow Up Desk.command":            { emoji: "📋", label: "客户跟进台", desc: "今天该追谁、谁最热、谁要约、谁已经过期没跟进", group: "日常", order: 8 },
+  "Flow Map.command":                  { emoji: "🧭", label: "Mamba Flow Map", desc: "看懂 blasting、大脑分类、Next Flow 和跟进追踪怎么串起来", group: "日常", order: 9 },
+  "Bot Rules.command":                 { emoji: "🧠", label: "Bot Rules 大脑", desc: "自己改关键词 trigger,让 bot 分类 Warm / Cold / STOP / Spam", group: "设置 & 工具", order: 24 },
   "号码连接.command":                   { emoji: "📱", label: "⓪ Settings / Phone Setup", desc: "扫码上线 WhatsApp、查看连接健康、删除设备。Docker/Evolution/Console 没跑都会自动先启动", group: "日常", order: 0 },
   "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
@@ -174,7 +177,7 @@ const server = http.createServer(async (req, res) => {
       res.end(page());
       return;
     }
-    if (req.method === "GET" && ["/logs", "/settings", "/lookup", "/templates", "/next-flow", "/conversations"].includes(url.pathname)) {
+    if (req.method === "GET" && ["/logs", "/settings", "/lookup", "/templates", "/next-flow", "/conversations", "/follow-up", "/bot-rules", "/flow-map"].includes(url.pathname)) {
       await ensureCampaignConsole();
       res.writeHead(302, { Location: `${CONSOLE_URL}${url.pathname}` });
       res.end();

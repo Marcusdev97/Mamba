@@ -208,6 +208,15 @@ const runtime = await loadRuntime({
     writeCache: blastCacheService.writeCache,
     queryNotionRows: blastCacheService.queryRows,
   },
+  followUp: {
+    hasBlastDatabase: Boolean(blastDsId),
+    blastDatabaseId: blastDsId,
+    notion,
+    systemLogs: systemLogService,
+    readCache: blastCacheService.read,
+    writeCache: blastCacheService.writeCache,
+    queryNotionRows: blastCacheService.queryRows,
+  },
   templates: {
     rootDir: paths.rootDir,
     env,
