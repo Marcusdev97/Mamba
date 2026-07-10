@@ -16,7 +16,7 @@
   .checkline { display:flex; align-items:center; gap:8px; height:40px; color:var(--muted); font-size:13px; }
   .layout { display:grid; grid-template-columns:minmax(640px, 1.5fr) minmax(320px, .8fr); gap:16px; align-items:start; }
   .tablebox { overflow:auto; border:1px solid var(--line); border-radius:var(--radius); }
-  table { min-width: 980px; }
+  table { min-width: 1120px; }
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:rgba(255,255,255,.025); }
   tbody tr.active { background:var(--blue-bg); }
@@ -30,7 +30,7 @@
   .detail { position:sticky; top:16px; }
   .detail h3 { margin:0; font-size:18px; }
   .detail .subline { color:var(--muted); margin-top:2px; }
-  .kv { display:grid; grid-template-columns:120px 1fr; gap:8px 12px; margin-top:14px; }
+  .kv { display:grid; grid-template-columns:170px 1fr; gap:8px 12px; margin-top:14px; }
   .kv div:nth-child(odd) { color:var(--muted); }
   .replybox { margin-top:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:12px; white-space:pre-wrap; word-break:break-word; min-height:120px; }
   .warning { color:var(--amber); margin-top:10px; }
@@ -51,6 +51,10 @@
   .history-item { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:10px; }
   .history-meta { color:var(--muted); font-size:12px; display:flex; gap:8px; flex-wrap:wrap; }
   .history-text { margin-top:6px; white-space:pre-wrap; word-break:break-word; }
+  .manual-form { margin-top:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:12px; }
+  .manual-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .manual-form textarea { min-height:92px; resize:vertical; }
+  .manual-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px; }
   @media (max-width: 980px) {
     .filters { grid-template-columns:1fr 1fr; }
     .layout { grid-template-columns:1fr; }
@@ -86,6 +90,8 @@
     </div>
     <div class="actionbar">
       <button id="refreshReplies" class="btn primary">Refresh Replies from WhatsApp</button>
+      <button id="classifyReplies" class="btn">Classify Existing Replies</button>
+      <label class="checkline" style="height:auto"><input id="onlyUnclassified" type="checkbox" checked /> 只补空白分类</label>
       <span id="refreshReplyMeta" class="mutedline"></span>
     </div>
     <div id="refreshReplyErr" class="err"></div>
@@ -123,10 +129,10 @@
         <table>
           <thead>
             <tr>
-              <th>Customer</th><th>Project</th><th>Sender</th><th>Status</th><th>Sequence</th><th>Next Action</th><th>Latest Reply</th><th>Reply At</th>
+              <th>Customer</th><th>Project</th><th>Sender</th><th>Status</th><th>Sequence</th><th>Next Action</th><th>Latest Reply</th><th>Last Replied</th><th>Last Blasted</th>
             </tr>
           </thead>
-          <tbody id="rows"><tr><td colspan="8" class="muted">Loading...</td></tr></tbody>
+          <tbody id="rows"><tr><td colspan="9" class="muted">Loading...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -148,11 +154,32 @@
           <div>Next Action</div><div id="dNextAction"></div>
           <div>AI Category</div><div id="dAi"></div>
           <div>Reply Count</div><div id="dReplyCount"></div>
-          <div>Last Blast</div><div id="dBlast"></div>
-          <div>Reply At</div><div id="dReplyAt"></div>
+          <div>Last Blasted Message Time</div><div id="dBlast"></div>
+          <div>Last Replied</div><div id="dReplyAt"></div>
         </div>
         <div class="replybox" id="dReply"></div>
         <div class="replybox" id="dSummary" style="min-height:80px"></div>
+        <div class="manual-form">
+          <div class="history-head" style="margin-top:0">
+            <h3>Human Correction</h3>
+          </div>
+          <div class="manual-grid">
+            <label class="fld"><span>Status</span><select id="editStatus"></select></label>
+            <label class="fld"><span>Last Replied</span><input id="editLastReplyAt" type="datetime-local" /></label>
+            <label class="fld"><span>Last Blasted Message Time</span><input id="editLastBlastAt" type="datetime-local" /></label>
+            <label class="fld"><span>Sequence</span><select id="editSequence"></select></label>
+            <label class="fld"><span>Next Action</span><select id="editNextAction"></select></label>
+            <label class="fld"><span>AI Category</span><select id="editAiCategory"></select></label>
+          </div>
+          <label class="fld" style="margin-top:10px"><span>AI Summary</span><textarea id="editSummary"></textarea></label>
+          <label class="fld" style="margin-top:10px"><span>Stop Reason</span><input id="editStopReason" type="text" /></label>
+          <div class="manual-actions">
+            <label class="checkline" style="height:auto"><input id="editStopFlag" type="checkbox" /> Stop Flag</label>
+            <button id="saveCorrection" class="btn primary" type="button">保存人工分类</button>
+            <span id="manualMsg" class="mutedline"></span>
+          </div>
+          <div id="manualErr" class="err"></div>
+        </div>
         <div class="history-head">
           <h3>History</h3>
           <button id="historyRefresh" class="btn sm" type="button">刷新</button>
@@ -169,6 +196,13 @@ const $ = (id) => document.getElementById(id);
 let records = [];
 let selectedId = "";
 let selectedPhone = "";
+
+const MANUAL_OPTIONS = {
+  status: ["Blasted", "Warm", "Replied", "Appointment", "Follow Up", "Not Interested", "Stop", "Cold", "Invalid", "Needs Review"],
+  sequenceStatus: ["Running", "Human Takeover", "Not Interested", "Stopped"],
+  nextAction: ["Human Takeover", "Send Price List", "Ask Viewing", "Ask Budget", "Send Brochure", "Send Details", "Follow Up", "No Action"],
+  aiCategory: ["Warm", "Price Inquiry", "Viewing Request", "Brochure Request", "Not Interested", "Stop", "Unknown"],
+};
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -190,6 +224,14 @@ function fmt(iso) {
   }
 }
 
+function toDateTimeLocal(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 function pill(value, tone = "") {
   if (!value) return "";
   return `<span class="pill ${tone}">${esc(value)}</span>`;
@@ -209,6 +251,13 @@ function setOptions(select, values, selected) {
   ).join("");
 }
 
+function setManualOptions(select, values, selected) {
+  const safeValues = [...new Set([selected, ...(values || [])].filter(Boolean))];
+  select.innerHTML = '<option value="">-</option>' + safeValues.map((value) =>
+    `<option value="${esc(value)}"${value === selected ? " selected" : ""}>${esc(value)}</option>`
+  ).join("");
+}
+
 function row(record) {
   const active = record.id === selectedId ? " active" : "";
   const reply = record.lastReplyText || "";
@@ -221,13 +270,14 @@ function row(record) {
     <td>${esc(record.nextAction || "-")}</td>
     <td><div class="reply">${esc(reply || "-")}</div></td>
     <td>${esc(fmt(record.lastReplyAt))}</td>
+    <td>${esc(fmt(record.lastBlastAt || record.firstBlastAt))}</td>
   </tr>`;
 }
 
 function renderRows() {
   $("rows").innerHTML = records.length
     ? records.map(row).join("")
-    : '<tr><td colspan="8" class="muted">没有客户。</td></tr>';
+    : '<tr><td colspan="9" class="muted">没有客户。</td></tr>';
   document.querySelectorAll("#rows tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => selectRecord(tr.dataset.id));
   });
@@ -270,6 +320,17 @@ function selectRecord(id, silent = false) {
   $("dReply").textContent = record.lastReplyText || "No latest reply.";
   $("dSummary").textContent = record.aiSummary || "No summary.";
   $("dNotion").href = record.url || "#";
+  setManualOptions($("editStatus"), MANUAL_OPTIONS.status, record.status || "");
+  $("editLastReplyAt").value = toDateTimeLocal(record.lastReplyAt);
+  $("editLastBlastAt").value = toDateTimeLocal(record.lastBlastAt || record.firstBlastAt);
+  setManualOptions($("editSequence"), MANUAL_OPTIONS.sequenceStatus, record.sequenceStatus || "");
+  setManualOptions($("editNextAction"), MANUAL_OPTIONS.nextAction, record.nextAction || "");
+  setManualOptions($("editAiCategory"), MANUAL_OPTIONS.aiCategory, record.aiCategory || "");
+  $("editSummary").value = record.aiSummary || "";
+  $("editStopFlag").checked = record.stopFlag === true;
+  $("editStopReason").value = record.stopReason || "";
+  $("manualMsg").textContent = "";
+  $("manualErr").textContent = "";
   loadHistory(record.phone);
 }
 
@@ -401,6 +462,95 @@ async function refreshReplies() {
   }
 }
 
+async function classifyReplies() {
+  $("refreshReplyErr").textContent = "";
+  $("refreshReplyMeta").textContent = "";
+  $("classifyReplies").disabled = true;
+  $("classifyReplies").textContent = "Classifying...";
+  try {
+    const res = await fetch("/api/conversations/classify-replies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ onlyUnclassified: $("onlyUnclassified").checked }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (res.status === 404 || data.error === "Not found") {
+        throw new Error("Classify Replies API 还没载入。请关闭并重新打开 Campaign Console，然后回到 /conversations 再试。");
+      }
+      throw new Error(data.error || "Classify failed");
+    }
+    const routes = Object.entries(data.routeCounts || {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([route, count]) => route + " " + count)
+      .join(" · ");
+    const bits = [
+      `checked ${data.totalRows || 0} rows`,
+      `classified ${data.classified || 0}`,
+    ];
+    if (data.candidates !== data.classified) bits.push(`candidates ${data.candidates || 0}`);
+    if (data.failed?.length) bits.push(`failed ${data.failed.length}`);
+    if (routes) bits.push(routes);
+    $("refreshReplyMeta").textContent = bits.join(" · ");
+    if (data.failed?.length) {
+      $("refreshReplyErr").textContent = data.failed.slice(0, 6).map((item) => `${item.phone}: ${item.error}`).join(" | ");
+    }
+    await load();
+  } catch (error) {
+    $("refreshReplyErr").textContent = error.message;
+  } finally {
+    $("classifyReplies").disabled = false;
+    $("classifyReplies").textContent = "Classify Existing Replies";
+  }
+}
+
+async function saveManualCorrection() {
+  const record = records.find((item) => item.id === selectedId);
+  if (!record) return;
+  $("manualErr").textContent = "";
+  $("manualMsg").textContent = "";
+  $("saveCorrection").disabled = true;
+  $("saveCorrection").textContent = "保存中...";
+  try {
+    const res = await fetch("/api/conversations/manual-correction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: record.id,
+        phone: record.phone,
+        name: record.name,
+        project: record.project,
+        lastReplyText: record.lastReplyText,
+        status: $("editStatus").value,
+        sequenceStatus: $("editSequence").value,
+        nextAction: $("editNextAction").value,
+        aiCategory: $("editAiCategory").value,
+        aiSummary: $("editSummary").value,
+        lastReplyAt: $("editLastReplyAt").value,
+        lastBlastAt: $("editLastBlastAt").value,
+        stopFlag: $("editStopFlag").checked,
+        stopReason: $("editStopReason").value,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (res.status === 404 || data.error === "Not found") {
+        throw new Error("Manual Correction API 还没载入。请关闭并重新打开 Campaign Console，然后回到 /conversations 再试。");
+      }
+      throw new Error(data.error || "Save failed");
+    }
+    $("manualMsg").textContent = "已保存到 Notion";
+    await load();
+    await loadHistory(record.phone);
+  } catch (error) {
+    $("manualErr").textContent = error.message;
+  } finally {
+    $("saveCorrection").disabled = false;
+    $("saveCorrection").textContent = "保存人工分类";
+  }
+}
+
 async function load() {
   $("err").textContent = "";
   $("warning").textContent = "";
@@ -424,7 +574,7 @@ async function load() {
     renderRows();
   } catch (error) {
     $("err").textContent = error.message;
-    $("rows").innerHTML = '<tr><td colspan="8" class="muted">读取失败。</td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="9" class="muted">读取失败。</td></tr>';
   } finally {
     $("refresh").disabled = false;
     $("refresh").textContent = "刷新";
@@ -433,6 +583,8 @@ async function load() {
 
 $("schemaHealth").addEventListener("click", loadSchemaHealth);
 $("refreshReplies").addEventListener("click", refreshReplies);
+$("classifyReplies").addEventListener("click", classifyReplies);
+$("saveCorrection").addEventListener("click", saveManualCorrection);
 $("historyRefresh").addEventListener("click", () => loadHistory());
 $("refresh").addEventListener("click", load);
 ["project", "status", "sequenceStatus", "onlyReplied"].forEach((id) => $(id).addEventListener("change", load));

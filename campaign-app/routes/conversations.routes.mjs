@@ -1,4 +1,4 @@
-import { httpError, json } from "../lib/http.mjs";
+import { httpError, json, readJson } from "../lib/http.mjs";
 
 function requireConversations(runtime) {
   if (!runtime.conversations) {
@@ -264,6 +264,37 @@ function replyProperties(schema, verdict, event, record) {
   return props;
 }
 
+function classificationProperties(schema, verdict) {
+  const props = {
+    Status: choiceValue(schema, "Status", verdict.status),
+    "Sequence Status": choiceValue(schema, "Sequence Status", verdict.sequenceStatus),
+    "Next Action": choiceValue(schema, "Next Action", verdict.nextAction),
+    "AI Category": choiceValue(schema, "AI Category", verdict.aiCategory),
+    "Reply Checked At": dateValue(Date.now()),
+    "AI Summary": richText(`[${verdict.signal}] ${verdict.route} · 建议:${verdict.suggestedReply}`),
+  };
+  if (verdict.stopFlag) {
+    props["Stop Flag"] = { checkbox: true };
+    props["Stop Reason"] = richText(`Auto: ${verdict.route}`);
+  }
+  return props;
+}
+
+function manualCorrectionProperties(schema, correction) {
+  const props = {};
+  if (correction.status !== undefined) props.Status = choiceValue(schema, "Status", clean(correction.status));
+  if (correction.sequenceStatus !== undefined) props["Sequence Status"] = choiceValue(schema, "Sequence Status", clean(correction.sequenceStatus));
+  if (correction.nextAction !== undefined) props["Next Action"] = choiceValue(schema, "Next Action", clean(correction.nextAction));
+  if (correction.aiCategory !== undefined) props["AI Category"] = choiceValue(schema, "AI Category", clean(correction.aiCategory));
+  if (correction.aiSummary !== undefined) props["AI Summary"] = richText(correction.aiSummary);
+  if (correction.lastReplyAt !== undefined) props["Last Reply At"] = dateValue(correction.lastReplyAt);
+  if (correction.lastBlastAt !== undefined) props["Last Blast At"] = dateValue(correction.lastBlastAt);
+  if (correction.stopFlag !== undefined) props["Stop Flag"] = { checkbox: correction.stopFlag === true };
+  if (correction.stopReason !== undefined) props["Stop Reason"] = richText(correction.stopReason);
+  props["Reply Checked At"] = dateValue(Date.now());
+  return props;
+}
+
 export function registerConversationsRoutes(router) {
   router.get("/api/conversations/history", async (req, res, runtime) => {
     const conversations = requireConversations(runtime);
@@ -468,6 +499,175 @@ export function registerConversationsRoutes(router) {
       historySkipped: historyResult.skipped,
       updates: updated.slice(0, 50),
     });
+  });
+
+  router.post("/api/conversations/classify-replies", async (req, res, runtime) => {
+    const conversations = requireConversations(runtime);
+    if (!conversations.hasBlastDatabase) {
+      throw httpError(400, "没有 Notion Blast Leads database 配置。请到 Settings 检查 Notion。");
+    }
+    if (!conversations.notion || !conversations.queryNotionRows) {
+      throw httpError(500, "Conversations classifier service 没有载入。请重启 Mamba server。");
+    }
+
+    const body = await readJson(req);
+    const onlyUnclassified = body.onlyUnclassified !== false;
+
+    let database;
+    try {
+      database = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
+    } catch (error) {
+      throw httpError(502, `读取 Notion Blast Leads schema 失败：${error.message}`);
+    }
+    const schema = database?.properties || {};
+
+    let records;
+    try {
+      records = await conversations.queryNotionRows(undefined);
+    } catch (error) {
+      throw httpError(502, `读取 Notion Blast Leads 客户失败：${error.message}`);
+    }
+
+    const candidates = records.filter((record) => {
+      if (!clean(record.lastReplyText)) return false;
+      if (!onlyUnclassified) return true;
+      return !clean(record.aiCategory) || !clean(record.nextAction) || !clean(record.aiSummary);
+    });
+
+    await writeConversationLog(conversations, "info", "classify_replies_start", "Started classifying existing Notion replies.", {
+      totalRows: records.length,
+      candidates: candidates.length,
+      onlyUnclassified,
+    });
+
+    const classified = [];
+    const failed = [];
+    const routeCounts = {};
+    for (const record of candidates) {
+      const verdict = conversations.classifyReplyText(record.lastReplyText);
+      routeCounts[verdict.route] = (routeCounts[verdict.route] || 0) + 1;
+      try {
+        await conversations.notion("PATCH", `/pages/${pageId(record.id)}`, {
+          properties: classificationProperties(schema, verdict),
+        });
+        classified.push({
+          id: record.id,
+          phone: record.phone,
+          name: record.name,
+          route: verdict.route,
+          status: verdict.status,
+          nextAction: verdict.nextAction,
+          aiCategory: verdict.aiCategory,
+        });
+      } catch (error) {
+        failed.push({ phone: record.phone, name: record.name, route: verdict.route, error: error.message });
+      }
+    }
+
+    await writeConversationLog(
+      conversations,
+      failed.length ? "warn" : "info",
+      "classify_replies_complete",
+      `Classified ${classified.length} existing reply row(s).`,
+      {
+        totalRows: records.length,
+        candidates: candidates.length,
+        classified: classified.length,
+        failed: failed.length,
+        routeCounts,
+        failedExamples: failed.slice(0, 10),
+      },
+    );
+
+    const refreshed = await conversations.queryNotionRows(undefined).catch(() => records);
+    await conversations.writeCache(refreshed).catch(() => {});
+    json(res, 200, {
+      ok: true,
+      totalRows: records.length,
+      candidates: candidates.length,
+      classified: classified.length,
+      failed,
+      routeCounts,
+      updates: classified.slice(0, 50),
+    });
+  });
+
+  router.post("/api/conversations/manual-correction", async (req, res, runtime) => {
+    const conversations = requireConversations(runtime);
+    if (!conversations.hasBlastDatabase) {
+      throw httpError(400, "没有 Notion Blast Leads database 配置。请到 Settings 检查 Notion。");
+    }
+    if (!conversations.notion || !conversations.queryNotionRows) {
+      throw httpError(500, "Conversations manual correction service 没有载入。请重启 Mamba server。");
+    }
+
+    const body = await readJson(req);
+    const id = pageId(body.id);
+    if (!id) throw httpError(400, "缺少客户 Notion page id。请重新选择客户。");
+
+    let database;
+    try {
+      database = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
+    } catch (error) {
+      throw httpError(502, `读取 Notion Blast Leads schema 失败：${error.message}`);
+    }
+    const schema = database?.properties || {};
+    const correction = {
+      status: body.status,
+      sequenceStatus: body.sequenceStatus,
+      nextAction: body.nextAction,
+      aiCategory: body.aiCategory,
+      aiSummary: body.aiSummary,
+      lastReplyAt: body.lastReplyAt,
+      lastBlastAt: body.lastBlastAt,
+      stopFlag: body.stopFlag === true,
+      stopReason: body.stopReason,
+    };
+    const properties = manualCorrectionProperties(schema, correction);
+    if (!Object.keys(properties).length) throw httpError(400, "没有要保存的修改。");
+
+    try {
+      await conversations.notion("PATCH", `/pages/${id}`, { properties });
+    } catch (error) {
+      throw httpError(502, `保存人工分类到 Notion 失败：${error.message}`);
+    }
+
+    const phone = conversations.normalizePhone(body.phone);
+    if (phone && conversations.history) {
+      await conversations.history.append(phone, {
+        at: new Date().toISOString(),
+        direction: "operator",
+        source: "manual_classification",
+        text: body.lastReplyText || "[manual correction]",
+        route: "MANUAL_CORRECTION",
+        signal: correction.stopFlag ? "RED" : "GREY",
+        status: correction.status,
+        sequenceStatus: correction.sequenceStatus,
+        aiCategory: correction.aiCategory,
+        nextAction: correction.nextAction,
+        suggestedReply: correction.aiSummary,
+        name: body.name || "",
+        project: body.project || "",
+      }).catch(() => {});
+    }
+
+    await writeConversationLog(conversations, "info", "manual_classification_saved", "Manual conversation classification saved.", {
+      pageId: id,
+      phone,
+      name: body.name || "",
+      project: body.project || "",
+      status: correction.status,
+      sequenceStatus: correction.sequenceStatus,
+      nextAction: correction.nextAction,
+      aiCategory: correction.aiCategory,
+      lastReplyAt: correction.lastReplyAt,
+      lastBlastAt: correction.lastBlastAt,
+      stopFlag: correction.stopFlag,
+    });
+
+    const refreshed = await conversations.queryNotionRows(undefined).catch(() => []);
+    await conversations.writeCache(refreshed).catch(() => {});
+    json(res, 200, { ok: true, correction });
   });
 
   router.get("/api/conversations", async (req, res, runtime) => {
