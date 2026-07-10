@@ -22,6 +22,9 @@ const LOCAL_URL = `http://${HOST}:${PORT}`;
 const CONSOLE_PORT = Number(process.env.CONSOLE_PORT ?? 8787);
 const CONSOLE_URL = `http://${HOST}:${CONSOLE_PORT}`;
 const SELF = "Mamba Control Center.command"; // don't list the launcher that started us
+const HIDDEN_LAUNCHERS = new Set([
+  "Set Notion Token.command", // Settings now owns Notion / Telegram token setup.
+]);
 
 // Design system (docs/MAMBA_UI_BIBLE.md) — inlined because this server has no /assets route.
 const designCss = await fs.readFile(path.join(appDir, "assets", "mamba.css"), "utf8").catch(() => "");
@@ -47,14 +50,13 @@ const KNOWN = {
   "Sync Cloudflare Assets.command":    { emoji: "☁️", label: "同步 Cloudflare 图片", desc: "把 assets/ 和 campaign 图片上传到 Cloudflare R2,给 AI 和其他电脑共用", group: "设置 & 工具", order: 49 },
   "Sync Suppression.command":          { emoji: "⛔", label: "同步全局 STOP 名单", desc: "从 Notion 同步所有项目的退订号码,发送前自动拦截", group: "设置 & 工具", order: 51 },
   "Sync Brain.command":                { emoji: "🧠", label: "同步 AI Brain Cache", desc: "同步知识库、成功对话、异议库到本地缓存", group: "设置 & 工具", order: 52 },
-  "Set Notion Token.command":          { emoji: "🔑", label: "设置 Notion Token", desc: "填入 / 更新 Notion API key", group: "设置 & 工具", order: 50 },
   "Fix Mac Block.command":             { emoji: "🛠", label: "修复 Mac 拦截", desc: "解除「unidentified developer」限制", group: "设置 & 工具", order: 50 },
 };
 const GROUP_ORDER = ["日常", "设置 & 工具", "其他"];
 
 async function listTasks() {
   const files = (await fs.readdir(launcherDir).catch(() => []))
-    .filter((f) => f.endsWith(".command") && f !== SELF);
+    .filter((f) => f.endsWith(".command") && f !== SELF && !HIDDEN_LAUNCHERS.has(f));
   return files
     .map((file) => {
       const meta = KNOWN[file] ?? { emoji: "▶️", label: file.replace(/\.command$/, ""), desc: "", group: "其他", order: 100 };
