@@ -15,6 +15,7 @@ import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
 import { normalizePhone, describeMessage, resolvePhone, collectMessages, senderFromPayload } from "./reply_intake.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
+import { classifyReplyText } from "./flow_sequence.mjs";
 
 const HOST = process.env.TRACKER_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TRACKER_PORT ?? 8798);
@@ -132,10 +133,19 @@ function csvCell(value) {
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-function classifyReply() {
-  // Stage 1 rule: any customer reply after blasting is treated as Warm.
-  // This keeps the system deterministic and avoids over-classifying early data.
-  return { status: "WARM", category: "Warm" };
+function classifyReply(text) {
+  const verdict = classifyReplyText(text);
+  return {
+    status: verdict.status,
+    category: verdict.aiCategory,
+    aiCategory: verdict.aiCategory,
+    nextAction: verdict.nextAction,
+    sequenceStatus: verdict.sequenceStatus,
+    route: verdict.route,
+    signal: verdict.signal,
+    stopFlag: verdict.stopFlag,
+    suggestedReply: verdict.suggestedReply,
+  };
 }
 
 async function refreshLeadIndex() {
@@ -174,7 +184,9 @@ async function loadStatus() {
 
 function countEvent(event) {
   stats.totalReplies += 1;
-  if (event.status === "WARM") stats.warm += 1;
+  if (event.signal === "GREEN" || event.status === "Warm" || event.status === "Appointment" || event.status === "Follow Up") stats.warm += 1;
+  if (event.status === "Not Interested") stats.notInterested += 1;
+  if (event.stopFlag || event.status === "Stop") stats.stop += 1;
   if (!event.leadId) stats.unknown += 1;
 }
 
@@ -272,6 +284,13 @@ function eventFromMessage(payload, message) {
     sender: lead.sender ?? null,
     status: category.status,
     category: category.category,
+    aiCategory: category.aiCategory,
+    nextAction: category.nextAction,
+    sequenceStatus: category.sequenceStatus,
+    route: category.route,
+    signal: category.signal,
+    stopFlag: category.stopFlag,
+    suggestedReply: category.suggestedReply,
     text,
     adLead: isAdLead(text),
   };
@@ -336,44 +355,91 @@ function htmlPage() {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mamba | Blaster Tracker</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 28px; color: #111827; background: #f8fafc; }
-    h1 { margin: 0 0 8px; }
-    .muted { color: #64748b; }
-    .cards { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 12px; margin: 20px 0; }
-    .card { background: white; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; box-shadow: 0 1px 2px #0000000d; }
-    .num { font-size: 28px; font-weight: 700; }
-    table { width: 100%; border-collapse: collapse; background: white; border-radius: 14px; overflow: hidden; }
-    th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
-    th { background: #f1f5f9; font-size: 13px; color: #475569; }
-    .pill { display: inline-block; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #e2e8f0; }
-    .WARM { background: #dcfce7; color: #166534; }
-    .added { background: #dbeafe; color: #1e40af; }
-    .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid #16a34a; background: #16a34a; color: white; font-size: 12px; font-weight: 700; cursor: pointer; }
-    .btn:disabled { opacity: .55; cursor: default; }
-    .btn.sec { background: #0ea5e9; border-color: #0ea5e9; }
-    .btn.danger { background: #dc2626; border-color: #dc2626; }
-    .toolbar { display: flex; gap: 10px; align-items: center; margin: 6px 0 12px; }
+    :root {
+      --bg:#0f1115; --panel:#181b21; --panel-2:#1f232b; --panel-3:#262b35;
+      --line:#2a2f39; --line-2:#3a414e; --text:#e8eaed; --muted:#9aa3b2;
+      --green:#25d366; --green-d:#1da851; --on-green:#04220f; --blue:#4a9eff;
+      --amber:#f5b342; --red:#ff5d5d; --green-bg:rgba(37,211,102,.16);
+      --blue-bg:rgba(74,158,255,.16); --amber-bg:rgba(245,179,66,.18); --red-bg:rgba(255,93,93,.16);
+      --radius:9px; --radius-l:12px; --radius-full:999px;
+      --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:var(--font); font-size:14px; line-height:1.5; }
+    .wrap { max-width:1320px; margin:0 auto; padding:24px 20px 64px; }
+    header.top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:20px; }
+    h1 { margin:0; font-size:22px; line-height:1.25; font-weight:700; }
+    h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); }
+    .muted { color:var(--muted); }
+    .nav { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .cards { display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap:12px; margin-bottom:16px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-l); padding:16px; margin-bottom:16px; }
+    .stat { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--radius); padding:12px; }
+    .stat span { display:block; color:var(--muted); font-size:12px; }
+    .num { font-size:24px; font-weight:800; }
+    .tablebox { overflow:auto; border:1px solid var(--line); border-radius:var(--radius-l); }
+    table { width:100%; min-width:1080px; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-size:11.5px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; background:rgba(255,255,255,.02); }
+    tbody tr:hover { background:rgba(255,255,255,.025); }
+    .pill { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:var(--radius-full); font-size:12px; font-weight:750; border:1px solid var(--line); background:var(--panel-2); color:var(--muted); white-space:nowrap; }
+    .pill.green { background:var(--green-bg); color:var(--green); border-color:rgba(37,211,102,.35); }
+    .pill.red { background:var(--red-bg); color:var(--red); border-color:rgba(255,93,93,.35); }
+    .pill.amber { background:var(--amber-bg); color:var(--amber); border-color:rgba(245,179,66,.35); }
+    .pill.blue { background:var(--blue-bg); color:var(--blue); border-color:rgba(74,158,255,.35); }
+    .btn { appearance:none; padding:10px 16px; border-radius:var(--radius); border:1px solid var(--line); background:var(--panel-2); color:var(--text); font:inherit; font-weight:650; cursor:pointer; }
+    .btn:hover { border-color:var(--line-2); background:var(--panel-3); }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .btn.primary { background:var(--green); border-color:var(--green); color:var(--on-green); }
+    .btn.primary:hover { background:var(--green-d); border-color:var(--green-d); }
+    .btn.danger { background:transparent; border-color:var(--red); color:var(--red); }
+    .btn.danger:hover { background:var(--red-bg); }
+    .btn.sm { padding:5px 10px; font-size:12px; }
+    .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+    .message { max-width:420px; white-space:pre-wrap; word-break:break-word; color:#cbd5e1; }
+    .phone { color:var(--muted); font-family:var(--mono); font-size:12px; }
+    input[type=checkbox] { width:16px; height:16px; accent-color:var(--green); }
+    @media (max-width: 820px) { .cards { grid-template-columns:repeat(2, 1fr); } header.top { align-items:flex-start; flex-direction:column; } }
   </style>
 </head>
 <body>
-  <h1>Mamba | Blaster Tracker</h1>
-  <div class="muted">Listening for WhatsApp replies. Keep the tracker window open.</div>
-  <div class="cards">
-    <div class="card"><div class="muted">Total Replies</div><div id="total" class="num">0</div></div>
-    <div class="card"><div class="muted">Warm</div><div id="warm" class="num">0</div></div>
-    <div class="card"><div class="muted">Mode</div><div class="num" style="font-size:18px">Reply = Warm</div></div>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Mamba | Blaster Tracker</h1>
+        <div class="muted">Listening for WhatsApp replies · tracker records only, no auto-reply</div>
+      </div>
+      <div class="nav">
+        <a class="btn" href="http://127.0.0.1:8787/" style="text-decoration:none">Campaign Console</a>
+        <a class="btn" href="http://127.0.0.1:8787/conversations" style="text-decoration:none">Conversations</a>
+      </div>
+    </header>
+    <section class="cards">
+      <div class="stat"><span>Total Replies</span><div id="total" class="num">0</div></div>
+      <div class="stat"><span>Warm / Intent</span><div id="warm" class="num">0</div></div>
+      <div class="stat"><span>Stop / Reject</span><div id="stop" class="num">0</div></div>
+      <div class="stat"><span>Unknown</span><div id="unknown" class="num">0</div></div>
+    </section>
+    <section class="card">
+      <h2>Tracker Status</h2>
+      <div class="muted" id="meta"></div>
+    </section>
+    <section class="card">
+      <h2>Recent Replies</h2>
+      <div class="toolbar">
+        <button class="btn primary" onclick="pushSelected(this)">选中加进 Notion</button>
+        <button class="btn danger" onclick="deleteSelected(this)">删除选中</button>
+        <span class="muted" id="selinfo">未选</span>
+      </div>
+      <div class="tablebox">
+        <table>
+          <thead><tr><th><input type="checkbox" id="chkall" onclick="toggleAll(this)"></th><th>Time</th><th>Name</th><th>Phone</th><th>Status</th><th>Route</th><th>Next Action</th><th>Message</th><th>Notion</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
   </div>
-  <div class="muted" id="meta"></div>
-  <h2>Recent Replies</h2>
-  <div class="toolbar">
-    <button class="btn sec" onclick="pushSelected(this)">➕ 选中加进 Notion</button>
-    <button class="btn danger" onclick="deleteSelected(this)">🗑 删除选中</button>
-    <span class="muted" id="selinfo">未选</span>
-  </div>
-  <table>
-    <thead><tr><th><input type="checkbox" id="chkall" onclick="toggleAll(this)"></th><th>Time</th><th>Name</th><th>Phone</th><th>Status</th><th>Message</th><th>Notion</th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
   <script>
     const fmt = (iso) => new Date(iso).toLocaleString("en-MY", { hour12: false });
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -382,28 +448,37 @@ function htmlPage() {
     async function refresh() {
       const res = await fetch("/api/status");
       const data = await res.json();
-      total.textContent = data.stats.totalReplies;
-      warm.textContent = data.stats.warm;
-      meta.textContent = "Leads indexed: " + data.leadsIndexed + " | Notion sync: " + (data.notionSync ? "ON" : "OFF") + " | Started: " + fmt(data.startedAt);
+      document.getElementById("total").textContent = data.stats.totalReplies;
+      document.getElementById("warm").textContent = data.stats.warm;
+      document.getElementById("stop").textContent = (data.stats.stop || 0) + (data.stats.notInterested ? " / " + data.stats.notInterested : "");
+      document.getElementById("unknown").textContent = data.stats.unknown || 0;
+      document.getElementById("meta").textContent = "Leads indexed: " + data.leadsIndexed + " · Notion sync: " + (data.notionSync ? "ON" : "OFF") + " · Started: " + fmt(data.startedAt);
       const checked = new Set([...document.querySelectorAll(".rowchk:checked")].map((c) => c.value));
-      rows.innerHTML = data.events.map((event) => {
+      document.getElementById("rows").innerHTML = data.events.map((event) => {
         const action = event.adLead
-          ? '<span class="pill added">✓ Ad → Notion</span>'
+          ? '<span class="pill blue">Ad → Notion</span>'
           : event.known
             ? '<span class="muted">auto</span>'
             : event.pushed
-              ? '<span class="pill added">✓ Added</span>'
-              : '<button class="btn" onclick="push(\\'' + esc(event.phone) + '\\', this)">Add to Notion</button>';
+              ? '<span class="pill blue">Added</span>'
+              : '<button class="btn sm primary" onclick="push(\\'' + esc(event.phone) + '\\', this)">Add to Notion</button>';
         const id = esc(event.id);
         const chk = checked.has(String(event.id)) ? " checked" : "";
+        const tone = event.signal === "RED" || event.status === "Stop" || event.status === "Not Interested"
+          ? "red"
+          : event.signal === "GREEN" || event.status === "Warm" || event.status === "Appointment" || event.status === "Follow Up"
+            ? "green"
+            : "amber";
         return \`
         <tr>
           <td><input type="checkbox" class="rowchk" value="\${id}" onchange="updateSel()"\${chk}></td>
           <td>\${fmt(event.receivedAt)}</td>
           <td>\${esc(event.name)}</td>
-          <td>\${esc(event.phone)}</td>
-          <td><span class="pill \${event.status}">\${event.status}</span></td>
-          <td>\${esc(event.text)}</td>
+          <td><div class="phone">\${esc(event.phone)}</div><div class="muted">\${esc(event.instanceName || "-")}</div></td>
+          <td><span class="pill \${tone}">\${esc(event.status || "-")}</span></td>
+          <td>\${esc(event.route || "-")}</td>
+          <td>\${esc(event.nextAction || "-")}</td>
+          <td><div class="message">\${esc(event.text)}</div></td>
           <td>\${action}</td>
         </tr>\`;
       }).join("");
@@ -528,7 +603,7 @@ const server = http.createServer(async (req, res) => {
       if (!event) { json(res, 404, { ok: false, error: "找不到这个号码的回复。" }); return; }
       if (!notion.enabled) { json(res, 400, { ok: false, error: "Notion sync 没开(缺 NOTION_API_KEY)。" }); return; }
       try {
-        await notion.upsertLeadReply({ ...event });
+        await notion.upsertLeadReply({ ...event, force: true });
         pushedPhones.add(phone);
         json(res, 200, { ok: true });
       } catch (error) {
@@ -549,7 +624,7 @@ const server = http.createServer(async (req, res) => {
         if (!idSet.has(String(event.id))) continue;
         try {
           if (event.adLead) await notion.upsertAdLead({ ...event });
-          else await notion.upsertLeadReply({ ...event });
+          else await notion.upsertLeadReply({ ...event, force: true });
           pushedPhones.add(event.phone);
           pushed += 1;
         } catch (error) {
@@ -566,7 +641,9 @@ const server = http.createServer(async (req, res) => {
       lastEvents = lastEvents.filter((event) => !idSet.has(String(event.id)));
       for (const event of removed) {
         stats.totalReplies = Math.max(0, stats.totalReplies - 1);
-        if (event.status === "WARM") stats.warm = Math.max(0, stats.warm - 1);
+        if (event.signal === "GREEN" || event.status === "Warm" || event.status === "Appointment" || event.status === "Follow Up") stats.warm = Math.max(0, stats.warm - 1);
+        if (event.status === "Not Interested") stats.notInterested = Math.max(0, stats.notInterested - 1);
+        if (event.stopFlag || event.status === "Stop") stats.stop = Math.max(0, stats.stop - 1);
         if (!event.leadId) stats.unknown = Math.max(0, stats.unknown - 1);
       }
       await rewriteEventsFile(idSet); // drop from replies.jsonl so it stays gone after restart

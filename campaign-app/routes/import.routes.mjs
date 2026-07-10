@@ -54,6 +54,7 @@ export function registerImportRoutes(router) {
     }
 
     const source = String(body.sourcePath ?? "").trim() || path.join(imports.rootDir, project.excel);
+    console.log(`[import] retrieve excel project=${project.id} source=${source}`);
     let result;
     try {
       result = await imports.importLeads(source);
@@ -95,6 +96,7 @@ export function registerImportRoutes(router) {
     }
 
     imports.setLeadsCache({ projectId: project.id, ...result, leads });
+    console.log(`[import] loaded project=${project.id} leads=${leads.length} rejected=${result.rejected.length} skippedBlasted=${skippedAlreadyBlasted} skippedSuppressed=${skippedSuppressed}`);
     json(res, 200, {
       ok: true,
       project: project.id,
@@ -124,6 +126,7 @@ export function registerImportRoutes(router) {
     } catch (error) {
       throw httpError(500, `上传 Excel 失败: 无法写入 campaign-data/uploads。${error.message}`);
     }
+    console.log(`[import] upload excel filename=${safe} path=${target}`);
     json(res, 200, { ok: true, sourcePath: target, filename: safe });
   });
 

@@ -34,21 +34,27 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
 
   async function queryRows(filter) {
     if (!blastDatabaseId) throw new Error("没有 Notion 配置。");
+    console.log(`[blast-cache] retrieve Notion Blast Leads filter=${filter ? "yes" : "no"}`);
     const rows = [];
     let cursor;
+    let pageNo = 0;
     do {
+      pageNo += 1;
       const data = await notion("POST", `/databases/${blastDatabaseId}/query`, {
         filter,
         page_size: 100,
         ...(cursor ? { start_cursor: cursor } : {}),
       });
+      console.log(`[blast-cache] retrieved page=${pageNo} rows=${data?.results?.length ?? 0}`);
       for (const page of data?.results ?? []) rows.push(rowToRecord(page));
       cursor = data?.has_more ? data?.next_cursor : null;
     } while (cursor);
+    console.log(`[blast-cache] retrieve done total=${rows.length}`);
     return rows;
   }
 
   async function sync() {
+    console.log("[blast-cache] sync start");
     const records = await queryRows(undefined);
     return writeCache(records);
   }
@@ -67,6 +73,7 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
     const payload = { syncedAt: new Date().toISOString(), count: safeRecords.length, records: safeRecords };
     await fs.mkdir(path.dirname(cachePath()), { recursive: true });
     await fs.writeFile(cachePath(), JSON.stringify(payload));
+    console.log(`[blast-cache] cache written count=${payload.count} path=${cachePath()}`);
     return payload;
   }
 

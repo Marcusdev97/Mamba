@@ -102,6 +102,12 @@ function status(name) {
   return name ? { status: { name } } : undefined;
 }
 
+function choice(schema, propertyName, optionName) {
+  const type = schema?.[propertyName]?.type;
+  if (!optionName) return type === "status" ? { status: null } : { select: null };
+  return type === "status" ? { status: { name: optionName } } : { select: { name: optionName } };
+}
+
 function phoneNumber(value) {
   return { phone_number: String(value ?? "") };
 }
@@ -144,16 +150,16 @@ function languageLabel(language) {
   return "EN";
 }
 
-function leadStatusFromReply(statusName) {
-  return statusName ? "Warm" : "Warm";
+function leadStatusFromReply(event) {
+  return event?.status || "Warm";
 }
 
-function categoryFromReply() {
-  return "Warm";
+function categoryFromReply(event) {
+  return event?.aiCategory || event?.category || "Warm";
 }
 
-function nextActionFor() {
-  return "Human Takeover";
+function nextActionFor(event) {
+  return event?.nextAction || "Human Takeover";
 }
 
 function blastLeadsDataSource(config) {
@@ -185,6 +191,7 @@ export class NotionSync {
     this.onLog = onLog;
     this.enabled = Boolean(token);
     this.state = null;
+    this.blastSchema = null;
   }
 
   log(message) {
@@ -214,6 +221,9 @@ export class NotionSync {
 
   async request(method, pathname, body, attempt = 0) {
     if (!this.enabled) return null;
+    const started = Date.now();
+    const retryTag = attempt ? ` retry=${attempt}` : "";
+    console.log(`[notion-sync] ${method} ${pathname}${retryTag}`);
     const response = await fetch(`https://api.notion.com/v1${pathname}`, {
       method,
       headers: {
@@ -232,8 +242,11 @@ export class NotionSync {
     }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      console.log(`[notion-sync] FAIL ${method} ${pathname} HTTP ${response.status} ${Date.now() - started}ms`);
       throw new Error(`Notion ${method} ${pathname}: HTTP ${response.status} ${JSON.stringify(data)}`);
     }
+    const summary = Array.isArray(data?.results) ? ` results=${data.results.length}` : data?.id ? ` id=${data.id}` : "";
+    console.log(`[notion-sync] OK ${method} ${pathname}${summary} ${Date.now() - started}ms`);
     return data;
   }
 
@@ -242,7 +255,15 @@ export class NotionSync {
   }
 
   async retrievePage(pageId) {
+    console.log(`[notion-sync] retrieve page=${cleanId(pageId)}`);
     return this.request("GET", `/pages/${cleanId(pageId)}`);
+  }
+
+  async getBlastSchema() {
+    if (this.blastSchema) return this.blastSchema;
+    const data = await this.request("GET", `/databases/${cleanId(blastLeadsDatabase(this.config))}`);
+    this.blastSchema = data?.properties || {};
+    return this.blastSchema;
   }
 
   async updatePage(pageId, properties) {
@@ -250,13 +271,14 @@ export class NotionSync {
   }
 
   async createLeadPage({ lead, job, sentAt, templateIds = [] }) {
+    const schema = await this.getBlastSchema();
     const properties = {
       Name: title(lead.name || lead.phone),
       Phone: phoneNumber(lead.phone),
-      Status: status("Blasted"),
-      Project: select(this.config.project),
-      Language: select(languageLabel(job.language)),
-      "Sender Instance": select(job.instanceName || "Unknown"),
+      Status: choice(schema, "Status", "Blasted"),
+      Project: choice(schema, "Project", this.config.project),
+      Language: choice(schema, "Language", languageLabel(job.language)),
+      "Sender Instance": choice(schema, "Sender Instance", job.instanceName || "Unknown"),
       "Last Blast At": dateValue(sentAt),
       "Template Sent": relation(templateIds),
       "Reply Count": numberValue(0),
@@ -315,6 +337,7 @@ export class NotionSync {
   // Property names/types mirror what morning_followup already writes to Ads.
   async upsertAdLead(event) {
     if (!this.enabled || !event?.phone) return { action: "skipped" };
+    console.log(`[notion-sync] upload ads lead phone=${event.phone}`);
     const database = databaseId(this.config, "adsLeads");
     if (!database) throw new Error("Notion config is missing adsLeads database.");
 
@@ -340,11 +363,13 @@ export class NotionSync {
         properties,
       });
     }
+    console.log(`[notion-sync] ads lead ${existing ? "updated" : "created"} phone=${event.phone}`);
     return { action: existing ? "updated" : "created" };
   }
 
   async upsertRecycleLead(record) {
     if (!this.enabled || !record?.phone) return { action: "skipped" };
+    console.log(`[notion-sync] upload recycle lead phone=${record.phone}`);
     const database = recycleLeadsDatabase(this.config);
     if (!database) throw new Error("Notion config is missing recycleLeads database.");
 
@@ -388,11 +413,14 @@ export class NotionSync {
 
     this.state.recycleLeadPages[record.phone] = cleanId(page.id);
     await this.saveState();
+    console.log(`[notion-sync] recycle lead ${existing ? "updated" : "created"} phone=${record.phone}`);
     return { action: existing ? "updated" : "created", protectedDoNotCall };
   }
 
   async upsertLeadBlast({ job, part, sentAt }) {
     if (!this.enabled || !job?.lead?.phone) return;
+    console.log(`[notion-sync] upload blast lead phone=${job.lead.phone} part=${part} sender=${job.instanceName || "Unknown"}`);
+    const schema = await this.getBlastSchema();
     const variantId = part === 2 ? job.part2Variant : job.part1Variant;
     const template = this.config.templates[variantId];
     if (!template?.pageId) return;
@@ -405,10 +433,10 @@ export class NotionSync {
     let page;
     if (existing) {
       page = await this.updatePage(existing.id, {
-        Status: status("Blasted"),
-        Project: select(this.config.project),
-        Language: select(languageLabel(job.language)),
-        "Sender Instance": select(job.instanceName || "Unknown"),
+        Status: choice(schema, "Status", "Blasted"),
+        Project: choice(schema, "Project", this.config.project),
+        Language: choice(schema, "Language", languageLabel(job.language)),
+        "Sender Instance": choice(schema, "Sender Instance", job.instanceName || "Unknown"),
         "Last Blast At": dateValue(sentAt),
         "Template Sent": relation(templateIds),
       });
@@ -419,6 +447,7 @@ export class NotionSync {
     this.state.leadPages[phone] = cleanId(page.id);
     await this.creditSend({ phone, template });
     await this.saveState();
+    console.log(`[notion-sync] blast lead ${existing ? "updated" : "created"} phone=${phone}`);
   }
 
   async creditSend({ phone, template }) {
@@ -437,8 +466,10 @@ export class NotionSync {
 
   async upsertLeadReply(event) {
     if (!this.enabled || !event?.phone || !event?.id) return;
-    if (this.state.syncedReplyIds[event.id]) return;
+    if (!event.force && this.state.syncedReplyIds[event.id]) return;
+    console.log(`[notion-sync] upload reply phone=${event.phone} route=${event.route || "-"} force=${event.force === true}`);
 
+    const schema = await this.getBlastSchema();
     const existing = await this.findLeadByPhone(event.phone);
     // Stop Flag ticked -> customer asked to stop. Leave their Notion row alone
     // (don't reset status / re-engage); just remember we've seen this reply.
@@ -455,14 +486,20 @@ export class NotionSync {
     // Gen Starz customers to whichever project happened to be configured when they
     // replied. Multi-project safe: a customer's 楼盘 is fixed at blast time.
     const replyProps = {
-      Status: status(leadStatusFromReply(event.status)),
+      Status: choice(schema, "Status", leadStatusFromReply(event)),
       "Last Reply At": dateValue(event.receivedAt),
       "Last Reply Text": richText(event.text),
-      "AI Category": select(categoryFromReply(event.category)),
-      "Next Action": select(nextActionFor(event.status, event.category)),
+      "AI Category": choice(schema, "AI Category", categoryFromReply(event)),
+      "Next Action": choice(schema, "Next Action", nextActionFor(event)),
       "Reply Count": numberValue(replyCount),
-      "AI Summary": richText(`Latest reply: ${event.text}`),
+      "AI Summary": richText(event.route
+        ? `[${event.signal || "GREY"}] ${event.route} · 建议:${event.suggestedReply || "人工查看"}`
+        : `Latest reply: ${event.text}`),
     };
+    if (event.stopFlag) {
+      replyProps["Stop Flag"] = checkbox(true);
+      replyProps["Stop Reason"] = richText(`Auto: ${event.route || "STOP"}`);
+    }
 
     let page;
     if (existing) {
@@ -478,7 +515,7 @@ export class NotionSync {
         properties: {
           Name: title(event.name || event.phone),
           Phone: phoneNumber(event.phone),
-          ...(event.project ? { Project: select(event.project) } : {}),
+          ...(event.project ? { Project: choice(schema, "Project", event.project) } : {}),
           "Stop Flag": checkbox(false),
           ...replyProps,
         },
@@ -489,6 +526,7 @@ export class NotionSync {
     await this.creditResponse({ event, templatePageIds: existingTemplates });
     this.state.syncedReplyIds[event.id] = true;
     await this.saveState();
+    console.log(`[notion-sync] reply ${existing ? "updated" : "created"} phone=${event.phone} status=${leadStatusFromReply(event)}`);
   }
 
   templateByPageId(pageId) {
@@ -506,11 +544,22 @@ export class NotionSync {
         if (template?.imagePageId) await this.incrementPageNumber(template.imagePageId, "Response Count", 1);
       }
 
-      const warmKey = `${event.phone}:${cleanId(templatePageId)}:warm`;
-      if (!this.state.creditedResponses[warmKey]) {
-        this.state.creditedResponses[warmKey] = true;
-        await this.incrementPageNumber(templatePageId, "Warm Count", 1);
-        if (template?.imagePageId) await this.incrementPageNumber(template.imagePageId, "Warm Count", 1);
+      if (event.signal === "GREEN" || event.status === "Warm" || event.status === "Appointment" || event.status === "Follow Up") {
+        const warmKey = `${event.phone}:${cleanId(templatePageId)}:warm`;
+        if (!this.state.creditedResponses[warmKey]) {
+          this.state.creditedResponses[warmKey] = true;
+          await this.incrementPageNumber(templatePageId, "Warm Count", 1);
+          if (template?.imagePageId) await this.incrementPageNumber(template.imagePageId, "Warm Count", 1);
+        }
+      }
+
+      if (event.signal === "RED" || event.stopFlag || event.status === "Stop") {
+        const stopKey = `${event.phone}:${cleanId(templatePageId)}:stop`;
+        if (!this.state.creditedResponses[stopKey]) {
+          this.state.creditedResponses[stopKey] = true;
+          await this.incrementPageNumber(templatePageId, "Stop Count", 1);
+          if (template?.imagePageId) await this.incrementPageNumber(template.imagePageId, "Stop Count", 1);
+        }
       }
     }
   }

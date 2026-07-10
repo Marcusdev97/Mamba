@@ -101,6 +101,7 @@
     <h2>Notion Schema Health</h2>
     <div class="healthbar">
       <button id="schemaHealth" class="btn">检查 Blast Leads 字段</button>
+      <button id="schemaEnsure" class="btn">补齐缺少字段到 Notion</button>
       <span id="schemaMeta" class="mutedline"></span>
     </div>
     <div id="schemaErr" class="err"></div>
@@ -424,6 +425,35 @@ async function loadSchemaHealth() {
   }
 }
 
+async function ensureSchemaFields() {
+  $("schemaErr").textContent = "";
+  $("schemaMeta").textContent = "";
+  $("schemaEnsure").disabled = true;
+  $("schemaEnsure").textContent = "补齐中...";
+  try {
+    const res = await fetch("/api/conversations/schema-ensure", { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) {
+      if (res.status === 404 || data.error === "Not found") {
+        throw new Error("Schema Ensure API 还没载入。请关闭并重新打开 Campaign Console，然后回到 /conversations 再试。");
+      }
+      throw new Error(data.error || "Schema ensure failed");
+    }
+    const created = data.createdFields || [];
+    const wrong = data.wrongTypeFields || [];
+    const counts = data.counts || {};
+    const createdText = created.length ? `已新增: ${created.join(", ")}` : "没有缺少可自动新增的字段";
+    const wrongText = wrong.length ? ` · 仍有类型不对: ${wrong.map((item) => item.name).join(", ")}` : "";
+    $("schemaMeta").textContent = `${createdText}${wrongText} · OK ${counts.ok || 0} · Missing ${counts.missing || 0} · Wrong type ${counts.wrongType || 0}`;
+    await loadSchemaHealth();
+  } catch (error) {
+    $("schemaErr").textContent = error.message;
+  } finally {
+    $("schemaEnsure").disabled = false;
+    $("schemaEnsure").textContent = "补齐缺少字段到 Notion";
+  }
+}
+
 async function refreshReplies() {
   $("refreshReplyErr").textContent = "";
   $("refreshReplyMeta").textContent = "";
@@ -582,6 +612,7 @@ async function load() {
 }
 
 $("schemaHealth").addEventListener("click", loadSchemaHealth);
+$("schemaEnsure").addEventListener("click", ensureSchemaFields);
 $("refreshReplies").addEventListener("click", refreshReplies);
 $("classifyReplies").addEventListener("click", classifyReplies);
 $("saveCorrection").addEventListener("click", saveManualCorrection);

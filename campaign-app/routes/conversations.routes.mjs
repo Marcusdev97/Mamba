@@ -105,9 +105,32 @@ const SCHEMA_REQUIREMENTS = [
   { name: "Last Flow Sent", types: ["select", "status"], level: "flow", reason: "显示已发 Flow" },
   { name: "Next Flow", types: ["select", "status"], level: "flow", reason: "显示下一轮 Flow" },
   { name: "Cohort Day", types: ["select", "status"], level: "flow", reason: "显示发送节奏" },
+  { name: "Contact Key", types: ["rich_text"], level: "multi_pc", reason: "全局客户 identity，通常等于 normalized phone" },
+  { name: "Project Lead Key", types: ["rich_text"], level: "multi_pc", reason: "一个客户在一个项目里的唯一 key" },
+  { name: "Assigned Sender Key", types: ["rich_text", "select", "status"], level: "multi_pc", reason: "指定由哪个 WhatsApp connection 负责" },
+  { name: "Last Sender Key", types: ["rich_text", "select", "status"], level: "multi_pc", reason: "最后实际发送的 WhatsApp connection" },
+  { name: "Last Sender Phone", types: ["phone_number", "rich_text"], level: "multi_pc", reason: "最后实际发送号码，方便排查" },
+  { name: "Last Sent By Device", types: ["rich_text", "select", "status"], level: "multi_pc", reason: "最后由哪台电脑/worker 发送" },
+  { name: "Campaign Run ID", types: ["rich_text"], level: "multi_pc", reason: "连接这次 blast run / audit" },
+  { name: "Send Lock", types: ["checkbox"], level: "multi_pc", reason: "多 PC 同时发送时防止重复发送" },
+  { name: "Locked By Device", types: ["rich_text", "select", "status"], level: "multi_pc", reason: "目前是哪台电脑锁住这个 lead" },
+  { name: "Lock Until", types: ["date"], level: "multi_pc", reason: "锁自动过期时间，避免电脑 crash 后永久卡住" },
   { name: "Stop Flag", types: ["checkbox"], level: "safety", reason: "全局 STOP 拦截" },
   { name: "Stop Reason", types: ["rich_text"], level: "safety", reason: "STOP 原因" },
 ];
+
+const AUTO_CREATE_SCHEMA = {
+  "Contact Key": { rich_text: {} },
+  "Project Lead Key": { rich_text: {} },
+  "Assigned Sender Key": { rich_text: {} },
+  "Last Sender Key": { rich_text: {} },
+  "Last Sender Phone": { phone_number: {} },
+  "Last Sent By Device": { rich_text: {} },
+  "Campaign Run ID": { rich_text: {} },
+  "Send Lock": { checkbox: {} },
+  "Locked By Device": { rich_text: {} },
+  "Lock Until": { date: {} },
+};
 
 function checkSchema(database) {
   const properties = database?.properties || {};
@@ -132,6 +155,14 @@ function checkSchema(database) {
     },
     checks,
   };
+}
+
+function missingAutoCreateProperties(health) {
+  return Object.fromEntries(
+    health.checks
+      .filter((item) => item.status === "missing" && AUTO_CREATE_SCHEMA[item.name])
+      .map((item) => [item.name, AUTO_CREATE_SCHEMA[item.name]]),
+  );
 }
 
 function pageId(id) {
@@ -336,6 +367,70 @@ export function registerConversationsRoutes(router) {
       },
     );
     json(res, 200, { ok: true, ...health });
+  });
+
+  router.post("/api/conversations/schema-ensure", async (_req, res, runtime) => {
+    const conversations = requireConversations(runtime);
+    if (!conversations.hasBlastDatabase) {
+      throw httpError(400, "没有 Notion Blast Leads database 配置。请到 Settings 检查 Notion。");
+    }
+    if (!conversations.notion || !conversations.blastDatabaseId) {
+      throw httpError(500, "Conversations Notion service 没有载入。请重启 Mamba server。");
+    }
+
+    let database;
+    try {
+      database = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
+    } catch (error) {
+      throw httpError(502, `读取 Notion Blast Leads schema 失败：${error.message}`);
+    }
+
+    const before = checkSchema(database);
+    const properties = missingAutoCreateProperties(before);
+    const createNames = Object.keys(properties);
+    const wrongTypeFields = before.checks
+      .filter((item) => item.status === "wrong_type")
+      .map((item) => ({ name: item.name, current: item.actual, need: item.types.join(" / ") }));
+
+    if (createNames.length) {
+      try {
+        await conversations.notion("PATCH", `/databases/${conversations.blastDatabaseId}`, { properties });
+      } catch (error) {
+        await writeConversationLog(conversations, "error", "schema_ensure_failed", "Failed to create missing Blast Leads fields.", {
+          fields: createNames,
+          error: error.message,
+        });
+        throw httpError(502, `补齐 Notion Blast Leads 字段失败：${error.message}`);
+      }
+    }
+
+    let afterDatabase;
+    try {
+      afterDatabase = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
+    } catch (error) {
+      throw httpError(502, `重新读取 Notion Blast Leads schema 失败：${error.message}`);
+    }
+    const after = checkSchema(afterDatabase);
+
+    await writeConversationLog(
+      conversations,
+      after.ok ? "info" : "warn",
+      "schema_ensure",
+      createNames.length ? "Missing Blast Leads fields were created." : "Blast Leads schema already had all auto-create fields.",
+      {
+        databaseTitle: after.databaseTitle,
+        createdFields: createNames,
+        remainingMissing: after.checks.filter((item) => item.status === "missing").map((item) => item.name),
+        wrongTypeFields,
+      },
+    );
+
+    json(res, 200, {
+      ok: true,
+      createdFields: createNames,
+      wrongTypeFields,
+      ...after,
+    });
   });
 
   router.post("/api/conversations/refresh-replies", async (_req, res, runtime) => {
