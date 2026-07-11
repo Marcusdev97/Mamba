@@ -17,6 +17,46 @@ function pageId(id) {
   return String(id || "").replace(/[^a-fA-F0-9]/g, "");
 }
 
+function propertyChoice(page, name) {
+  const property = page?.properties?.[name];
+  return String(property?.select?.name ?? property?.status?.name ?? "").trim();
+}
+
+function propertyText(page, name) {
+  const property = page?.properties?.[name];
+  const items = property?.rich_text ?? property?.title ?? [];
+  return items.map((item) => item?.plain_text ?? item?.text?.content ?? "").join("").trim();
+}
+
+export function nextFlowBlockReason(page, classifyReplyText) {
+  if (page?.properties?.["Stop Flag"]?.checkbox === true) return "Stop Flag";
+
+  const status = propertyChoice(page, "Status");
+  if (["Stop", "Not Interested", "Appointment", "Invalid", "Do Not Contact"].includes(status)) {
+    return `Status: ${status}`;
+  }
+
+  const sequence = propertyChoice(page, "Sequence Status");
+  if (["Stopped", "Not Interested", "Human Takeover", "Completed"].includes(sequence)) {
+    return `Sequence Status: ${sequence}`;
+  }
+
+  const category = propertyChoice(page, "AI Category");
+  if (["Stop", "Not Interested", "Spam"].includes(category)) {
+    return `AI Category: ${category}`;
+  }
+
+  const lastReply = propertyText(page, "Last Reply Text");
+  if (lastReply && typeof classifyReplyText === "function") {
+    const verdict = classifyReplyText(lastReply);
+    if (["STOP_DNC", "COMPLAINT", "NOT_INTERESTED", "AGENT_OR_WRONG_TARGET"].includes(verdict?.route)) {
+      return `Last Reply: ${verdict.route}`;
+    }
+  }
+
+  return "";
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -37,6 +77,26 @@ async function queryLeadPage(nextFlow, phone) {
     page_size: 1,
   });
   return data?.results?.[0] || null;
+}
+
+async function queryLeadPages(nextFlow, phones) {
+  const pages = new Map();
+  const unique = [...new Set(phones.filter(Boolean))];
+  for (let offset = 0; offset < unique.length; offset += 40) {
+    const chunk = unique.slice(offset, offset + 40);
+    let cursor;
+    do {
+      const data = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, {
+        filter: { or: chunk.map((phone) => ({ property: "Phone", phone_number: { equals: phone } })) },
+        page_size: 100,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      });
+      for (const page of data?.results ?? []) pages.set(pageId(page.id), page);
+      cursor = data?.has_more ? data?.next_cursor : null;
+    } while (cursor);
+    if (offset + 40 < unique.length) await sleep(350);
+  }
+  return pages;
 }
 
 function replyProps(nextFlow, reply, at, text, reasonSuffix = "") {
@@ -90,23 +150,27 @@ async function creditReplyMetrics(nextFlow, state, phone, signal) {
 
 async function latestInboundReplies(nextFlow, instances, leadsByPhone, sinceForLead) {
   const inbound = new Map();
+  const diagnostics = [];
+  const oldestNeeded = Math.min(...[...leadsByPhone.values()].map(sinceForLead).filter(Number.isFinite));
   for (const instance of instances) {
-    let response;
+    let scan;
     try {
-      response = await nextFlow.api(`/chat/findMessages/${encodeURIComponent(instance.name)}`, {
-        method: "POST",
-        body: JSON.stringify({ where: {} }),
-      });
-    } catch {
+      scan = await fetchInstanceMessagesDeep(nextFlow, instance.name, Number.isFinite(oldestNeeded) ? oldestNeeded : Date.now() - 7 * 864e5);
+    } catch (error) {
+      diagnostics.push({ instance: instance.name, pages: 0, messages: 0, error: error.message || String(error) });
       continue;
     }
 
-    for (const message of nextFlow.collectMessageObjects(response)) {
+    let matched = 0;
+    for (const message of scan.messages) {
       if (message?.key?.fromMe) continue;
-      const phone = nextFlow.phoneFromJid(message?.key?.remoteJid);
+      const phone = nextFlow.resolvePhone?.(message) || nextFlow.phoneFromJid(message?.key?.remoteJid);
       const lead = phone && leadsByPhone.get(phone);
       if (!lead) continue;
-      if (lead.senderInstance && lead.senderInstance !== instance.name) continue;
+      const senderKeys = Array.isArray(lead.senderKeys)
+        ? lead.senderKeys.filter(Boolean)
+        : [lead.senderInstance].filter(Boolean);
+      if (senderKeys.length && !senderKeys.includes(instance.name)) continue;
 
       const at = nextFlow.messageTime(message);
       const sinceMs = sinceForLead(lead);
@@ -114,11 +178,21 @@ async function latestInboundReplies(nextFlow, instances, leadsByPhone, sinceForL
 
       const previous = inbound.get(phone);
       if (!previous || at > previous.at) {
-        inbound.set(phone, { at, text: nextFlow.extractText(message) });
+        const text = nextFlow.describeMessage?.(message) || nextFlow.extractText(message) || "[reply]";
+        inbound.set(phone, { at, text });
+        matched += 1;
       }
     }
+    diagnostics.push({
+      instance: instance.name,
+      pages: scan.pagesRead,
+      messages: scan.messages.length,
+      matched,
+      totalReported: scan.totalReported,
+      truncated: scan.truncated,
+    });
   }
-  return inbound;
+  return { inbound, diagnostics };
 }
 
 async function loadOpenInstances(nextFlow) {
@@ -127,6 +201,68 @@ async function loadOpenInstances(nextFlow) {
   } catch (error) {
     throw httpError(503, `读取 WhatsApp Phone Health 失败: ${error.message}`);
   }
+}
+
+function paginationNumber(value, names) {
+  const containers = [value, value?.messages, value?.data, value?.data?.messages];
+  for (const container of containers) {
+    for (const name of names) {
+      const number = Number(container?.[name]);
+      if (Number.isFinite(number) && number >= 0) return number;
+    }
+  }
+  return null;
+}
+
+function messageIdentity(message) {
+  return String(message?.key?.id || `${message?.key?.remoteJid || "?"}_${message?.messageTimestamp || "?"}`);
+}
+
+export async function fetchInstanceMessagesDeep(nextFlow, instanceName, sinceMs, options = {}) {
+  const pageSize = Number(options.pageSize || 200);
+  const maxPages = Number(options.maxPages || 60);
+  const messages = [];
+  const seenMessages = new Set();
+  const seenPages = new Set();
+  let pagesRead = 0;
+  let totalReported = null;
+  let truncated = false;
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const response = await nextFlow.api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+      method: "POST",
+      body: JSON.stringify({ where: {}, page, offset: pageSize }),
+    });
+    const pageMessages = nextFlow.collectMessageObjects(response);
+    pagesRead += 1;
+
+    const fingerprint = pageMessages.map(messageIdentity).slice(0, 5).join("|");
+    if (fingerprint && seenPages.has(fingerprint)) break;
+    if (fingerprint) seenPages.add(fingerprint);
+
+    let added = 0;
+    for (const message of pageMessages) {
+      const identity = messageIdentity(message);
+      if (seenMessages.has(identity)) continue;
+      seenMessages.add(identity);
+      messages.push(message);
+      added += 1;
+    }
+
+    const total = paginationNumber(response, ["total", "totalRecords", "count"]);
+    const totalPages = paginationNumber(response, ["pages", "totalPages", "pageCount"]);
+    if (total !== null) totalReported = total;
+
+    if (!pageMessages.length || !added) break;
+    if (totalPages !== null && page >= totalPages) break;
+    if (total !== null && seenMessages.size >= total) break;
+
+    const times = pageMessages.map(nextFlow.messageTime).filter((time) => time > 0);
+    if (times.length && Math.max(...times) < sinceMs) break;
+    if (page === maxPages) truncated = true;
+  }
+
+  return { messages, pagesRead, totalReported, truncated };
 }
 
 export function registerNextFlowRoutes(router) {
@@ -157,7 +293,7 @@ export function registerNextFlowRoutes(router) {
     }
 
     const leadsByPhone = new Map([...runPhones.entries()].map(([phone, name]) => [phone, { phone, name }]));
-    const inbound = await latestInboundReplies(nextFlow, instances, leadsByPhone, () => startMs);
+    const { inbound } = await latestInboundReplies(nextFlow, instances, leadsByPhone, () => startMs);
     for (const [phone, event] of inbound) {
       if (state.repliesSeen[phone]) continue;
       const verdict = nextFlow.classifyReplyText(event.text);
@@ -216,6 +352,7 @@ export function registerNextFlowRoutes(router) {
     ] };
 
     const leads = [];
+    const blocked = [];
     let cursor;
     try {
       do {
@@ -226,6 +363,21 @@ export function registerNextFlowRoutes(router) {
           const phone = nextFlow.normalizePhone(nextFlow.nfPhone(page, "Phone"));
           const next = nextFlow.nfSelect(page, "Next Flow");
           if (!phone || !next || next === "Completed") continue;
+          const blockReason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
+          if (blockReason) {
+            blocked.push({
+              pageId: page.id,
+              name: nextFlow.nfTitle(page, "Name") || phone,
+              phone,
+              reason: blockReason,
+            });
+            continue;
+          }
+          const senderKeys = [
+            nextFlow.nfSelect(page, "Sender Instance"),
+            nextFlow.nfSelect(page, "Assigned Sender Key") || nextFlow.nfText(page, "Assigned Sender Key"),
+            nextFlow.nfSelect(page, "Last Sender Key") || nextFlow.nfText(page, "Last Sender Key"),
+          ].filter(Boolean);
           leads.push({
             pageId: page.id,
             name: nextFlow.nfTitle(page, "Name") || phone,
@@ -236,6 +388,7 @@ export function registerNextFlowRoutes(router) {
             lastReply: nextFlow.nfText(page, "Last Reply Text"),
             lastBlastAt: page?.properties?.["Last Blast At"]?.date?.start || null,
             senderInstance: nextFlow.nfSelect(page, "Sender Instance"),
+            senderKeys: [...new Set(senderKeys)],
           });
         }
         cursor = data?.has_more ? data?.next_cursor : null;
@@ -245,6 +398,9 @@ export function registerNextFlowRoutes(router) {
     }
 
     const skipped = [];
+    const candidatesChecked = leads.length;
+    let instancesChecked = 0;
+    let scanDiagnostics = [];
     let evoOffline = false;
     if (leads.length) {
       let instances = [];
@@ -255,9 +411,12 @@ export function registerNextFlowRoutes(router) {
       }
 
       if (!evoOffline && instances.length) {
+        instancesChecked = instances.length;
         const byPhone = new Map(leads.map((lead) => [lead.phone, lead]));
-        const inbound = await latestInboundReplies(nextFlow, instances, byPhone, (lead) =>
+        const scan = await latestInboundReplies(nextFlow, instances, byPhone, (lead) =>
           lead.lastBlastAt ? new Date(lead.lastBlastAt).getTime() : Date.now() - 7 * 864e5);
+        const inbound = scan.inbound;
+        scanDiagnostics = scan.diagnostics;
 
         for (const [phone, event] of inbound) {
           const lead = byPhone.get(phone);
@@ -296,7 +455,25 @@ export function registerNextFlowRoutes(router) {
       }
     }
 
-    json(res, 200, { ok: true, today, leads, skipped, evoOffline });
+    json(res, 200, {
+      ok: true,
+      today,
+      leads,
+      skipped,
+      blocked,
+      evoOffline,
+      whatsappCheck: {
+        checkedAt: new Date().toISOString(),
+        candidates: candidatesChecked,
+        instances: instancesChecked,
+        repliesFound: skipped.length,
+        pagesRead: scanDiagnostics.reduce((sum, item) => sum + Number(item.pages || 0), 0),
+        messagesRead: scanDiagnostics.reduce((sum, item) => sum + Number(item.messages || 0), 0),
+        matched: scanDiagnostics.reduce((sum, item) => sum + Number(item.matched || 0), 0),
+        truncated: scanDiagnostics.some((item) => item.truncated),
+        errors: scanDiagnostics.filter((item) => item.error),
+      },
+    });
   });
 
   router.post("/api/next-flow/redflag", async (req, res, runtime) => {
@@ -338,11 +515,35 @@ export function registerNextFlowRoutes(router) {
 
     const incoming = Array.isArray(body.leads) ? body.leads : [];
     const seen = new Set();
-    const leads = [];
+    const normalized = [];
     for (const item of incoming) {
       const phone = nextFlow.normalizePhone(item.phone);
       if (!phone || seen.has(phone)) continue;
       seen.add(phone);
+      normalized.push({ ...item, phone });
+    }
+
+    let currentPages;
+    try {
+      currentPages = await queryLeadPages(nextFlow, normalized.map((item) => item.phone));
+    } catch (error) {
+      throw httpError(502, `发送前批量检查 Notion 状态失败: ${error.message}`);
+    }
+
+    const leads = [];
+    const blocked = [];
+    for (const item of normalized) {
+      const phone = item.phone;
+      const page = currentPages.get(pageId(item.pageId));
+      if (!page) {
+        blocked.push({ phone, name: String(item.name ?? "").trim() || phone, reason: "Notion row not found" });
+        continue;
+      }
+      const reason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
+      if (reason) {
+        blocked.push({ phone, name: String(item.name ?? "").trim() || phone, reason });
+        continue;
+      }
       leads.push({
         id: `pick_${String(leads.length + 1).padStart(5, "0")}`,
         name: String(item.name ?? "").trim() || "there",
@@ -350,10 +551,13 @@ export function registerNextFlowRoutes(router) {
         senderInstance: String(item.senderInstance ?? "").trim(),
       });
     }
-    if (!leads.length) throw httpError(400, "没有可发送的选中客户。");
+    if (!leads.length) {
+      const detail = blocked.length ? `（${blocked.length} 人已拒绝、STOP 或转人工）` : "";
+      throw httpError(400, `没有可发送的选中客户${detail}。`);
+    }
 
     nextFlow.setLeadsCache({ projectId: project.id, leads, rejected: [], sourcePath: "(next-flow picker)" });
-    json(res, 200, { ok: true, project: project.id, loaded: leads.length });
+    json(res, 200, { ok: true, project: project.id, loaded: leads.length, blocked });
   });
 
   router.post("/api/next-flow/set-flow", async (req, res, runtime) => {
@@ -379,6 +583,7 @@ export function registerNextFlowRoutes(router) {
 
     let set = 0;
     let skippedStop = 0;
+    let skippedRejected = 0;
     const notFound = [];
     for (const phone of phones) {
       const page = await queryLeadPage(nextFlow, phone);
@@ -386,8 +591,10 @@ export function registerNextFlowRoutes(router) {
         notFound.push(phone);
         continue;
       }
-      if (page.properties?.["Stop Flag"]?.checkbox === true) {
-        skippedStop += 1;
+      const blockReason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
+      if (blockReason) {
+        if (blockReason === "Stop Flag" || blockReason.startsWith("Status: Stop")) skippedStop += 1;
+        else skippedRejected += 1;
         continue;
       }
       await nextFlow.notion("PATCH", `/pages/${pageId(page.id)}`, { properties: props });
@@ -400,6 +607,7 @@ export function registerNextFlowRoutes(router) {
       nextFlow: target.label,
       set,
       skippedStop,
+      skippedRejected,
       notFound: notFound.length,
       notFoundSample: notFound.slice(0, 15),
     });
@@ -428,6 +636,7 @@ export function registerNextFlowRoutes(router) {
     let cursor;
     let set = 0;
     let skippedStop = 0;
+    let skippedRejected = 0;
     do {
       const query = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, {
         filter: { and: [
@@ -439,8 +648,10 @@ export function registerNextFlowRoutes(router) {
         ...(cursor ? { start_cursor: cursor } : {}),
       });
       for (const page of query?.results ?? []) {
-        if (page.properties?.["Stop Flag"]?.checkbox === true) {
-          skippedStop += 1;
+        const blockReason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
+        if (blockReason) {
+          if (blockReason === "Stop Flag" || blockReason.startsWith("Status: Stop")) skippedStop += 1;
+          else skippedRejected += 1;
           continue;
         }
         await nextFlow.notion("PATCH", `/pages/${pageId(page.id)}`, { properties: props });
@@ -450,7 +661,7 @@ export function registerNextFlowRoutes(router) {
       cursor = query?.has_more ? query?.next_cursor : null;
     } while (cursor);
 
-    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop });
+    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop, skippedRejected });
   });
 
   router.post("/api/next-flow/preview-template", async (req, res, runtime) => {

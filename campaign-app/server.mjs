@@ -41,6 +41,7 @@ import {
 } from "./campaign_core.mjs";
 import { FLOW_SEQUENCE, flowByLabel, flowStateAfter, classifyReplyText } from "./flow_sequence.mjs";
 import { collectMessageObjects, extractText, phoneFromJid, messageTime } from "./morning_followup.mjs";
+import { describeMessage, resolvePhone } from "./reply_intake.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const HOST = "127.0.0.1";
@@ -199,7 +200,9 @@ const runtime = await loadRuntime({
     normalizePhone: nfNormalizePhone,
     collectMessageObjects,
     extractText,
+    describeMessage,
     phoneFromJid,
+    resolvePhone,
     messageTime,
     classifyReplyText,
     systemLogs: systemLogService,
@@ -274,7 +277,9 @@ const runtime = await loadRuntime({
     openInstances: () => openInstances(api),
     collectMessageObjects,
     extractText,
+    describeMessage,
     phoneFromJid,
+    resolvePhone,
     messageTime,
     classifyReplyText,
     systemLogs: systemLogService,

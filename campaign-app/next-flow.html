@@ -73,7 +73,7 @@
   <div class="bar">
     <span class="pill">项目</span>
     <select id="projectSel"></select>
-    <button class="ghost" onclick="load()">↻ 刷新</button>
+    <button id="refreshBtn" class="ghost" onclick="refreshWhatsApp()">↻ Refresh + Check WhatsApp</button>
     <span id="instWrap" class="insts"></span>
     <span class="pill">发送时间</span>
     <input id="startTime" class="tinp" placeholder="现在" title="开始时间,如 14:00,留空=现在">
@@ -135,7 +135,7 @@ function toast(msg, isErr) {
 }
 async function api(path, body, method) {
   const res = await fetch(path, body ? { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-                                     : { method: method || "GET" });
+                                     : { method: method || "GET", cache: "no-store" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
   return data;
@@ -236,6 +236,7 @@ async function setGroup(fromFlow, btn) {
     const r = await api("/api/next-flow/set-group", { projectName: currentProject, fromFlow, toFlow });
     let msg = `已把 ${r.set} 人 ${r.from} → ${r.to}`;
     if (r.skippedStop) msg += ` · ${r.skippedStop} 退订跳过`;
+    if (r.skippedRejected) msg += ` · ${r.skippedRejected} 拒绝/转人工跳过`;
     toast(msg);
     await load();
   } catch (e) { toast("失败:" + e.message, true); }
@@ -252,6 +253,7 @@ async function applySetFlow() {
     let msg = `已设 ${r.set} 人 → ${r.nextFlow}`;
     if (r.notFound) msg += ` · ${r.notFound} 个没找到`;
     if (r.skippedStop) msg += ` · ${r.skippedStop} 个已退订跳过`;
+    if (r.skippedRejected) msg += ` · ${r.skippedRejected} 个拒绝/转人工跳过`;
     toast(msg);
     document.getElementById("phonesBox").value = "";
     await load();
@@ -347,7 +349,10 @@ async function doSend(mode, proj, rows, flow, limitCount) {
   try {
     if (mode === "LIVE") {
       const sel = rows.map((r) => ({ pageId: r.dataset.id, name: r.dataset.name, phone: r.dataset.phone, senderInstance: r.dataset.sender || "" }));
-      await api("/api/next-flow/load", { project: proj.id, leads: sel });
+      const loaded = await api("/api/next-flow/load", { project: proj.id, leads: sel });
+      if ((loaded.blocked || []).length) {
+        toast(`发送前再次拦截 ${loaded.blocked.length} 个拒绝/STOP 客户`);
+      }
     }
     const instances = checkedInstances();
     const startTime = document.getElementById("startTime").value.trim();
@@ -466,7 +471,19 @@ async function pollStatus() {
   } catch { if (wasRunning) setTimeout(pollStatus, 3000); }
 }
 
-async function load() {
+async function refreshWhatsApp() {
+  await load(true);
+}
+
+async function load(manualCheck = false) {
+  const refreshBtn = document.getElementById("refreshBtn");
+  if (manualCheck && refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "正在检查 WhatsApp…";
+    const sp = document.getElementById("scanPanel");
+    sp.style.display = "";
+    sp.innerHTML = '<div class="statushead">正在读取所有在线 WhatsApp 号码和客户最新回复…</div>';
+  }
   document.getElementById("list").innerHTML = '<div class="empty">加载中…</div>';
   try {
     const [proj, inst, data] = await Promise.all([
@@ -495,10 +512,21 @@ async function load() {
     // 🛡 开单前回复检测结果
     const sp = document.getElementById("scanPanel");
     const skipped = data.skipped || [];
+    const check = data.whatsappCheck || {};
+    const checkTime = check.checkedAt
+      ? new Date(check.checkedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      : "";
+    const checkSummary = `已检查 ${check.candidates || 0} 位客户 · ${check.instances || 0} 个 WhatsApp connection · 实际读取 ${check.pagesRead || 0} 页 / ${check.messagesRead || 0} 条消息${checkTime ? ` · ${checkTime}` : ""}`;
     if (data.evoOffline) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,本次没扫回复</div>' +
         '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先去 Settings / Phone Setup 把引擎带起来,再刷新本页。</div>';
+    } else if ((check.errors || []).length) {
+      sp.style.display = "";
+      sp.innerHTML = '<div class="statushead" style="color:#f87171">⚠️ WhatsApp 深度检查不完整</div>' +
+        '<div style="color:#94a3b8;font-size:13px;margin-top:5px">' + esc(checkSummary) + '</div>' +
+        '<div style="color:#fca5a5;font-size:13px;margin-top:5px">' +
+        (check.errors || []).map((x) => esc(x.instance + ': ' + x.error)).join('<br>') + '</div>';
     } else if (skipped.length) {
       const red = skipped.filter((x) => x.signal === "RED").length;
       const green = skipped.filter((x) => x.signal === "GREEN").length;
@@ -508,18 +536,27 @@ async function load() {
       sp.innerHTML = '<div class="statushead">🛡 开单前检测:自动剔除 ' + skipped.length + ' 个回复过的客户' +
         '(🔴 ' + red + ' 停/拒 · 🟢 ' + green + ' 有意向' + (other ? ' · ⚪ ' + other + ' 其他' : '') + ')' +
         (notionFailed ? ',⚠️ ' + notionFailed + ' 个 Notion 写入失败' : ',✅ 已写回 Notion') + '</div>' +
+        '<div style="color:#7dd3fc;font-size:13px;margin-top:5px">' + esc(checkSummary) + '</div>' +
         '<div style="color:#94a3b8;font-size:13px;margin-top:6px">' +
         skipped.map((x) => esc(x.name) + '(…' + esc(String(x.phone).slice(-4)) + ')「' + esc(x.text || '') + '」→ ' + esc(x.route) +
           (x.notionUpdated === false ? ' · ⚠️ ' + esc(x.notionError || 'Notion 写入失败') : '')).join('<br>') +
         '</div>';
     } else {
       sp.style.display = "";
-      sp.innerHTML = '<div class="statushead" style="color:#4ade80">🛡 开单前检测:名单里没有人回复过,可以放心发。</div>';
+      sp.innerHTML = '<div class="statushead" style="color:#4ade80">🛡 WhatsApp 检查完成:名单里没有人发过新信息。</div>' +
+        '<div style="color:#7dd3fc;font-size:13px;margin-top:5px">' + esc(checkSummary) + '</div>';
     }
     render();
     pollStatus(); // show a run already in progress, if any
+    if (manualCheck) toast(skipped.length ? `发现并移除 ${skipped.length} 位已回复客户` : "WhatsApp 检查完成,没有发现新回复");
   } catch (e) {
     document.getElementById("list").innerHTML = `<div class="empty">加载失败:${esc(e.message)}</div>`;
+    if (manualCheck) toast("WhatsApp 检查失败:" + e.message, true);
+  } finally {
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "↻ Refresh + Check WhatsApp";
+    }
   }
 }
 load();
