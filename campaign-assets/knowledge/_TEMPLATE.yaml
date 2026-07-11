@@ -1,0 +1,62 @@
+# ============================================================
+# Mamba Layer 2 — 楼盘知识 YAML 模板
+# 用法: copy 这个文件 -> 改名 <盘名>.yaml (例: binastra.yaml)
+#       填完丢在这个 folder 就自动生效, 不用重启。
+# 规则:
+#   - AI 只准引用这里和 Notion verified facts 里的数字
+#   - promos 的 valid_until 过期会自动消失, 不会讲旧 promo
+#   - do_not_say 是这个盘的红线, 会进 AI 的硬性规则
+#   - 下划线开头的文件 (像这个 _TEMPLATE) 不会被读
+# ============================================================
+
+project_id: my_project          # 唯一 ID (小写+下划线)。要和 projects.json 的 id 一致
+name: My Project                # 显示名。要和 Notion Blast Leads 的 Project select 一致
+one_liner: 一句话卖点 (给 AI 做转推判断用)
+
+location:
+  area: Cheras, KL              # 区域
+  landmark: 300m to MRT XXX     # 地标/交通
+  waze: https://waze.com/ul/... # 发给客户的 link
+
+developer: XXX Development
+
+price_range: [380000, 550000]   # [最低, 最高] SPA 价
+monthly_from: 2100              # 最低月供 (RM, 大约), 没有就删掉这行
+
+types:                          # 户型
+  - layout: 2R2B
+    sqft: 850
+    from: 380000                # 这个户型起价
+  - layout: 3R2B
+    sqft: 1000
+    from: 450000
+
+target_buyer: [first_time, young_family, investor]   # 适合谁 (转推匹配用)
+
+selling_points:
+  - Freehold 永久地契
+  - 走路 5 分钟到 MRT
+  - 低密度
+
+promos:
+  - desc: "Rebate X% + free legal fee"
+    valid_until: 2026-08-31     # 过了这天 AI 自动不讲
+  - desc: "Early bird package"
+    valid_until: 2026-07-31
+
+do_not_say:                     # 这个盘的红线 (每条都会进 AI 硬性规则)
+  - 不可以保证 loan 一定批
+  - rebate 数字以上面 promos 为准, 不可以自己加码
+  - 不可以讲 "包租" / "保证回酬" 这类字眼
+
+gallery:
+  address: XXX Sales Gallery, Jalan ...
+  waze: https://waze.com/ul/...
+  hours: "每天 10am-6pm"
+  slot_style: "约时间给两个选项: 周六 11am 或 2pm"
+
+faq:                            # 常见问题 (可选, 有多少放多少)
+  - q: 有没有 bumi lot?
+    a: ...
+  - q: 几时交房?
+    a: 预计 20XX QX (以 SPA 为准)

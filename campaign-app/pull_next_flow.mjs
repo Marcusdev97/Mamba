@@ -144,12 +144,19 @@ async function main() {
   const pages = await queryAll();
 
   // GLOBAL suppression gate (A1): a lead's own Stop Flag is already excluded by
-  // the query, but a STOP recorded under ANOTHER project would not be — this
-  // snapshot check covers the cross-project case.
-  const { loadSuppressionSync } = await import("./suppression.mjs");
-  const { set: suppressed, updatedAt: supAt } = loadSuppressionSync();
-  if (supAt) console.log(`Global STOP list: ${suppressed.size} phone(s) (snapshot ${supAt}).\n`);
-  else console.log("Global STOP list: no snapshot yet — run `node campaign-app/suppression.mjs` once.\n");
+  // the query, but a STOP recorded under ANOTHER project would not be. Re-sync
+  // from Notion right before building cohorts (a stale snapshot here = we blast
+  // someone who said STOP yesterday); fall back to the local snapshot offline.
+  const { syncSuppressionList, loadSuppressionSync } = await import("./suppression.mjs");
+  let suppressed, supAt;
+  try {
+    ({ set: suppressed, updatedAt: supAt } = await syncSuppressionList());
+    console.log(`Global STOP list re-synced: ${suppressed.size} phone(s) (@ ${supAt}).\n`);
+  } catch (e) {
+    ({ set: suppressed, updatedAt: supAt } = loadSuppressionSync());
+    if (supAt) console.log(`⚠️ Notion sync failed (${String(e.message).slice(0, 80)}) — using local snapshot: ${suppressed.size} phone(s) (${supAt}).\n`);
+    else console.log(`⚠️ Notion sync failed and no local snapshot — STOP gate EMPTY, be careful. (${String(e.message).slice(0, 80)})\n`);
+  }
 
   // group by Project + Next Flow
   const groups = new Map(); // key -> { project, nextFlow, leads:[] }

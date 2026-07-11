@@ -332,6 +332,33 @@ export class NotionSync {
     return result?.results?.[0] ?? null;
   }
 
+  // STOP stops the PERSON, not the project: the same phone can have one Blast
+  // Leads row per 楼盘 it was blasted under. Tick Stop Flag on EVERY row that
+  // shares this phone so no other project's sequence keeps messaging them.
+  // Best-effort — a failure here never blocks the main reply upsert.
+  async stopAllRowsForPhone(phone, reason = "STOP") {
+    if (!this.enabled || !phone) return 0;
+    let flagged = 0;
+    try {
+      const result = await this.queryDataSource(blastLeadsDatabase(this.config), {
+        property: "Phone",
+        phone_number: { equals: phone },
+      }, 20);
+      for (const page of result?.results ?? []) {
+        if (page?.properties?.["Stop Flag"]?.checkbox === true) continue;
+        await this.updatePage(page.id, {
+          "Stop Flag": checkbox(true),
+          "Stop Reason": richText(`Auto (all projects): ${reason}`),
+        });
+        flagged += 1;
+      }
+      if (flagged > 1) console.log(`[notion-sync] STOP propagated to ${flagged} project row(s) for phone=${phone}`);
+    } catch (error) {
+      console.log(`[notion-sync] stopAllRowsForPhone failed phone=${phone}: ${error.message}`);
+    }
+    return flagged;
+  }
+
   async findRecycleLeadByPhone(phone) {
     if (this.state.recycleLeadPages[phone]) {
       try {
@@ -496,6 +523,9 @@ export class NotionSync {
 
     const schema = await this.getBlastSchema();
     const existing = await this.findLeadByPhone(event.phone);
+    // RED / STOP verdict -> flag every project row for this phone first, so a
+    // multi-盘 customer is stopped everywhere, not just the row found below.
+    if (event.stopFlag) await this.stopAllRowsForPhone(event.phone, event.route || "STOP");
     if (!existing && !createIfMissing) {
       console.log(`[notion-sync] reply skipped phone=${event.phone} reason=not_in_blast_leads`);
       return { action: "not_found", matched: false };

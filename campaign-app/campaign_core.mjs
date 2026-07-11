@@ -740,6 +740,31 @@ export class CampaignRunner {
       return;
     }
 
+    // P2 (2026-07-11): 未结算回复防线。客户之前回复过但没人结算 (tracker 没开 /
+    // 早间没跑) 的话, Notion 状态还是 Running, cohort 挡不住 — 这里发 Part 1 前
+    // 直接问 Evolution: 这个号最近 N 天有没有 inbound? 有 -> 跳过, 等结算处理。
+    // repliedSince 查询失败时 fail-open (返回 false), 所以这是安全网不是唯一闸门。
+    if (!job.part1?.sentAt) {
+      const lookbackDays = Number(this.config?.delivery?.replyLookbackDays ?? 7);
+      if (lookbackDays > 0) {
+        const sinceIso = new Date(Date.now() - lookbackDays * 86400000).toISOString();
+        if (await this.repliedSince(job.instanceName, supPhone ?? job.lead.phone, sinceIso)) {
+          job.status = "SKIPPED_REPLIED";
+          job.error = `Inbound reply within last ${lookbackDays}d — settle it (早间跟进/tracker) before re-sending.`;
+          await this.saveState();
+          this.showProgress(`✋ ${job.lead.name} skipped — 有未结算的回复,先跑早间跟进。`);
+          await this.systemLog("info", "unsettled_reply_skip", "Lead skipped: recent inbound reply not yet settled.", {
+            jobId: job.id,
+            name: job.lead.name,
+            phone: job.lead.phone,
+            instanceName: job.instanceName,
+            lookbackDays,
+          });
+          return;
+        }
+      }
+    }
+
     try {
       if (!job.part1?.sentAt) {
         job.status = "SENDING_PART1";
@@ -956,15 +981,21 @@ export class CampaignRunner {
     }
     this.pushLog(`Campaign ${this.state.status}. Final: ${JSON.stringify(this.summary())}`);
     // 跑完自动发 Telegram 通知(COMPLETED / STOPPED 都发,注明状态与统计)。
+    // 优先发去 Mamba 系统台 (Hub ops 群); 没配 ops 才退回旧的私聊通知。
     try {
-      const { makeTelegram } = await import("./telegram.mjs");
-      const tg = makeTelegram();
-      if (tg.enabled && tg.hasChatId) {
-        const s = this.summary();
-        const proj = this.state.project?.name || this.state.project || this.config?.campaignName || "";
-        const parts = Object.entries(s).map(([k, v]) => `${k}: ${v}`).join(" · ") || "(无)";
-        const icon = this.state.status === "COMPLETED" ? "✅" : "⏹";
-        await tg.send(`${icon} Mamba ${this.state.status}\n项目: ${proj}\n模式: ${this.state.mode}\n${parts}`);
+      const s = this.summary();
+      const proj = this.state.project?.name || this.state.project || this.config?.campaignName || "";
+      const parts = Object.entries(s).map(([k, v]) => `${k}: ${v}`).join(" · ") || "(无)";
+      const icon = this.state.status === "COMPLETED" ? "✅" : "⏹";
+      const text = `${icon} Mamba ${this.state.status}\n项目: ${proj}\n模式: ${this.state.mode}\n${parts}`;
+      const { makeHub } = await import("./telegram_hub.mjs");
+      const hub = makeHub();
+      if (hub.hasOps) {
+        await hub.postOps(text);
+      } else {
+        const { makeTelegram } = await import("./telegram.mjs");
+        const tg = makeTelegram();
+        if (tg.enabled && tg.hasChatId) await tg.send(text);
       }
     } catch (err) {
       this.pushLog(`Telegram 完成通知发送失败: ${err?.message || err}`);

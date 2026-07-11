@@ -35,8 +35,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
-import { loadSuppressionSync, isSuppressed, normalizePhone } from "./suppression.mjs";
+import { loadSuppressionSync, isSuppressed, normalizePhone, addLocalStop } from "./suppression.mjs";
 import { loadBrainCacheSync } from "./brain_cache_sync.mjs";
+import { loadProjectContext, resolveProjectLocal, listProjects } from "./knowledge_layer.mjs";
 import { collectMessages, inboundEvent } from "./reply_intake.mjs";
 import { makeTelegram, parseUpdate } from "./telegram.mjs";
 import {
@@ -172,8 +173,49 @@ function brainProject() {
   return process.env.BRAIN_PROJECT || env.BRAIN_PROJECT || readJsonSyncSafe(path.join(paths.dataDir, "notion_config.json"))?.project || "Enlace";
 }
 
+// ---------- project resolution (Layer 2 auto trigger) ----------
+//
+// 哪个盘? 本地先 (active-run / tracker / projects.json), 认不出再问 Notion
+// (Blast Leads 按 phone 查, 同号多盘时优先 Sender Instance 一样的那行, 再看
+// 最新 blast 日期), 最后 fallback 配置的默认盘。结果按 phone 缓存 30 分钟。
+const projectCache = new Map(); // phone -> { project, at }
+const PROJECT_CACHE_MS = 30 * 60 * 1000;
+
+async function resolveProjectFromNotion(event) {
+  try {
+    const dbId = configuredDb("blastLeads", null);
+    if (!dbId) return null;
+    const q = await notionCall("POST", `/databases/${dbId}/query`, {
+      filter: { property: "Phone", phone_number: { contains: event.phone.slice(-9) } },
+      page_size: 10,
+    });
+    const rows = q?.results ?? [];
+    if (!rows.length) return null;
+    const sel = (page, name) => page?.properties?.[name]?.select?.name ?? null;
+    const date = (page, name) => page?.properties?.[name]?.date?.start ?? "";
+    const byInstance = event.instanceName ? rows.filter((p) => sel(p, "Sender Instance") === event.instanceName) : [];
+    const pool = byInstance.length ? byInstance : rows;
+    const blastAt = (p) => new Date(date(p, "Last Blast At") || date(p, "First Blast At") || 0).getTime();
+    const best = pool.slice().sort((a, b) => blastAt(b) - blastAt(a))[0];
+    return sel(best, "Project");
+  } catch (error) {
+    console.log(`[project] Notion lookup failed for ${event.phone}: ${error.message}`);
+    return null;
+  }
+}
+
+async function resolveProject(event) {
+  const cached = projectCache.get(event.phone);
+  if (cached && Date.now() - cached.at < PROJECT_CACHE_MS) return cached.project;
+  const project = resolveProjectLocal(event.phone)
+    || (SIMULATE ? null : await resolveProjectFromNotion(event))
+    || brainProject();
+  projectCache.set(event.phone, { project, at: Date.now() });
+  return project;
+}
+
 // Every decision lands locally FIRST (survives Notion being down), Notion best-effort after.
-async function logReply({ event, classified, aiDraft, finalSent, action }) {
+async function logReply({ event, classified, aiDraft, finalSent, action, project = null }) {
   const entry = {
     at: new Date().toISOString(),
     phone: event.phone,
@@ -197,7 +239,7 @@ async function logReply({ event, classified, aiDraft, finalSent, action }) {
         "Route": { select: { name: logRouteOf(classified.route) } },
         "Language": { select: { name: entry.language } },
         "Action": { select: { name: action } },
-        "Project": { select: { name: brainProject() } },
+        "Project": { select: { name: project || brainProject() } },
         "Timestamp": { date: { start: entry.at } },
       },
     });
@@ -210,6 +252,8 @@ async function logReply({ event, classified, aiDraft, finalSent, action }) {
 // AND remember locally so we stop immediately even before the next sync.
 async function recordStop(event) {
   await appendJsonl(stopRequestsPath, { at: new Date().toISOString(), phone: event.phone, text: event.text });
+  // 本地全局 STOP 名单马上生效 (跨盘跨号), 不等 Notion。
+  try { await addLocalStop(event.phone, "BRAIN_STOP"); } catch { /* jsonl + sessionStops still hold */ }
   if (SIMULATE) { console.log("[simulate] Stop Flag -> Notion"); return; }
   try {
     const dbId = configuredDb("blastLeads", null);
@@ -253,16 +297,18 @@ async function handleEvent(event) {
     return;
   }
 
-  // 2) classify.
+  // 2) classify + Layer 2: 认出这个 lead 是哪个盘的, 拿它的知识包。
   const classified = classifyReplyText(event.text);
   const policy = decideAction(classified.route);
   const lead = await lookupLead(event.phone);
-  console.log(`[${classified.route}] ${lead.name ?? event.pushName ?? "?"} (${event.phone}) "${event.text}" -> ${policy.mode}`);
+  const project = await resolveProject(event);
+  const projectCtx = loadProjectContext(project);
+  console.log(`[${classified.route}] ${lead.name ?? event.pushName ?? "?"} (${event.phone}) 🏢${project}${projectCtx.matched ? "" : " (无 YAML sheet)"} "${event.text}" -> ${policy.mode}`);
 
   // 3a) simple route: canned reply, out it goes.
   if (policy.mode === "auto") {
     await sendWhatsApp(event.instanceName, event.phone, classified.suggestedReply);
-    await logReply({ event, classified, aiDraft: null, finalSent: classified.suggestedReply, action: "Sent As-Is" });
+    await logReply({ event, classified, aiDraft: null, finalSent: classified.suggestedReply, action: "Sent As-Is", project });
     if (classified.route === "STOP_DNC") {
       sessionStops.add(event.phone);
       await recordStop(event);
@@ -272,8 +318,8 @@ async function handleEvent(event) {
 
   // 3b) complaint / forced handoff: stay silent, wake the human.
   if (policy.mode === "handoff") {
-    await notifyTelegram(`🚨 <b>投诉/负面情绪 — 已静默,请人工接管</b>\n${lead.name ?? event.pushName ?? "?"} (${event.phone})\n💬 ${event.text}`);
-    await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover" });
+    await notifyTelegram(`🚨 <b>投诉/负面情绪 — 已静默,请人工接管</b>\n${lead.name ?? event.pushName ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}`);
+    await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover", project });
     return;
   }
 
@@ -285,7 +331,7 @@ async function handleEvent(event) {
   try {
     if (aiEnabled) {
       const cache = loadBrainCacheSync();
-      const prompt = buildPrompt({ event, classified, cache, lead });
+      const prompt = buildPrompt({ event, classified, cache, lead, projectCtx });
       draft = SIMULATE ? `[simulate:${model}] ${classified.suggestedReply}` : await draftWithClaude(prompt, model);
     } else {
       draft = classified.suggestedReply;
@@ -293,14 +339,14 @@ async function handleEvent(event) {
     if (!draft) throw new Error("empty draft");
   } catch (error) {
     console.log(`[ai] draft failed: ${error.message} — falling back to handoff alert.`);
-    await notifyTelegram(`⚠️ <b>AI 起草失败 — 请人工回复</b>\n${lead.name ?? "?"} (${event.phone})\n💬 ${event.text}\n(${error.message})`);
-    await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover" });
+    await notifyTelegram(`⚠️ <b>AI 起草失败 — 请人工回复</b>\n${lead.name ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}\n(${error.message})`);
+    await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover", project });
     return;
   }
 
   const pendingId = crypto.randomBytes(6).toString("base64url");
-  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier }), pendingId);
-  pending[pendingId] = { event, classified, draft, tier: draftTier, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
+  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier, project }), pendingId);
+  pending[pendingId] = { event, classified, draft, tier: draftTier, project, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
   await savePending();
 }
 
@@ -316,6 +362,7 @@ async function resolvePending(pendingId, action, finalText) {
     event: p.event, classified: p.classified, aiDraft: p.draft,
     finalSent: action === "take" ? null : finalText,
     action: logActionOf(action),
+    project: p.project ?? null,
   });
   delete pending[pendingId];
   await savePending();
@@ -471,6 +518,8 @@ server.listen(PORT, HOST, async () => {
   console.log(`Anthropic: ${anthropicKeyConfigured() ? "ON" : "OFF"}`);
   const cache = loadBrainCacheSync();
   console.log(`Brain:     ${cache.knowledge.count} facts / ${cache.golden.count} golden / ${cache.objections.count} objections${cache.knowledge.count === 0 ? "  ⚠️ 库是空的 — 先做缺口 1" : ""}`);
+  const projects = listProjects();
+  console.log(`Layer 2:   ${projects.length ? projects.map((p) => p.name).join(", ") : "⚠️ 没有 YAML sheet — 放进 campaign-assets/knowledge/"} (丢 YAML 进去自动生效)`);
 
   if (!skipWebhookSetup) {
     try {

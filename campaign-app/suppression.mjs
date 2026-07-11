@@ -141,9 +141,55 @@ export async function fetchSuppressedPhones() {
   return { set, report };
 }
 
+// ---- local overlay (instant STOP, survives Notion re-sync) -------------------
+// STOPs recorded the MOMENT a RED reply arrives — before Notion has the flag
+// (stranger numbers, cross-PC blast lag, mid-run). The overlay is union'd into
+// every read and every snapshot write, so a Notion re-sync can never wipe a
+// stop that only exists locally yet.
+const LOCAL_PATH = path.join(dataDir, "suppressed_local.json");
+
+function loadLocalOverlaySync() {
+  try {
+    const data = JSON.parse(fs.readFileSync(LOCAL_PATH, "utf8"));
+    return data?.entries && typeof data.entries === "object" ? data.entries : {};
+  } catch {
+    return {};
+  }
+}
+
+// Block one phone RIGHT NOW, everywhere (all projects, all senders). Called by
+// the live tracker + morning settlement whenever a verdict carries stopFlag.
+export async function addLocalStop(phone, reason = "STOP") {
+  const n = normalizePhone(phone);
+  if (!n) return false;
+  const entries = loadLocalOverlaySync();
+  if (!entries[n]) {
+    entries[n] = { reason: String(reason || "STOP"), at: new Date().toISOString() };
+    await fsp.mkdir(dataDir, { recursive: true });
+    const tmp = `${LOCAL_PATH}.tmp`;
+    await fsp.writeFile(tmp, `${JSON.stringify({ updatedAt: new Date().toISOString(), entries }, null, 2)}\n`);
+    await fsp.rename(tmp, LOCAL_PATH);
+  }
+  // Refresh the snapshot too so anything reading only suppressed.json sees it.
+  try {
+    const snap = JSON.parse(await fsp.readFile(SNAPSHOT_PATH, "utf8"));
+    const phones = new Set(snap.phones ?? []);
+    if (!phones.has(n)) {
+      phones.add(n);
+      const payload = { ...snap, updatedAt: new Date().toISOString(), count: phones.size, phones: [...phones].sort() };
+      const tmp = `${SNAPSHOT_PATH}.tmp`;
+      await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`);
+      await fsp.rename(tmp, SNAPSHOT_PATH);
+    }
+  } catch { /* no snapshot yet — loadSuppressionSync unions the overlay anyway */ }
+  return true;
+}
+
 // Fetch from Notion AND persist the local snapshot the hot paths read.
+// Local overlay is union'd in so a fresh Notion sync never drops instant stops.
 export async function syncSuppressionList() {
   const { set, report } = await fetchSuppressedPhones();
+  for (const p of Object.keys(loadLocalOverlaySync())) set.add(p);
   await fsp.mkdir(dataDir, { recursive: true });
   const payload = { updatedAt: new Date().toISOString(), count: set.size, phones: [...set].sort() };
   const tmp = `${SNAPSHOT_PATH}.tmp`;
@@ -155,11 +201,12 @@ export async function syncSuppressionList() {
 // Runtime read — NO network. Missing snapshot = empty set (fail-open on data,
 // but every import/campaign-start re-syncs, so the window is small).
 export function loadSuppressionSync() {
+  const overlay = Object.keys(loadLocalOverlaySync());
   try {
     const data = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, "utf8"));
-    return { set: new Set(data.phones ?? []), updatedAt: data.updatedAt ?? null };
+    return { set: new Set([...(data.phones ?? []), ...overlay]), updatedAt: data.updatedAt ?? null };
   } catch {
-    return { set: new Set(), updatedAt: null };
+    return { set: new Set(overlay), updatedAt: null };
   }
 }
 

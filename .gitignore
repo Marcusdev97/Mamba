@@ -11,6 +11,10 @@ recycle-import/
 # campaign-data 里全是运行时数据/名单/缓存,只保留配置文件
 campaign-data/*
 !campaign-data/notion_config.json
+# 以下是纯配置(无客户资料): bot_rules = Layer 0 关键词, telegram_topics = 收件箱 topic 编号
+# (topic 编号要跟着走, 不然第二台电脑会重复开一套 topics)
+!campaign-data/bot_rules.json
+!campaign-data/telegram_topics.json
 
 # ─── WhatsApp 会话 / 二维码(能被盗号,绝不提交)──────────
 **/qr/

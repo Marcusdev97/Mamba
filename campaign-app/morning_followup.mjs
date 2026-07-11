@@ -16,7 +16,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadEnv, makeApi, openInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
+import { makeHub } from "./telegram_hub.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
+import { addLocalStop } from "./suppression.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -118,25 +120,36 @@ let blastChoice = (_name, optionName) => (optionName ? { select: { name: optionN
 
 // ---- source resolver ---------------------------------------------------------
 const DEAD_DBS = new Set(); // 查询失败(没分享给 integration / 已删除)的库,本次运行直接跳过
-async function resolveByPhone(sync, dbIds, phone) {
+async function resolveByPhone(sync, dbIds, phone, instanceName = "") {
   const filter = { property: "Phone", phone_number: { equals: phone } };
   for (const [db, id] of [["blast", dbIds.blast], ["ads", dbIds.ads], ["recycle", dbIds.recycle]]) {
     if (!id || DEAD_DBS.has(db)) continue;
     let res;
-    try { res = await sync.queryDataSource(id, filter, 1); }
+    try { res = await sync.queryDataSource(id, filter, db === "blast" ? 10 : 1); }
     catch (e) {
       DEAD_DBS.add(db);
       console.log(`⚠️ ${db} 库查询失败,本次跳过它(其余库照常):${String(e.message).slice(0, 120)}`);
       continue;
     }
-    const page = res?.results?.[0];
-    if (page) return { db, page };
+    const results = res?.results ?? [];
+    if (!results.length) continue;
+    if (db !== "blast" || results.length === 1) return { db, page: results[0], allPages: results };
+    // 多盘归属:同一个 phone 在几个楼盘各有一行。回复算给哪个盘:
+    //   1) Sender Instance 和收到回复的号一样的那行(哪个号发的就算哪个盘)
+    //   2) 不然就挑最近 blast 的那行(客户多半在回最新收到的信息)
+    const byInstance = instanceName
+      ? results.filter((p) => pSelect(p, "Sender Instance") === instanceName)
+      : [];
+    const pool = byInstance.length ? byInstance : results;
+    const blastAt = (p) => new Date(pDate(p, "Last Blast At") || pDate(p, "First Blast At") || 0).getTime();
+    const page = pool.slice().sort((a, b) => blastAt(b) - blastAt(a))[0];
+    return { db, page, allPages: results };
   }
   return null;
 }
 
 // ---- apply updates on a settled message -------------------------------------
-async function applyInbound(sync, hit, event) {
+async function applyInbound(sync, hit, event, phone = null) {
   const { db, page } = hit;
   const due = `${klDate(RULE.replyFollowUpDays)}`;
   if (db === "blast") {
@@ -161,6 +174,18 @@ async function applyInbound(sync, hit, event) {
       props["Stop Reason"] = richProp(`Auto: ${verdict.route}`);
     }
     await sync.updatePage(page.id, props);
+    if (verdict.stopFlag) {
+      // STOP 是停"这个人",不是停"这个盘":同号码其他楼盘的行一起打旗,
+      // 并且马上写进本地全局 STOP 名单(不等 Notion 同步)。
+      for (const extra of hit.allPages ?? []) {
+        if (extra.id === page.id || pCheckbox(extra, "Stop Flag")) continue;
+        await sync.updatePage(extra.id, {
+          "Stop Flag": { checkbox: true },
+          "Stop Reason": richProp(`Auto (cross-project): ${verdict.route}`),
+        });
+      }
+      if (phone) await addLocalStop(phone, verdict.route).catch(() => {});
+    }
   } else if (db === "ads") {
     await sync.updatePage(page.id, {
       "Lead Status": selProp("Warm"),
@@ -227,15 +252,14 @@ export async function settle(api, sync, dbIds, sinceMs) {
   const inboundPhones = new Set(); // everyone who replied this window (used by no-reply pass)
   for (const [phone, bucket] of events) {
     if (bucket.inbound) inboundPhones.add(phone);
-    const hit = await resolveByPhone(sync, dbIds, phone);
+    const hit = await resolveByPhone(sync, dbIds, phone, bucket.inbound?.instance || bucket.outbound?.instance || "");
     if (!hit) { if (bucket.inbound) unknown += 1; continue; }
-    // Stop Flag ticked -> leave the customer alone: don't re-schedule follow-up
-    // even if they message again. Their reply still shows in WhatsApp; we just
-    // don't put them back on the tracking list.
-    if (pCheckbox(hit.page, "Stop Flag")) continue;
+    // Stop Flag ticked (on ANY of this phone's project rows) -> leave the
+    // customer alone: don't re-schedule follow-up even if they message again.
+    if ((hit.allPages ?? [hit.page]).some((p) => pCheckbox(p, "Stop Flag"))) continue;
     // Outbound first (sets Last Touch + pushes due), then inbound can reset due to tomorrow.
     if (bucket.outbound) { await applyOutbound(sync, hit, bucket.outbound); outbound += 1; }
-    if (bucket.inbound) { await applyInbound(sync, hit, bucket.inbound); inbound += 1; }
+    if (bucket.inbound) { await applyInbound(sync, hit, bucket.inbound, phone); inbound += 1; }
   }
   return { inbound, outbound, unknown, inboundPhones, instances: instances.map((i) => i.name) };
 }
@@ -421,7 +445,12 @@ async function main() {
   console.log("");
   console.log(message.replace(/<[^>]+>/g, ""));
 
-  if (tg.enabled && tg.hasChatId) {
+  // 优先发去 Mamba 系统台 (Hub ops 群); 没配 ops 才退回旧的私聊通知。
+  const hub = makeHub();
+  if (hub.hasOps) {
+    await hub.postOps(message);
+    console.log("\nSent to Mamba 系统台 (Telegram).");
+  } else if (tg.enabled && tg.hasChatId) {
     await tg.send(message);
     console.log("\nSent to Telegram.");
   } else {

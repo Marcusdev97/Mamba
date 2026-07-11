@@ -1,0 +1,42 @@
+# Gen Starz 旁新盘 — 从 campaign 文案整理的起步版
+# ⚠️ TODO: 价钱区间/户型价/gallery 资料请 Marcus 核对补齐, 没写的 AI 不会讲。
+
+project_id: gen_starz
+name: Gen Starz
+one_liner: KL Gen Starz 旁新 launch, freehold 低密度, MRT 楼下, 全装修, 月供约 RM2,100 起
+
+location:
+  area: KL (Gen Starz 一带 / Old Klang Road 方向)
+  landmark: Doorstep MRT
+
+developer: TODO_填发展商
+
+monthly_from: 2100
+
+types:
+  - layout: 2R
+  - layout: 3R
+
+target_buyer: [first_time, young_family, investor]
+
+selling_points:
+  - Freehold 永久地契
+  - 低密度社区
+  - MRT 就在楼下 (doorstep)
+  - 全屋装修家具 (fully furnished)
+  - 2027 Q1 交房
+  - 高租金需求区
+  - Zero downpayment 配套
+
+promos:
+  - desc: "Zero downpayment package"
+    # valid_until: TODO — 问 developer 截止日期, 不填 = 一直有效
+
+do_not_say:
+  - 不可以保证 loan 一定批
+  - 月供 RM2,100 是"约/起", 一定要讲清楚以银行最终批核为准
+  - 不可以讲 "包租" / "保证回酬"
+
+gallery:
+  address: TODO_填 sales gallery 地址
+  hours: TODO

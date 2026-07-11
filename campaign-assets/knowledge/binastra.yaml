@@ -1,0 +1,39 @@
+# Binastra (Cochrane) — 从 campaign 文案整理的起步版
+# ⚠️ TODO: 价钱区间/promo 截止/gallery 资料请 Marcus 核对补齐, 没写的 AI 不会讲。
+
+project_id: binastra
+name: Binastra
+one_liner: KL 市区 freehold condo, 直连 MRT Cochrane, MyTown/IKEA 旁, 1 站到 TRX
+
+location:
+  area: Cochrane, KL
+  landmark: Direct link MRT Cochrane · 1 stop to TRX · Beside MyTown & IKEA
+
+developer: Binastra (TODO 核对全名)
+
+types:
+  - layout: 2R
+  - layout: 3R
+
+target_buyer: [own_stay, investor, young_family]
+
+selling_points:
+  - Freehold KL City condo
+  - Direct link 到 MRT Cochrane
+  - MRT 1 站到 TRX
+  - MyTown & IKEA 旁边
+  - Partial furnished
+  - Early bird package
+
+promos:
+  - desc: "Early bird package"
+    # valid_until: TODO
+
+do_not_say:
+  - 不可以保证 loan 一定批
+  - 价钱文案是 "RM 2,XXX" 级别, 具体数字要用最新价单, 不可以自己报死价
+  - 不可以讲 "包租" / "保证回酬"
+
+gallery:
+  address: TODO_填 sales gallery 地址
+  hours: TODO

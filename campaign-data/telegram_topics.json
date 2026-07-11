@@ -1,0 +1,25 @@
+{
+  "chatId": "-1004325604631",
+  "topics": {
+    "project:binastra": {
+      "threadId": 12,
+      "name": "📥 Binastra"
+    },
+    "project:gen_starz": {
+      "threadId": 14,
+      "name": "📥 Gen Starz"
+    },
+    "project:radium_arena": {
+      "threadId": 16,
+      "name": "📥 Radium Arena"
+    },
+    "stop": {
+      "threadId": 18,
+      "name": "🔴 STOP · 投诉"
+    },
+    "unknown": {
+      "threadId": 20,
+      "name": "❓ 陌生来信"
+    }
+  }
+}

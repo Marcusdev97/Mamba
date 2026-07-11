@@ -16,6 +16,11 @@ import { createNotionSync } from "./notion_sync.mjs";
 import { normalizePhone, describeMessage, resolvePhone, collectMessages, senderFromPayload } from "./reply_intake.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
+import { addLocalStop } from "./suppression.mjs";
+import { makeHub } from "./telegram_hub.mjs";
+import { resolveProjectLocal } from "./knowledge_layer.mjs";
+
+const hub = makeHub();
 
 const HOST = process.env.TRACKER_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TRACKER_PORT ?? 8798);
@@ -238,6 +243,27 @@ async function saveEvent(event) {
   lastEvents.unshift(event);
   lastEvents = lastEvents.slice(0, 80);
   countEvent(event);
+
+  // RED verdict -> block this phone locally RIGHT NOW (all projects, all
+  // senders), even if the number isn't in Notion yet (stranger / cross-PC lag).
+  // Notion flags follow via upsertLeadReply -> stopAllRowsForPhone.
+  if (event.stopFlag) {
+    try {
+      await addLocalStop(event.phone, event.route);
+      console.log(`🔴 ${event.phone} added to global STOP list (${event.route}).`);
+    } catch (error) {
+      console.log(`Local STOP add failed for ${event.phone}: ${error.message}`);
+    }
+  }
+
+  // Telegram Hub 统一收件箱: 全量转发 (SPAM 除外), 按盘进 topic。失败只记 log,
+  // 绝不拖垮 saveEvent — 本地 jsonl 才是 source of truth。
+  if (hub.enabled) {
+    const project = resolveProjectLocal(event.phone);
+    hub.postInbound(event, project).catch((error) => {
+      console.log(`[hub] inbox card failed for ${event.phone}: ${error.message}`);
+    });
+  }
 
   // Routing:
   //  - Ad leads (matched the ad opening phrase) -> auto-create in Ads Leads DB.
