@@ -162,6 +162,31 @@ function nextActionFor(event) {
   return event?.nextAction || "Human Takeover";
 }
 
+function sequenceStatusFromReply(event) {
+  return event?.sequenceStatus || "Human Takeover";
+}
+
+export function buildLeadReplyProperties(schema, event, replyCount = 1, checkedAt = new Date().toISOString()) {
+  const properties = {
+    Status: choice(schema, "Status", leadStatusFromReply(event)),
+    "Sequence Status": choice(schema, "Sequence Status", sequenceStatusFromReply(event)),
+    "Last Reply At": dateValue(event?.receivedAt),
+    "Last Reply Text": richText(event?.text),
+    "Reply Checked At": dateValue(checkedAt),
+    "AI Category": choice(schema, "AI Category", categoryFromReply(event)),
+    "Next Action": choice(schema, "Next Action", nextActionFor(event)),
+    "Reply Count": numberValue(replyCount),
+    "AI Summary": richText(event?.route
+      ? `[${event.signal || "GREY"}] ${event.route} · 建议:${event.suggestedReply || "人工查看"}`
+      : `Latest reply: ${event?.text || ""}`),
+  };
+  if (event?.stopFlag) {
+    properties["Stop Flag"] = checkbox(true);
+    properties["Stop Reason"] = richText(`Auto: ${event.route || "STOP"}`);
+  }
+  return properties;
+}
+
 function blastLeadsDataSource(config) {
   return config.dataSources.blastLeads ?? config.dataSources.leadCrm;
 }
@@ -464,19 +489,23 @@ export class NotionSync {
     await this.updatePage(pageId, { [propertyName]: numberValue(next) });
   }
 
-  async upsertLeadReply(event) {
-    if (!this.enabled || !event?.phone || !event?.id) return;
-    if (!event.force && this.state.syncedReplyIds[event.id]) return;
+  async upsertLeadReply(event, { createIfMissing = true } = {}) {
+    if (!this.enabled || !event?.phone || !event?.id) return { action: "skipped", matched: false };
+    if (!event.force && this.state.syncedReplyIds[event.id]) return { action: "deduped", matched: true };
     console.log(`[notion-sync] upload reply phone=${event.phone} route=${event.route || "-"} force=${event.force === true}`);
 
     const schema = await this.getBlastSchema();
     const existing = await this.findLeadByPhone(event.phone);
+    if (!existing && !createIfMissing) {
+      console.log(`[notion-sync] reply skipped phone=${event.phone} reason=not_in_blast_leads`);
+      return { action: "not_found", matched: false };
+    }
     // Stop Flag ticked -> customer asked to stop. Leave their Notion row alone
     // (don't reset status / re-engage); just remember we've seen this reply.
     if (existing?.properties?.["Stop Flag"]?.checkbox === true) {
       this.state.syncedReplyIds[event.id] = true;
       await this.saveState();
-      return;
+      return { action: "already_stopped", matched: true };
     }
     const replyCount = existing ? pageNumber(existing, "Reply Count") + 1 : 1;
     const existingTemplates = existing ? pageRelationIds(existing, "Template Sent") : [];
@@ -485,21 +514,7 @@ export class NotionSync {
     // 楼盘, so a reply must never re-stamp their Project — that was flipping e.g.
     // Gen Starz customers to whichever project happened to be configured when they
     // replied. Multi-project safe: a customer's 楼盘 is fixed at blast time.
-    const replyProps = {
-      Status: choice(schema, "Status", leadStatusFromReply(event)),
-      "Last Reply At": dateValue(event.receivedAt),
-      "Last Reply Text": richText(event.text),
-      "AI Category": choice(schema, "AI Category", categoryFromReply(event)),
-      "Next Action": choice(schema, "Next Action", nextActionFor(event)),
-      "Reply Count": numberValue(replyCount),
-      "AI Summary": richText(event.route
-        ? `[${event.signal || "GREY"}] ${event.route} · 建议:${event.suggestedReply || "人工查看"}`
-        : `Latest reply: ${event.text}`),
-    };
-    if (event.stopFlag) {
-      replyProps["Stop Flag"] = checkbox(true);
-      replyProps["Stop Reason"] = richText(`Auto: ${event.route || "STOP"}`);
-    }
+    const replyProps = buildLeadReplyProperties(schema, event, replyCount);
 
     let page;
     if (existing) {
@@ -527,6 +542,7 @@ export class NotionSync {
     this.state.syncedReplyIds[event.id] = true;
     await this.saveState();
     console.log(`[notion-sync] reply ${existing ? "updated" : "created"} phone=${event.phone} status=${leadStatusFromReply(event)}`);
+    return { action: existing ? "updated" : "created", matched: true, pageId: cleanId(page.id) };
   }
 
   templateByPageId(pageId) {

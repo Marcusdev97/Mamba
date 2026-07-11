@@ -399,7 +399,10 @@ async function scanReplies() {
       reps.slice().reverse().map((x) => {
         const c = x.signal === "RED" ? "red" : x.signal === "GREEN" ? "green" : "grey";
         const dot = x.signal === "RED" ? "🔴" : x.signal === "GREEN" ? "🟢" : "⚪️";
-        return `<div class="rep ${c}">${dot} <b>${esc(x.name)}</b> · ${esc(x.route)} · 「${esc(x.text || "")}」</div>`;
+        const notionState = x.notionUpdated === false
+          ? ` · ⚠️ Notion 写入失败: ${esc(x.notionError || "unknown error")}`
+          : " · ✅ Notion 已更新";
+        return `<div class="rep ${c}">${dot} <b>${esc(x.name)}</b> · ${esc(x.route)} · 「${esc(x.text || "")}」${notionState}</div>`;
       }).join("");
   } catch { /* ignore */ }
 }
@@ -500,11 +503,14 @@ async function load() {
       const red = skipped.filter((x) => x.signal === "RED").length;
       const green = skipped.filter((x) => x.signal === "GREEN").length;
       const other = skipped.length - red - green;
+      const notionFailed = skipped.filter((x) => x.notionUpdated === false).length;
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead">🛡 开单前检测:自动剔除 ' + skipped.length + ' 个回复过的客户' +
-        '(🔴 ' + red + ' 停/拒 · 🟢 ' + green + ' 有意向' + (other ? ' · ⚪ ' + other + ' 其他' : '') + '),已写回 Notion</div>' +
+        '(🔴 ' + red + ' 停/拒 · 🟢 ' + green + ' 有意向' + (other ? ' · ⚪ ' + other + ' 其他' : '') + ')' +
+        (notionFailed ? ',⚠️ ' + notionFailed + ' 个 Notion 写入失败' : ',✅ 已写回 Notion') + '</div>' +
         '<div style="color:#94a3b8;font-size:13px;margin-top:6px">' +
-        skipped.map((x) => esc(x.name) + '(…' + esc(String(x.phone).slice(-4)) + ')「' + esc(x.text || '') + '」→ ' + esc(x.route)).join('<br>') +
+        skipped.map((x) => esc(x.name) + '(…' + esc(String(x.phone).slice(-4)) + ')「' + esc(x.text || '') + '」→ ' + esc(x.route) +
+          (x.notionUpdated === false ? ' · ⚠️ ' + esc(x.notionError || 'Notion 写入失败') : '')).join('<br>') +
         '</div>';
     } else {
       sp.style.display = "";

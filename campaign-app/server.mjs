@@ -277,6 +277,7 @@ const runtime = await loadRuntime({
     phoneFromJid,
     messageTime,
     classifyReplyText,
+    systemLogs: systemLogService,
     incPageNumber,
     getRunner: () => runner,
     getProject,

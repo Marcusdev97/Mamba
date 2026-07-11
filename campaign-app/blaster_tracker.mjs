@@ -41,6 +41,8 @@ let startedAt = new Date().toISOString();
 let leadIndex = new Map();
 let lastEvents = [];
 const pushedPhones = new Set(); // unknown numbers manually pushed to Notion this session
+const pendingNotionReplies = new Map();
+let retryingNotionReplies = false;
 
 // Click-to-WhatsApp ad leads: customers message in with a recognizable opening
 // phrase (configured in campaign-assets/ad_triggers.json). When matched, we
@@ -240,16 +242,54 @@ async function saveEvent(event) {
   // Routing:
   //  - Ad leads (matched the ad opening phrase) -> auto-create in Ads Leads DB.
   //  - Known blast leads -> auto-sync/amend in Blast Leads DB.
-  //  - Other unknown numbers -> NOT auto-pushed; they wait for a manual
-  //    "Add to Notion" click so random / wrong-number messages don't create rows.
+  //  - Numbers missing from this PC's local files are checked against Notion.
+  //    This matters when another PC performed the blast. Existing Blast Leads
+  //    are updated, while truly unknown numbers are still never auto-created.
   if (event.adLead) {
     await notion.upsertAdLead(event).catch((error) => {
       console.log(`Ad-lead Notion failed for ${event.phone}: ${error.message}`);
     });
-  } else if (event.leadId) {
-    await notion.upsertLeadReply(event).catch((error) => {
-      console.log(`Notion sync failed for reply ${event.phone}: ${error.message}`);
-    });
+  } else {
+    await syncBlastReplyToNotion(event);
+  }
+}
+
+async function syncBlastReplyToNotion(event, attempts = 0) {
+  if (!notion.enabled) return;
+  try {
+    // Never auto-create a Blast Leads row from a webhook. A just-finished blast
+    // may still be uploading its official row; another PC may already own it.
+    // We wait for that row and update it by phone, preserving its project/run data.
+    const result = await notion.upsertLeadReply(event, { createIfMissing: false });
+    if (result?.matched) {
+      pendingNotionReplies.delete(event.id);
+      pushedPhones.add(event.phone);
+      if (!event.leadId) console.log(`Notion matched cross-PC lead ${event.phone}; reply updated.`);
+      return;
+    }
+    if (attempts < 40) {
+      pendingNotionReplies.set(event.id, { event, attempts: attempts + 1 });
+      if (attempts === 0) console.log(`Notion row not ready for ${event.phone}; reply queued for retry.`);
+    } else {
+      pendingNotionReplies.delete(event.id);
+      console.log(`Notion reply retry expired for ${event.phone}; use Conversations > Refresh Replies to retry.`);
+    }
+  } catch (error) {
+    if (attempts < 40) pendingNotionReplies.set(event.id, { event, attempts: attempts + 1 });
+    else pendingNotionReplies.delete(event.id);
+    console.log(`Notion sync failed for reply ${event.phone}: ${error.message}`);
+  }
+}
+
+async function retryPendingNotionReplies() {
+  if (retryingNotionReplies || !pendingNotionReplies.size) return;
+  retryingNotionReplies = true;
+  try {
+    for (const { event, attempts } of [...pendingNotionReplies.values()]) {
+      await syncBlastReplyToNotion(event, attempts);
+    }
+  } finally {
+    retryingNotionReplies = false;
   }
 }
 
@@ -578,6 +618,17 @@ await ensureFiles();
 await loadExistingEvents();
 await refreshLeadIndex();
 await loadAdTriggers();
+
+// Recover a reply that arrived just before the tracker/server was restarted.
+// Older unmatched messages remain available through Conversations > Refresh Replies.
+const retryCutoff = Date.now() - 15 * 60 * 1000;
+for (const event of lastEvents) {
+  if (!event.adLead && new Date(event.receivedAt || 0).getTime() >= retryCutoff) {
+    pendingNotionReplies.set(event.id, { event, attempts: 0 });
+  }
+}
+const notionRetryTimer = setInterval(retryPendingNotionReplies, 15_000);
+notionRetryTimer.unref();
 
 const server = http.createServer(async (req, res) => {
   try {

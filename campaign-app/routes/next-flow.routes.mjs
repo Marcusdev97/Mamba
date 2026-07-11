@@ -21,6 +21,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function writeNextFlowLog(nextFlow, level, event, message, context = {}) {
+  await nextFlow.systemLogs?.write({
+    level,
+    area: "next-flow",
+    event,
+    message,
+    context,
+  }).catch(() => {});
+}
+
 async function queryLeadPage(nextFlow, phone) {
   const data = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, {
     filter: { property: "Phone", phone_number: { equals: phone } },
@@ -163,9 +173,18 @@ export function registerNextFlowRoutes(router) {
 
       try {
         const page = await queryLeadPage(nextFlow, phone);
-        if (page) await writeReplyToNotion(nextFlow, page, verdict, event.at, event.text);
-      } catch {
-        // Keep the in-memory reply record even when Notion is temporarily unavailable.
+        if (!page) throw new Error(`Notion Blast Leads 找不到号码 ${phone}`);
+        await writeReplyToNotion(nextFlow, page, verdict, event.at, event.text);
+        record.notionUpdated = true;
+      } catch (error) {
+        record.notionUpdated = false;
+        record.notionError = error.message || String(error);
+        await writeNextFlowLog(nextFlow, "error", "reply_notion_update_failed", "A reply was detected during Next Flow but Notion could not be updated.", {
+          phone,
+          name: record.name,
+          route: verdict.route,
+          error: record.notionError,
+        });
       }
 
       try {
@@ -252,9 +271,17 @@ export function registerNextFlowRoutes(router) {
           });
           try {
             await writeReplyToNotion(nextFlow, { id: lead.pageId }, verdict, event.at, event.text, "(picker 开单前检测)");
+            skipped[skipped.length - 1].notionUpdated = true;
             await sleep(200);
-          } catch {
-            // Notion write failed, but the picker still removes this lead to avoid a wrong send.
+          } catch (error) {
+            skipped[skipped.length - 1].notionUpdated = false;
+            skipped[skipped.length - 1].notionError = error.message || String(error);
+            await writeNextFlowLog(nextFlow, "error", "picker_reply_notion_update_failed", "A rejection was detected before Next Flow, but Notion could not be updated.", {
+              phone,
+              name: lead.name,
+              route: verdict.route,
+              error: error.message || String(error),
+            });
           }
         }
 
