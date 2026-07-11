@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-11T06:00:00.000Z",
+  "updatedAt": "2026-07-11T10:56:33.102Z",
   "rules": [
     {
       "id": "stop_dnc_extra",
@@ -137,51 +137,6 @@
       "suggestedReply": "EN: No worries, won't disturb you 👌 If next time you're looking around KL just find me.\nZH: OK 明白，不吵你啦 👌 之后有看房的 plan 随时找我。"
     },
     {
-      "id": "price_objection_warm",
-      "enabled": true,
-      "order": 20,
-      "label": "太贵/超预算 = objection，不是 Cold",
-      "match": "contains",
-      "keywords": [
-        "out of my budget",
-        "over budget",
-        "too expensive",
-        "太贵",
-        "超预算",
-        "budget 不够"
-      ],
-      "route": "PRICE_OBJECTION",
-      "status": "Warm",
-      "sequenceStatus": "Human Takeover",
-      "nextAction": "Human Takeover",
-      "aiCategory": "Price Inquiry",
-      "signal": "GREEN",
-      "stopFlag": false,
-      "suggestedReply": "EN: Get you la, budget is the most real thing. But actually after rebate the net price drops quite a lot, and I also got options with lighter monthly. Roughly what range you wanna keep to? I match for you.\nZH: 明白，budget 是最实际的。不过 rebate 后 net 价其实低蛮多，我手上也有月供更轻松的 option。你大概想 control 在多少？我帮你配。"
-    },
-    {
-      "id": "rm_monthly_warm",
-      "enabled": true,
-      "order": 30,
-      "label": "Price / monthly question",
-      "match": "regex",
-      "keywords": [
-        "\\brm\\s?\\d",
-        "monthly",
-        "installment",
-        "月供",
-        "供多少"
-      ],
-      "route": "LOAN_MONTHLY_REQUEST",
-      "status": "Warm",
-      "sequenceStatus": "Human Takeover",
-      "nextAction": "Send Price List",
-      "aiCategory": "Price Inquiry",
-      "signal": "GREEN",
-      "stopFlag": false,
-      "suggestedReply": "EN: Sure can, I check the latest price & monthly for you. You looking at 2 rooms or 3 rooms more?\nZH: 可以可以，我帮你 check 最新价钱和月供。你想看 2 房还是 3 房先？"
-    },
-    {
       "id": "wrong_person",
       "enabled": true,
       "order": 40,
@@ -200,7 +155,7 @@
       "aiCategory": "Unknown",
       "signal": "GREY",
       "stopFlag": false,
-      "suggestedReply": "EN: Oh paiseh, sorry ya! 🙏\nZH: 哦 paiseh paiseh，打扰了 🙏"
+      "suggestedReply": "EN: Oh paiseh, sorry ya! 🙏\nBM: Maaf ye, salah send orang! 🙏\nZH: 哦 paiseh paiseh，打扰了 🙏"
     }
   ]
 }

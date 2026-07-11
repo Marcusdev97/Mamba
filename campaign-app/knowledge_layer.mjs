@@ -36,6 +36,8 @@ const rootDir = path.join(__dirname, "..");
 const dataDir = path.join(rootDir, "campaign-data");
 const brainDir = path.join(dataDir, "brain");
 const knowledgeDir = path.join(rootDir, "campaign-assets", "knowledge");
+// Obsidian vault 的盘资料 (Markdown + frontmatter)。后扫 -> 同名盘覆盖 YAML 版。
+const vaultSheetsDir = path.join(rootDir, "brain-vault", "盘资料");
 
 // ---------- name normalization (Gen Starz / gen_starz / GEN STARZ 都算同一个盘) ----------
 
@@ -58,24 +60,51 @@ function activePromos(sheet, today = todayKL()) {
   });
 }
 
+// .md = Obsidian 人话格式: frontmatter(---) 放结构字段, 正文原样给 AI。
+// .yaml = 旧格式, 继续支持。同一个盘两种都有时, .md 赢 (扫描顺序保证)。
 function readSheetFile(filePath) {
   const raw = fs.readFileSync(filePath, "utf8");
-  const doc = yaml.load(raw) ?? {};
-  if (!doc.name && !doc.project) throw new Error("YAML 缺 name/project 字段");
+  let doc;
+  let body = "";
+  if (/\.md$/i.test(filePath)) {
+    const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
+    if (!m) throw new Error("Markdown 缺 frontmatter (文件开头要有 --- 包住的字段区)");
+    doc = yaml.load(m[1]) ?? {};
+    // 正文 = 人话区。TODO 行是还没核对的占位, AI 不准看到。
+    body = m[2].split(/\r?\n/).filter((line) => !/TODO/i.test(line)).join("\n").trim();
+  } else {
+    doc = yaml.load(raw) ?? {};
+  }
+  if (!doc.name && !doc.project) throw new Error("缺 name/project 字段");
   const name = String(doc.name ?? doc.project);
+  if (body) doc.body = body;
   return { key: normalizeProjectKey(doc.project_id ?? name), name, sheet: doc };
 }
 
-// Scan the knowledge dir; reload only files whose mtime changed. Never throws —
-// a broken YAML is skipped (with a console warning) so other 盘 keep working.
+function listSheetFiles() {
+  const out = [];
+  const scan = (dir, pattern) => {
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (pattern.test(f) && !f.startsWith("_")) out.push(path.join(dir, f));
+      }
+    } catch { /* dir 不存在 = 还没建, 不是错误 */ }
+  };
+  scan(knowledgeDir, /\.ya?ml$/i);   // 旧 YAML 先扫
+  scan(knowledgeDir, /\.md$/i);
+  scan(vaultSheetsDir, /\.md$/i);    // vault 的 md 最后扫 -> 同名盘覆盖前面的
+  return out;
+}
+
+// Scan sheet dirs; reload only files whose mtime changed. Never throws —
+// a broken file is skipped (with a console warning) so other 盘 keep working.
 export function loadSheetsSync() {
-  let entries = [];
-  try { entries = fs.readdirSync(knowledgeDir).filter((f) => /\.ya?ml$/i.test(f) && !f.startsWith("_")); }
-  catch { return sheetCache; } // dir doesn't exist yet — empty layer, not an error
+  const entries = listSheetFiles();
+  if (!entries.length && !sheetCache.files.size) return sheetCache;
   const seen = new Set();
   let changed = false;
-  for (const file of entries) {
-    const filePath = path.join(knowledgeDir, file);
+  for (const filePath of entries) {
+    const file = path.basename(filePath);
     let mtime = 0;
     try { mtime = fs.statSync(filePath).mtimeMs; } catch { continue; }
     seen.add(filePath);

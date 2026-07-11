@@ -8,9 +8,9 @@
 //     -> flow_sequence classifyReplyText (12 routes)
 //        ├─ simple route  -> canned suggestedReply sent immediately
 //        ├─ complaint     -> silent + Telegram alert (人工接管)
-//        └─ complex route -> Claude drafts when ANTHROPIC_API_KEY exists;
-//                            otherwise classifier suggestedReply is used as a
-//                            rule-only draft
+//        └─ complex route -> configured AI provider drafts (OpenAI / Gemini /
+//                            Anthropic); otherwise classifier suggestedReply is
+//                            used as a rule-only draft
 //                            -> Telegram draft + [✅照发 | ✏️改后发 | 🙋接管]
 //                            -> your button decides -> Evolution sends
 //                            -> Mamba | AI Reply Log records the loop
@@ -19,7 +19,8 @@
 //   AUTHENTICATION_API_KEY  (Evolution — already there)
 //   NOTION_API_KEY          (already there)
 //   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID  (run Setup Telegram)
-//   ANTHROPIC_API_KEY       optional; without it brain runs Rule-only mode
+//   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY  optional
+//   BRAIN_AI_PROVIDER       rules | openai | gemini | anthropic | auto
 //
 // Run:  node campaign-app/brain_service.mjs            # live service
 //       node campaign-app/brain_service.mjs --simulate "这个多少钱?"
@@ -42,7 +43,7 @@ import { collectMessages, inboundEvent } from "./reply_intake.mjs";
 import { makeTelegram, parseUpdate } from "./telegram.mjs";
 import {
   decideAction, logRouteOf, detectLanguage, pickModel, buildPrompt,
-  draftCard, draftButtons, parseCallbackData, logActionOf,
+  draftCard, draftButtons, parseCallbackData, logActionOf, parseMediaTags,
 } from "./brain_core.mjs";
 
 const HOST = process.env.BRAIN_HOST ?? "0.0.0.0";
@@ -116,7 +117,56 @@ async function sendWhatsApp(instanceName, number, text) {
   });
 }
 
-// ---------- Anthropic draft ----------
+// 图 + caption 一条信息发出 (和 blast 引擎同一个 Evolution endpoint / 同一个
+// campaign-assets 相对路径规则, e.g. "images/enlace_type_a.jpg")。
+async function sendWhatsAppMedia(instanceName, number, caption, relativePath) {
+  if (SIMULATE) { console.log(`[simulate] Evolution sendMedia via ${instanceName} -> ${number}: ${relativePath}\ncaption: ${caption}\n`); return { simulated: true }; }
+  const filePath = path.join(paths.campaignDir, relativePath);
+  const buffer = await fs.readFile(filePath);
+  if (!buffer.length) throw new Error(`媒体文件为空: ${relativePath}`);
+  const ext = (relativePath.split(".").pop() || "").toLowerCase();
+  const isVideo = ["mp4", "mov", "3gp", "m4v"].includes(ext);
+  return api(`/message/sendMedia/${encodeURIComponent(instanceName)}`, {
+    method: "POST",
+    body: JSON.stringify({
+      number,
+      mediatype: isVideo ? "video" : "image",
+      mimetype: isVideo
+        ? (ext === "mov" ? "video/quicktime" : "video/mp4")
+        : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg",
+      caption,
+      media: buffer.toString("base64"),
+      fileName: path.basename(filePath),
+      delay: 1200,
+    }),
+  });
+}
+
+// 统一回复出口: 草稿里有 [img:tag] 且 tag 在盘的 media 表里 -> 第一张图带
+// caption (= 草稿文字), 第二张跟在后面。图缺失/发失败 -> 降级纯文字, 回复
+// 永远不会因为一张图而发不出去。
+async function sendReply(instanceName, number, draftText, mediaMap = {}) {
+  const { text, media, invalid } = parseMediaTags(draftText, mediaMap);
+  if (invalid.length) console.log(`[media] 草稿引用了不存在的 tag (已忽略): ${invalid.join(", ")}`);
+  if (!media.length) {
+    await sendWhatsApp(instanceName, number, text || draftText);
+    return { text: text || draftText, mediaSent: 0 };
+  }
+  let sent = 0;
+  for (const [index, item] of media.entries()) {
+    try {
+      await sendWhatsAppMedia(instanceName, number, index === 0 ? text : "", item.file);
+      sent += 1;
+      if (index < media.length - 1) await new Promise((r) => setTimeout(r, 2000));
+    } catch (error) {
+      console.log(`[media] ${item.tag} (${item.file}) 发送失败: ${error.message}`);
+      if (index === 0) await sendWhatsApp(instanceName, number, text); // caption 还没出去 -> 文字保底
+    }
+  }
+  return { text, mediaSent: sent };
+}
+
+// ---------- AI draft providers ----------
 
 async function draftWithClaude({ system, user }, model) {
   const key = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
@@ -136,11 +186,103 @@ function anthropicKeyConfigured() {
   return Boolean(env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY);
 }
 
+function openaiKeyConfigured() {
+  return Boolean(env.OPENAI_API_KEY || process.env.OPENAI_API_KEY);
+}
+
+function geminiKeyConfigured() {
+  return Boolean(env.GEMINI_API_KEY || process.env.GEMINI_API_KEY);
+}
+
+async function draftWithOpenAI({ system, user }, model) {
+  const key = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY 不在 .env — OpenAI 无法起草。");
+  const effort = String(env.BRAIN_OPENAI_REASONING_EFFORT || process.env.BRAIN_OPENAI_REASONING_EFFORT || "medium").trim().toLowerCase();
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      reasoning: { effort },
+      max_output_tokens: 600,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(`OpenAI ${r.status}: ${data?.error?.message ?? "unknown"}`);
+  const direct = String(data?.output_text || "").trim();
+  if (direct) return direct;
+  return (data?.output ?? [])
+    .flatMap((item) => item?.content ?? [])
+    .filter((item) => item?.type === "output_text")
+    .map((item) => item.text)
+    .join("")
+    .trim();
+}
+
+async function draftWithGemini({ system, user }, model) {
+  const key = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY 不在 .env — Gemini 无法起草。");
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: "POST",
+    headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: user }] }],
+      generationConfig: { maxOutputTokens: 600 },
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(`Gemini ${r.status}: ${data?.error?.message ?? "unknown"}`);
+  return (data?.candidates ?? [])
+    .flatMap((candidate) => candidate?.content?.parts ?? [])
+    .map((part) => part?.text || "")
+    .join("")
+    .trim();
+}
+
+function configuredAiProviders() {
+  const mode = String(
+    env.BRAIN_AI_PROVIDER || process.env.BRAIN_AI_PROVIDER || env.BRAIN_DRAFT_MODE || process.env.BRAIN_DRAFT_MODE || "auto",
+  ).trim().toLowerCase();
+  if (["rules", "rule", "off", "none"].includes(mode)) return [];
+  if (["anthropic", "claude"].includes(mode)) return anthropicKeyConfigured() ? ["anthropic"] : [];
+  if (["openai", "gpt"].includes(mode)) return openaiKeyConfigured() ? ["openai"] : [];
+  if (["gemini", "google"].includes(mode)) return geminiKeyConfigured() ? ["gemini"] : [];
+  return [
+    openaiKeyConfigured() ? "openai" : null,
+    geminiKeyConfigured() ? "gemini" : null,
+    anthropicKeyConfigured() ? "anthropic" : null,
+  ].filter(Boolean);
+}
+
 function useAiDrafts() {
-  const mode = String(env.BRAIN_DRAFT_MODE || process.env.BRAIN_DRAFT_MODE || "auto").trim().toLowerCase();
-  if (["rules", "rule", "off", "none"].includes(mode)) return false;
-  if (["ai", "anthropic", "claude"].includes(mode)) return anthropicKeyConfigured();
-  return anthropicKeyConfigured();
+  return configuredAiProviders().length > 0;
+}
+
+async function draftWithConfiguredAi(prompt, tier) {
+  const errors = [];
+  for (const provider of configuredAiProviders()) {
+    const model = pickModel(tier, env, provider);
+    try {
+      const text = provider === "openai"
+        ? await draftWithOpenAI(prompt, model)
+        : provider === "gemini"
+          ? await draftWithGemini(prompt, model)
+          : await draftWithClaude(prompt, model);
+      if (!text) throw new Error("empty draft");
+      return { text, provider, model };
+    } catch (error) {
+      errors.push(`${provider}: ${error.message}`);
+      console.log(`[ai] ${provider}/${model} failed: ${error.message}`);
+    }
+  }
+  throw new Error(errors.join(" | ") || "没有可用的 AI Provider");
 }
 
 // ---------- Notion: AI Reply Log + Stop Flag ----------
@@ -325,28 +467,44 @@ async function handleEvent(event) {
 
   // 3c) complex route: AI draft when configured; otherwise Rule-only suggestedReply.
   const aiEnabled = useAiDrafts();
-  const model = aiEnabled ? pickModel(policy.tier, env) : "rule-only";
+  let model = "rule-only";
+  let provider = "rules";
   let draft;
   let draftTier = aiEnabled ? policy.tier : "rules";
   try {
     if (aiEnabled) {
       const cache = loadBrainCacheSync();
       const prompt = buildPrompt({ event, classified, cache, lead, projectCtx });
-      draft = SIMULATE ? `[simulate:${model}] ${classified.suggestedReply}` : await draftWithClaude(prompt, model);
+      if (SIMULATE) {
+        provider = configuredAiProviders()[0];
+        model = pickModel(policy.tier, env, provider);
+        draft = `[simulate:${provider}/${model}] ${classified.suggestedReply}`;
+      } else {
+        const result = await draftWithConfiguredAi(prompt, policy.tier);
+        ({ text: draft, provider, model } = result);
+      }
     } else {
       draft = classified.suggestedReply;
     }
     if (!draft) throw new Error("empty draft");
   } catch (error) {
-    console.log(`[ai] draft failed: ${error.message} — falling back to handoff alert.`);
-    await notifyTelegram(`⚠️ <b>AI 起草失败 — 请人工回复</b>\n${lead.name ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}\n(${error.message})`);
-    await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover", project });
-    return;
+    console.log(`[ai] all providers failed: ${error.message} — using rule draft for human approval.`);
+    draft = classified.suggestedReply;
+    provider = "rules-fallback";
+    model = "rule-only";
+    draftTier = "rules-fallback";
+    if (!draft) {
+      await notifyTelegram(`⚠️ <b>AI 起草失败 — 请人工回复</b>\n${lead.name ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}\n(${error.message})`);
+      await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover", project });
+      return;
+    }
   }
+  console.log(`[ai] draft ready via ${provider}/${model}`);
 
+  const mediaMap = projectCtx.sheet?.media ?? {};
   const pendingId = crypto.randomBytes(6).toString("base64url");
-  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier, project }), pendingId);
-  pending[pendingId] = { event, classified, draft, tier: draftTier, project, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
+  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier, project, mediaMap }), pendingId);
+  pending[pendingId] = { event, classified, draft, tier: draftTier, project, mediaMap, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
   await savePending();
 }
 
@@ -356,7 +514,7 @@ async function resolvePending(pendingId, action, finalText) {
   const p = pending[pendingId];
   if (!p) return null;
   if (action !== "take") {
-    await sendWhatsApp(p.event.instanceName, p.event.phone, finalText);
+    await sendReply(p.event.instanceName, p.event.phone, finalText, p.mediaMap ?? {});
   }
   await logReply({
     event: p.event, classified: p.classified, aiDraft: p.draft,
@@ -481,7 +639,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({
         ok: true, service: "mamba-brain", pending: Object.keys(pending).length,
-        telegram: tg.enabled && tg.hasChatId, anthropic: anthropicKeyConfigured(), draftMode: useAiDrafts() ? "ai" : "rules",
+        telegram: tg.enabled && tg.hasChatId,
+        aiProviders: configuredAiProviders(),
+        anthropic: anthropicKeyConfigured(),
+        openai: openaiKeyConfigured(),
+        gemini: geminiKeyConfigured(),
+        draftMode: useAiDrafts() ? "ai" : "rules",
       }));
       return;
     }
@@ -514,8 +677,10 @@ server.listen(PORT, HOST, async () => {
   console.log(`Webhook:   ${PUBLIC_URL}`);
   console.log(`Forward:   ${TRACKER_FORWARD_URL} (tracker, stats only)`);
   console.log(`Telegram:  ${tg.enabled && tg.hasChatId ? "ON" : "OFF — 跑 Setup Telegram"}`);
-  console.log(`Drafting:  ${useAiDrafts() ? "AI" : "Rule-only (no AI API needed)"}`);
+  console.log(`Drafting:  ${useAiDrafts() ? `AI (${configuredAiProviders().join(" -> ")})` : "Rule-only (no AI API needed)"}`);
   console.log(`Anthropic: ${anthropicKeyConfigured() ? "ON" : "OFF"}`);
+  console.log(`OpenAI:    ${openaiKeyConfigured() ? "ON" : "OFF"}`);
+  console.log(`Gemini:    ${geminiKeyConfigured() ? "ON" : "OFF"}`);
   const cache = loadBrainCacheSync();
   console.log(`Brain:     ${cache.knowledge.count} facts / ${cache.golden.count} golden / ${cache.objections.count} objections${cache.knowledge.count === 0 ? "  ⚠️ 库是空的 — 先做缺口 1" : ""}`);
   const projects = listProjects();

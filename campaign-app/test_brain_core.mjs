@@ -56,6 +56,11 @@ check("EN", detectLanguage("how much is it"), "EN");
 check("complex default", pickModel("complex", {}), "claude-sonnet-4-5");
 check("simple default", pickModel("simple", {}), "claude-haiku-4-5");
 check("env override", pickModel("complex", { BRAIN_MODEL_COMPLEX: "claude-x" }), "claude-x");
+check("OpenAI complex default", pickModel("complex", {}, "openai"), "gpt-5.4");
+check("OpenAI simple default", pickModel("simple", {}, "openai"), "gpt-5.4-nano");
+check("OpenAI env override", pickModel("simple", { BRAIN_OPENAI_MODEL_SIMPLE: "gpt-custom" }, "openai"), "gpt-custom");
+check("Gemini complex default", pickModel("complex", {}, "gemini"), "gemini-3.1-pro-preview");
+check("Gemini simple default", pickModel("simple", {}, "gemini"), "gemini-3.5-flash");
 
 // --- prompt guardrails ---
 const cache = {

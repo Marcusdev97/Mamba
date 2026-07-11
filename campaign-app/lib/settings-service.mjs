@@ -105,12 +105,41 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
     const notionToken = getNotionToken();
     const botToken = env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "";
     const chatId = env.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID || "";
+    const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
+    const openaiKey = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
+    const geminiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+    const configuredProvider = String(env.BRAIN_AI_PROVIDER || process.env.BRAIN_AI_PROVIDER || "").trim().toLowerCase();
+    const provider = ["rules", "anthropic", "openai", "gemini", "auto"].includes(configuredProvider)
+      ? configuredProvider
+      : (anthropicKey ? "anthropic" : (openaiKey ? "openai" : (geminiKey ? "gemini" : "rules")));
     const botValid = isTelegramBotToken(botToken);
     const chatValid = isTelegramChatId(chatId);
     return {
       notion: {
         configured: Boolean(notionToken),
         masked: maskSecret(notionToken),
+      },
+      anthropic: {
+        configured: Boolean(anthropicKey),
+        masked: maskSecret(anthropicKey),
+      },
+      openai: {
+        configured: Boolean(openaiKey),
+        masked: maskSecret(openaiKey),
+      },
+      gemini: {
+        configured: Boolean(geminiKey),
+        masked: maskSecret(geminiKey),
+      },
+      brain: {
+        provider,
+        anthropicSimpleModel: env.BRAIN_ANTHROPIC_MODEL_SIMPLE || process.env.BRAIN_ANTHROPIC_MODEL_SIMPLE || "claude-haiku-4-5",
+        anthropicComplexModel: env.BRAIN_ANTHROPIC_MODEL_COMPLEX || process.env.BRAIN_ANTHROPIC_MODEL_COMPLEX || "claude-sonnet-4-5",
+        openaiSimpleModel: env.BRAIN_OPENAI_MODEL_SIMPLE || process.env.BRAIN_OPENAI_MODEL_SIMPLE || "gpt-5.4-nano",
+        openaiComplexModel: env.BRAIN_OPENAI_MODEL_COMPLEX || process.env.BRAIN_OPENAI_MODEL_COMPLEX || "gpt-5.4",
+        openaiReasoningEffort: env.BRAIN_OPENAI_REASONING_EFFORT || process.env.BRAIN_OPENAI_REASONING_EFFORT || "medium",
+        geminiSimpleModel: env.BRAIN_GEMINI_MODEL_SIMPLE || process.env.BRAIN_GEMINI_MODEL_SIMPLE || "gemini-3.5-flash",
+        geminiComplexModel: env.BRAIN_GEMINI_MODEL_COMPLEX || process.env.BRAIN_GEMINI_MODEL_COMPLEX || "gemini-3.1-pro-preview",
       },
       telegram: {
         botConfigured: botValid,

@@ -20,6 +20,10 @@
     "unknown": {
       "threadId": 20,
       "name": "❓ 陌生来信"
+    },
+    "project:enlace": {
+      "threadId": 25,
+      "name": "📥 Enlace"
     }
   }
 }

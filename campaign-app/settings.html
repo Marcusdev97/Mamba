@@ -6,20 +6,66 @@
 <title>Settings · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
-  .settings-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .phone-card { order: 1; }
-  .notion-card { order: 2; }
-  .telegram-card { order: 3; }
-  .save-card { order: 4; }
-  .status-line { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .wrap { max-width: 1180px; }
+  .settings-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 18px;
+    align-items: stretch;
+  }
+  .settings-grid > .card { margin: 0; min-width: 0; }
+  .phone-card { order: 1; grid-column: 1 / -1; }
+  .notion-card { order: 2; grid-column: span 6; }
+  .telegram-card { order: 3; grid-column: span 6; }
+  .ai-card { order: 4; grid-column: 1 / -1; }
+  .save-card { order: 5; grid-column: 1 / -1; display: flex; flex-direction: column; }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+  .card-head h2 { margin: 0; }
+  .card-kicker { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.5; }
+  .step-title { display: flex; align-items: center; gap: 10px; }
+  .step-no {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 800;
+    flex: 0 0 auto;
+  }
+  .settings-grid .fld { margin-bottom: 14px; }
+  .settings-grid .fld > span { display: block; margin-bottom: 7px; }
+  .settings-grid input, .settings-grid select {
+    width: 100%;
+    max-width: none;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    outline: none;
+  }
+  .settings-grid select { appearance: auto; }
+  .settings-grid input::placeholder { color: var(--muted); opacity: .75; }
+  .settings-grid input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .12); }
+  .status-line { color: var(--muted); font-size: 13px; line-height: 1.55; margin-top: 8px; overflow-wrap: anywhere; }
+  .status-stack { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-  .health { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .phone-overview { display: grid; grid-template-columns: minmax(0, .9fr) minmax(320px, 1.35fr); gap: 14px; margin-bottom: 16px; }
+  .health { display: flex; gap: 8px; flex-wrap: wrap; align-content: center; margin: 0; }
   .health-panel {
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--panel-2);
     padding: 12px 14px;
-    margin: 14px 0 12px;
+    margin: 0;
   }
   .health-title {
     color: var(--muted);
@@ -42,8 +88,35 @@
   .health-state.warn { background: var(--amber-bg); color: var(--amber); }
   .health-state.bad { background: var(--red-bg); color: var(--red); }
   .health-text { color: var(--text); font-size: 13px; }
+  .save-card .save-copy { color: var(--muted); font-size: 13px; line-height: 1.6; }
+  .save-card .actions { margin-top: auto; padding-top: 22px; }
+  .save-card .primary { width: 100%; justify-content: center; }
+  .save-card .ok, .save-card .err { margin-top: 12px; }
   .top a { color: var(--blue); text-decoration: none; font-weight: 700; }
   .top a:hover { text-decoration: underline; }
+  .ai-mode-row { display: grid; grid-template-columns: minmax(220px, .65fr) minmax(0, 1.35fr); gap: 18px; align-items: end; }
+  .ai-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 20px; border-top: 1px solid var(--line); padding-top: 20px; }
+  .ai-provider + .ai-provider { border-left: 1px solid var(--line); padding-left: 24px; }
+  .provider-title { font-size: 15px; font-weight: 800; margin-bottom: 4px; }
+  .provider-sub { color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 14px; }
+  .model-grid, .model-grid.three { display: grid; grid-template-columns: 1fr; gap: 0; }
+  .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
+  @media (max-width: 1050px) {
+    .notion-card, .telegram-card, .ai-card, .save-card { grid-column: 1 / -1; }
+    .phone-overview { grid-template-columns: 1fr; }
+    .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
+    .ai-provider + .ai-provider { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; }
+  }
+  @media (max-width: 620px) {
+    .wrap { padding-left: 14px; padding-right: 14px; }
+    .top { align-items: flex-start; flex-direction: column; gap: 10px; }
+    .card-head { flex-direction: column; }
+    .card-head .actions { width: 100%; flex-direction: column; }
+    .card-head .actions .btn { width: 100%; }
+    .phone-card table { display: block; overflow-x: auto; }
+    .phone-card th, .phone-card td { padding-left: 10px; padding-right: 10px; font-size: 12px; }
+    .model-grid, .model-grid.three { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -51,24 +124,32 @@
   <header class="top">
     <div>
       <h1>Settings</h1>
-      <div class="sub">Phone Setup · Notion · Telegram · 保存到 evolution-pilot/.env</div>
+      <div class="sub">Phone Setup · Notion · Telegram · AI 大脑 · 保存到 evolution-pilot/.env</div>
     </div>
     <a href="/">返回 Campaign Console</a>
   </header>
 
   <div class="settings-grid">
     <div class="card notion-card">
-      <h2>2. Notion</h2>
+      <div class="card-head"><div>
+        <h2 class="step-title"><span class="step-no">2</span> Notion</h2>
+        <div class="card-kicker">Workspace connection</div>
+      </div></div>
       <label class="fld">
         <span>Notion Integration Token</span>
         <input id="notionToken" type="password" autocomplete="off" placeholder="ntn_..." />
       </label>
-      <div class="status-line" id="notionStatus">读取中...</div>
-      <div class="status-line" id="notionLinked">Linked: 查询中...</div>
+      <div class="status-stack">
+        <div class="status-line" id="notionStatus">读取中...</div>
+        <div class="status-line" id="notionLinked">Linked: 查询中...</div>
+      </div>
     </div>
 
     <div class="card telegram-card">
-      <h2>3. Telegram</h2>
+      <div class="card-head"><div>
+        <h2 class="step-title"><span class="step-no">3</span> Telegram</h2>
+        <div class="card-kicker">Bot and approval chat</div>
+      </div></div>
       <label class="fld">
         <span>Bot Token</span>
         <input id="telegramBotToken" type="password" autocomplete="off" placeholder="123456:ABC..." />
@@ -82,29 +163,138 @@
         <button class="btn" id="btnFindChat">自动找 Chat ID</button>
         <button class="btn" id="btnTestTelegram">发送测试 Telegram</button>
       </div>
-      <div class="status-line" id="telegramStatus">读取中...</div>
-      <div class="status-line" id="telegramLinked">Linked: 查询中...</div>
+      <div class="status-stack">
+        <div class="status-line" id="telegramStatus">读取中...</div>
+        <div class="status-line" id="telegramLinked">Linked: 查询中...</div>
+      </div>
+    </div>
+
+    <div class="card ai-card">
+      <div class="card-head"><div>
+        <h2 class="step-title"><span class="step-no">4</span> AI 大脑</h2>
+        <div class="card-kicker">Provider、model 与 reasoning mode</div>
+      </div></div>
+
+      <div class="ai-mode-row">
+        <label class="fld" style="margin-bottom:0">
+          <span>Brain Mode</span>
+          <select id="brainProvider">
+            <option value="rules">Rule Only（不用 AI）</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="auto">Auto（OpenAI → Gemini → Anthropic → Rules）</option>
+          </select>
+        </label>
+        <div class="mode-note" id="brainModeNote">选择 AI Provider。所有 AI 草稿仍需 Telegram 人工批准后才发送。</div>
+      </div>
+
+      <div class="ai-columns">
+        <section class="ai-provider">
+          <div class="provider-title">Anthropic</div>
+          <div class="provider-sub">Haiku 处理日常草稿，Sonnet 处理价格、贷款、预约和复杂异议。</div>
+          <label class="fld">
+            <span>Anthropic API Key</span>
+            <input id="anthropicApiKey" type="password" autocomplete="off" placeholder="sk-ant-..." />
+          </label>
+          <div class="model-grid">
+            <label class="fld"><span>Fast Model</span>
+              <select id="anthropicSimpleModel">
+                <option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+              </select>
+            </label>
+            <label class="fld"><span>Smart Model</span>
+              <select id="anthropicComplexModel">
+                <option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions"><button class="btn" id="btnTestAnthropic">测试 Anthropic</button></div>
+          <div class="status-line" id="anthropicStatus">读取中...</div>
+        </section>
+
+        <section class="ai-provider">
+          <div class="provider-title">OpenAI</div>
+          <div class="provider-sub">Nano 用于快速分类与简单草稿，GPT-5.4 Medium 用于复杂销售判断。</div>
+          <label class="fld">
+            <span>OpenAI API Key</span>
+            <input id="openaiApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+          </label>
+          <div class="model-grid three">
+            <label class="fld"><span>Fast Model</span>
+              <select id="openaiSimpleModel">
+                <option value="gpt-5.4-nano">GPT-5.4 Nano</option>
+                <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+              </select>
+            </label>
+            <label class="fld"><span>Smart Model</span>
+              <select id="openaiComplexModel">
+                <option value="gpt-5.4">GPT-5.4</option>
+                <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+              </select>
+            </label>
+            <label class="fld"><span>Reasoning</span>
+              <select id="openaiReasoningEffort">
+                <option value="none">None</option>
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">XHigh</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions"><button class="btn" id="btnTestOpenAI">测试 OpenAI</button></div>
+          <div class="status-line" id="openaiStatus">读取中...</div>
+        </section>
+
+        <section class="ai-provider">
+          <div class="provider-title">Google Gemini</div>
+          <div class="provider-sub">Flash 处理高频日常草稿，Pro Preview 处理复杂销售判断与异议。</div>
+          <label class="fld">
+            <span>Gemini API Key</span>
+            <input id="geminiApiKey" type="password" autocomplete="off" placeholder="Google AI Studio API Key" />
+          </label>
+          <div class="model-grid">
+            <label class="fld"><span>Fast Model</span>
+              <select id="geminiSimpleModel">
+                <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+              </select>
+            </label>
+            <label class="fld"><span>Smart Model</span>
+              <select id="geminiComplexModel">
+                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+                <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions"><button class="btn" id="btnTestGemini">测试 Gemini</button></div>
+          <div class="status-line" id="geminiStatus">读取中...</div>
+        </section>
+      </div>
     </div>
 
     <div class="card phone-card">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px">
+      <div class="card-head">
         <div>
-          <h2 style="margin:0">1. Phone Setup</h2>
-          <div class="status-line">Connection Key = wa_01 / wa_02；电话号码只是识别用。</div>
+          <h2 class="step-title"><span class="step-no">1</span> Phone Setup</h2>
+          <div class="card-kicker">Connection Key = wa_01 / wa_02</div>
         </div>
         <div class="actions" style="margin-top:0">
           <button class="btn" id="btnRefreshInst">刷新</button>
           <button class="btn primary" id="btnAddNumber">+ 添加号码（扫码）</button>
         </div>
       </div>
-      <div class="health" id="phoneHealth">
-        <div class="chip">API <b>查询中...</b></div>
-      </div>
-      <div class="health-panel">
-        <div class="health-title">Phone Health</div>
-        <div class="health-summary">
-          <span class="health-state warn" id="phoneHealthState">CHECKING</span>
-          <span class="health-text" id="phoneHealthText">正在检查 WhatsApp connection...</span>
+      <div class="phone-overview">
+        <div class="health" id="phoneHealth">
+          <div class="chip">API <b>查询中...</b></div>
+        </div>
+        <div class="health-panel">
+          <div class="health-title">Phone Health</div>
+          <div class="health-summary">
+            <span class="health-state warn" id="phoneHealthState">CHECKING</span>
+            <span class="health-text" id="phoneHealthText">正在检查 WhatsApp connection...</span>
+          </div>
         </div>
       </div>
       <table>
@@ -137,7 +327,11 @@
     </div>
 
     <div class="card save-card">
-      <h2>4. Save</h2>
+      <div class="card-head"><div>
+        <h2 class="step-title"><span class="step-no">5</span> Save</h2>
+        <div class="card-kicker">Apply local configuration</div>
+      </div></div>
+      <div class="save-copy">保存以上 Notion、Telegram 和 AI 设置。Brain service 下次起草时会读取所选 Provider；独立运行中的 Brain 建议重启一次。</div>
       <div class="actions">
         <button class="btn primary" id="btnSave">保存 Settings</button>
       </div>
@@ -169,7 +363,30 @@ function values() {
     notionToken: $("notionToken").value.trim(),
     telegramBotToken: $("telegramBotToken").value.trim(),
     telegramChatId: $("telegramChatId").value.trim(),
+    anthropicApiKey: $("anthropicApiKey").value.trim(),
+    openaiApiKey: $("openaiApiKey").value.trim(),
+    geminiApiKey: $("geminiApiKey").value.trim(),
+    brainProvider: $("brainProvider").value,
+    anthropicSimpleModel: $("anthropicSimpleModel").value,
+    anthropicComplexModel: $("anthropicComplexModel").value,
+    openaiSimpleModel: $("openaiSimpleModel").value,
+    openaiComplexModel: $("openaiComplexModel").value,
+    openaiReasoningEffort: $("openaiReasoningEffort").value,
+    geminiSimpleModel: $("geminiSimpleModel").value,
+    geminiComplexModel: $("geminiComplexModel").value,
   };
+}
+
+function renderBrainMode() {
+  const mode = $("brainProvider").value;
+  const notes = {
+    rules: "只使用现有关键词规则，不调用任何收费 AI。",
+    anthropic: "所有 AI 草稿使用 Anthropic；没有有效 Key 时自动回到 Rule Only。",
+    openai: "所有 AI 草稿使用 OpenAI；Medium 是 reasoning effort，不是另一款 model。",
+    gemini: "所有 AI 草稿使用 Google Gemini；没有有效 Key 时自动回到 Rule Only。",
+    auto: "依次尝试 OpenAI、Gemini、Anthropic，最后使用规则草稿；发送前仍需人工批准。",
+  };
+  $("brainModeNote").textContent = notes[mode] || notes.rules;
 }
 
 function render(settings) {
@@ -181,6 +398,26 @@ function render(settings) {
     "Bot: " + (s.telegram?.botConfigured ? "已设置 " + s.telegram.botMasked : (s.telegram?.botInvalid ? "旧值格式不对" : "未设置")) +
     " · Chat ID: " + (s.telegram?.chatConfigured ? s.telegram.chatId : (s.telegram?.chatInvalid ? "旧值不是 Chat ID，请重新自动找" : "未设置"));
   if (!$("telegramChatId").value && s.telegram?.chatId) $("telegramChatId").value = s.telegram.chatId;
+  $("anthropicStatus").textContent = s.anthropic?.configured
+    ? "已设置: " + s.anthropic.masked
+    : "未设置 Anthropic Key";
+  $("openaiStatus").textContent = s.openai?.configured
+    ? "已设置: " + s.openai.masked
+    : "未设置 OpenAI Key";
+  $("geminiStatus").textContent = s.gemini?.configured
+    ? "已设置: " + s.gemini.masked
+    : "未设置 Gemini Key";
+  if (s.brain) {
+    $("brainProvider").value = s.brain.provider || "rules";
+    $("anthropicSimpleModel").value = s.brain.anthropicSimpleModel || "claude-haiku-4-5";
+    $("anthropicComplexModel").value = s.brain.anthropicComplexModel || "claude-sonnet-4-5";
+    $("openaiSimpleModel").value = s.brain.openaiSimpleModel || "gpt-5.4-nano";
+    $("openaiComplexModel").value = s.brain.openaiComplexModel || "gpt-5.4";
+    $("openaiReasoningEffort").value = s.brain.openaiReasoningEffort || "medium";
+    $("geminiSimpleModel").value = s.brain.geminiSimpleModel || "gemini-3.5-flash";
+    $("geminiComplexModel").value = s.brain.geminiComplexModel || "gemini-3.1-pro-preview";
+  }
+  renderBrainMode();
 }
 
 function renderIdentity(identity) {
@@ -297,6 +534,9 @@ $("btnSave").addEventListener("click", async () => {
     render(data.settings);
     $("notionToken").value = "";
     $("telegramBotToken").value = "";
+    $("anthropicApiKey").value = "";
+    $("openaiApiKey").value = "";
+    $("geminiApiKey").value = "";
     refreshIdentity();
     message("已保存。当前 Mamba server 会马上使用新的设置。", "");
   } catch (e) {
@@ -316,6 +556,59 @@ $("btnFindChat").addEventListener("click", async () => {
     message("", e.message);
   }
 });
+
+$("btnTestAnthropic").addEventListener("click", async () => {
+  message("", "");
+  $("btnTestAnthropic").disabled = true;
+  $("btnTestAnthropic").textContent = "测试中...";
+  try {
+    const data = await api("/api/settings/test-anthropic", values());
+    render(data.settings);
+    $("anthropicApiKey").value = "";
+    message(data.warning ? data.warning : ("Anthropic 已连接并保存 (" + (data.model || "claude") + ")。"), "");
+  } catch (e) {
+    message("", e.message);
+  } finally {
+    $("btnTestAnthropic").disabled = false;
+    $("btnTestAnthropic").textContent = "测试 Anthropic";
+  }
+});
+
+$("btnTestOpenAI").addEventListener("click", async () => {
+  message("", "");
+  $("btnTestOpenAI").disabled = true;
+  $("btnTestOpenAI").textContent = "测试中...";
+  try {
+    const data = await api("/api/settings/test-openai", values());
+    render(data.settings);
+    $("openaiApiKey").value = "";
+    message(data.warning ? data.warning : ("OpenAI 已连接并保存 (" + (data.model || "OpenAI") + ")。"), "");
+  } catch (e) {
+    message("", e.message);
+  } finally {
+    $("btnTestOpenAI").disabled = false;
+    $("btnTestOpenAI").textContent = "测试 OpenAI";
+  }
+});
+
+$("btnTestGemini").addEventListener("click", async () => {
+  message("", "");
+  $("btnTestGemini").disabled = true;
+  $("btnTestGemini").textContent = "测试中...";
+  try {
+    const data = await api("/api/settings/test-gemini", values());
+    render(data.settings);
+    $("geminiApiKey").value = "";
+    message(data.warning ? data.warning : ("Gemini 已连接并保存 (" + (data.model || "Gemini") + ")。"), "");
+  } catch (e) {
+    message("", e.message);
+  } finally {
+    $("btnTestGemini").disabled = false;
+    $("btnTestGemini").textContent = "测试 Gemini";
+  }
+});
+
+$("brainProvider").addEventListener("change", renderBrainMode);
 
 $("btnTestTelegram").addEventListener("click", async () => {
   message("", "");

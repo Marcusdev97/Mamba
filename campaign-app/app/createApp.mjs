@@ -5,6 +5,7 @@ import { registerConversationsRoutes } from "../routes/conversations.routes.mjs"
 import { registerFollowUpRoutes } from "../routes/follow-up.routes.mjs";
 import { registerImportRoutes } from "../routes/import.routes.mjs";
 import { registerInstancesRoutes } from "../routes/instances.routes.mjs";
+import { registerKnowledgeRoutes } from "../routes/knowledge.routes.mjs";
 import { registerLookupRoutes } from "../routes/lookup.routes.mjs";
 import { registerNextFlowRoutes } from "../routes/next-flow.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
@@ -23,6 +24,7 @@ export function createApp(runtime) {
   registerLookupRoutes(router);
   registerTemplatesRoutes(router);
   registerBotRulesRoutes(router);
+  registerKnowledgeRoutes(router);
   registerCampaignRoutes(router);
   registerNextFlowRoutes(router);
   registerConversationsRoutes(router);

@@ -77,9 +77,21 @@ export function detectLanguage(text) {
 }
 
 // ---------- model pick ----------
-export function pickModel(tier, env = {}) {
-  if (tier === "complex") return env.BRAIN_MODEL_COMPLEX || "claude-sonnet-4-5";
-  return env.BRAIN_MODEL_SIMPLE || "claude-haiku-4-5";
+export function pickModel(tier, env = {}, provider = env.BRAIN_AI_PROVIDER || "anthropic") {
+  const isComplex = tier === "complex";
+  if (provider === "openai") {
+    return isComplex
+      ? env.BRAIN_OPENAI_MODEL_COMPLEX || "gpt-5.4"
+      : env.BRAIN_OPENAI_MODEL_SIMPLE || "gpt-5.4-nano";
+  }
+  if (provider === "gemini") {
+    return isComplex
+      ? env.BRAIN_GEMINI_MODEL_COMPLEX || "gemini-3.1-pro-preview"
+      : env.BRAIN_GEMINI_MODEL_SIMPLE || "gemini-3.5-flash";
+  }
+  return isComplex
+    ? env.BRAIN_ANTHROPIC_MODEL_COMPLEX || env.BRAIN_MODEL_COMPLEX || "claude-sonnet-4-5"
+    : env.BRAIN_ANTHROPIC_MODEL_SIMPLE || env.BRAIN_MODEL_SIMPLE || "claude-haiku-4-5";
 }
 
 // ---------- project sheet formatting (Layer 2 -> prompt text, pure) ----------
@@ -107,7 +119,37 @@ export function formatProjectSheet(projectCtx) {
     if (f?.q && f?.a) lines.push(`FAQ: ${f.q} -> ${f.a}`);
   }
   // TODO 值是还没核对的占位, AI 不准引用
-  return lines.filter((l) => !/TODO/i.test(l)).map((l) => `- ${l}`).join("\n");
+  const structured = lines.filter((l) => !/TODO/i.test(l)).map((l) => `- ${l}`).join("\n");
+  // Obsidian .md 的人话正文 (读入时已剔除 TODO 行): 原样给 AI, 让草稿带上
+  // 业务员自己的讲法和 FAQ 语气。上限 6000 字 — 认真写的 playbook (like Enlace
+  // 的 2300 字) 要完整进 prompt, 尤其结尾的收 showroom 段落; 6000 足够 3 倍余量,
+  // 又不至于一个盘撑爆 prompt。超过的话优先砍正文开头以外的重复内容。
+  const body = typeof sheet.body === "string" && sheet.body.trim()
+    ? sheet.body.trim().slice(0, 6000)
+    : "";
+  return body ? `${structured}\n\n${body}` : structured;
+}
+
+// ---------- media tags ----------
+//
+// 盘资料 frontmatter 的 media 表登记了这个盘"存在"的图 (tag -> 文件)。AI 草稿要
+// 配图就写单独一行 [img:tag]; 这里把 tag 解析出来对表验证 — 列表外的 tag 直接
+// 丢弃, 所以 AI 永远不可能发一张不存在/不属于这个盘的图。最多 2 张防轰炸。
+export function parseMediaTags(draft, mediaMap = {}) {
+  const lines = String(draft ?? "").split(/\r?\n/);
+  const media = [];
+  const invalid = [];
+  const kept = [];
+  for (const line of lines) {
+    const m = /^\s*\[img:([a-z0-9_\-]+)\]\s*$/i.exec(line);
+    if (!m) { kept.push(line); continue; }
+    const tag = m[1].toLowerCase();
+    const entry = mediaMap?.[tag];
+    const file = typeof entry === "string" ? entry : entry?.file;
+    if (file) media.push({ tag, file });
+    else invalid.push(tag);
+  }
+  return { text: kept.join("\n").trim(), media: media.slice(0, 2), invalid };
 }
 
 // ---------- prompt build (guardrails live HERE, hardcoded) ----------
@@ -134,6 +176,10 @@ export function buildPrompt({ event, classified, cache, lead, projectCtx = null 
 
   const projectName = projectCtx?.projectName ?? null;
   const sheetText = formatProjectSheet(projectCtx);
+  const mediaMap = projectCtx?.sheet?.media ?? {};
+  const mediaList = Object.entries(mediaMap)
+    .map(([tag, v]) => `- [img:${tag}]${typeof v === "object" && v?.desc ? ` — ${v.desc}` : ""}`)
+    .join("\n");
   const doNotSay = (projectCtx?.sheet?.do_not_say ?? []).map((d, i) => `${6 + i}. ${d}`).join("\n");
   const otherIndex = (projectCtx?.indexLines ?? [])
     .filter((line) => !projectName || !line.startsWith(projectName))
@@ -154,6 +200,7 @@ export function buildPrompt({ event, classified, cache, lead, projectCtx = null 
 
   const user = [
     projectName && sheetText ? `## 本盘资料 — ${projectName} (只准用这些数字)\n${sheetText}\n` : "",
+    mediaList ? `## 可用图片 (客户问户型/地点/package 时配图效果更好)\n${mediaList}\n规则: 要配图就在草稿「最后」单独一行写 [img:tag], 最多 2 张。只准用上面列表的 tag, 列表里没有合适的就不配图。\n` : "",
     `## VERIFIED FACTS (只准用这些)`,
     facts || "(库是空的 — 所有数字都说「我 check 了回你」)",
     "",
@@ -180,18 +227,20 @@ export function buildPrompt({ event, classified, cache, lead, projectCtx = null 
 }
 
 // ---------- Telegram draft card ----------
-export function draftCard({ event, classified, draft, lead, tier, project = null }) {
+export function draftCard({ event, classified, draft, lead, tier, project = null, mediaMap = {} }) {
   const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const source = tier === "rules" ? " (Rule-only)" : tier === "complex" ? " (Sonnet)" : "";
+  const { media } = parseMediaTags(draft, mediaMap);
   return [
     `🧠 <b>${esc(classified.route)}</b>${project ? ` · 🏢 ${esc(project)}` : ""} · ${esc(lead?.name ?? event.pushName ?? "Unknown")} (${esc(event.phone)})`,
     `💬 客户: ${esc(event.text)}`,
     "",
     `📝 <b>草稿${source}</b>:`,
     esc(draft),
+    media.length ? `\n📎 <b>附图</b>: ${media.map((m) => esc(m.tag)).join(", ")} (批准后图+文字一起发)` : "",
     "",
-    `✏️ 要改的话: 按「改后发」再 <b>回复这条消息</b> 输入新文本。`,
-  ].join("\n");
+    `✏️ 要改的话: 按「改后发」再 <b>回复这条消息</b> 输入新文本 (可加 [img:tag] 行配图)。`,
+  ].filter((l) => l !== "").join("\n");
 }
 
 export function draftButtons(pendingId) {

@@ -20,6 +20,13 @@
       "config": "radium_arena.json",
       "senders": [],
       "excel": "Untitled spreadsheet.xlsx"
+    },
+    {
+      "id": "enlace",
+      "name": "Enlace",
+      "config": "enlace.json",
+      "senders": [],
+      "excel": "Untitled spreadsheet.xlsx"
     }
   ]
 }

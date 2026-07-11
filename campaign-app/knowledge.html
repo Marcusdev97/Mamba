@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>脑编辑器 · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .wrap { max-width: 1280px; }
+  .tabs { display:flex; gap:8px; margin:14px 0; flex-wrap:wrap; }
+  .tab-btn {
+    padding:9px 16px; border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--panel); color:var(--text); cursor:pointer; font-weight:650;
+  }
+  .tab-btn.active { background:var(--panel-2); border-color:var(--green, #4ade80); }
+  .layout { display:grid; grid-template-columns:250px minmax(0,1fr); gap:16px; align-items:start; }
+  .side { display:grid; gap:8px; }
+  .sheet-item {
+    text-align:left; padding:10px 12px; border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--panel); color:var(--text); cursor:pointer;
+  }
+  .sheet-item.active { border-color:var(--green, #4ade80); background:var(--panel-2); }
+  .sheet-item .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-l); padding:16px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  label.fld { display:block; }
+  label.fld span { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+  input, textarea {
+    width:100%; box-sizing:border-box; background:var(--panel-2); color:var(--text);
+    border:1px solid var(--line); border-radius:var(--radius); padding:9px 10px; font-size:14px;
+  }
+  textarea.body { min-height:260px; font-size:14.5px; line-height:1.6; }
+  textarea.small { min-height:70px; }
+  .hint { color:var(--muted); font-size:12.5px; margin:6px 0 0; line-height:1.5; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+  button.primary {
+    padding:10px 20px; border-radius:var(--radius); border:0; cursor:pointer;
+    background:var(--green, #22c55e); color:#08210f; font-weight:750;
+  }
+  button.ghost { padding:10px 16px; border-radius:var(--radius); border:1px solid var(--line); background:transparent; color:var(--text); cursor:pointer; }
+  .ok { color:var(--green, #4ade80); } .err { color:var(--red, #f87171); }
+  .preview { white-space:pre-wrap; background:var(--panel-2); border:1px solid var(--line); border-radius:var(--radius); padding:12px; margin-top:10px; font-size:13.5px; line-height:1.55; }
+  .promo-row { display:grid; grid-template-columns:1fr 160px 40px; gap:8px; margin-top:6px; }
+  .type-row { display:grid; grid-template-columns:1fr 110px 140px 40px; gap:8px; margin-top:6px; }
+  .del { border:1px solid var(--line); background:transparent; color:var(--red, #f87171); border-radius:var(--radius); cursor:pointer; }
+  h3.sec { margin:20px 0 6px; font-size:14px; color:var(--muted); text-transform:none; }
+  @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .grid2,.grid3 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧠 脑编辑器 <span style="color:var(--muted);font-size:14px;font-weight:400">你用人话写,我转成系统 + Obsidian 懂的格式</span></h1>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="sheets">盘资料 (Layer 2)</button>
+    <button class="tab-btn" data-tab="inbox">原料箱 (随手丢)</button>
+  </div>
+
+  <!-- ============ TAB: 盘资料 ============ -->
+  <div id="tab-sheets">
+    <div class="layout">
+      <div class="side">
+        <button class="ghost" id="btn-new">➕ 新盘</button>
+        <div id="sheet-list"></div>
+        <p class="hint">这些就是 <b>brain-vault/盘资料/</b> 里的 .md — Obsidian 开同一份。保存即生效,不用重启。</p>
+      </div>
+
+      <div class="panel">
+        <div class="grid2">
+          <label class="fld"><span>盘名 name(要跟 Notion 的 Project select 一样)*</span><input id="f-name" placeholder="Binastra" /></label>
+          <label class="fld"><span>project_id(小写,跟 projects.json 的 id 一样)</span><input id="f-project_id" placeholder="binastra(留空自动生成)" /></label>
+        </div>
+        <div class="grid2" style="margin-top:10px">
+          <label class="fld"><span>一句话卖点 one_liner</span><input id="f-one_liner" placeholder="KL 市区 freehold, 直连 MRT Cochrane..." /></label>
+          <label class="fld"><span>发展商 developer</span><input id="f-developer" placeholder="不确定就留空,别乱写" /></label>
+        </div>
+        <div class="grid2" style="margin-top:10px">
+          <label class="fld"><span>区域 area</span><input id="f-area" placeholder="Cochrane, KL" /></label>
+          <label class="fld"><span>地标/交通 landmark</span><input id="f-landmark" placeholder="Direct link MRT · 1 stop to TRX" /></label>
+        </div>
+        <div class="grid3" style="margin-top:10px">
+          <label class="fld"><span>最低价 RM</span><input id="f-price_min" type="number" placeholder="500000" /></label>
+          <label class="fld"><span>最高价 RM</span><input id="f-price_max" type="number" placeholder="800000" /></label>
+          <label class="fld"><span>最低月供约 RM</span><input id="f-monthly_from" type="number" placeholder="2100" /></label>
+        </div>
+
+        <h3 class="sec">户型 types</h3>
+        <div id="types"></div>
+        <button class="ghost" id="btn-add-type" style="margin-top:6px">+ 加户型</button>
+
+        <h3 class="sec">当期 Promo(一定写截止日,过期 AI 自动不讲)</h3>
+        <div id="promos"></div>
+        <button class="ghost" id="btn-add-promo" style="margin-top:6px">+ 加 promo</button>
+
+        <div class="grid2" style="margin-top:14px">
+          <label class="fld"><span>适合谁 target_buyer(逗号分开)</span><input id="f-target_buyer" placeholder="first_time, investor" /></label>
+          <label class="fld"><span>Gallery 地址</span><input id="f-gallery_address" placeholder="XXX Sales Gallery" /></label>
+        </div>
+        <div class="grid2" style="margin-top:10px">
+          <label class="fld"><span>Gallery 开放时间</span><input id="f-gallery_hours" placeholder="每天 10am-6pm" /></label>
+          <label class="fld"><span>&nbsp;</span><span class="hint">红线和正文在下面 ↓</span></label>
+        </div>
+
+        <h3 class="sec">这个盘的红线 do_not_say(一行一条,AI 的硬性规则)</h3>
+        <textarea id="f-do_not_say" class="small" placeholder="不可以保证 loan 一定批&#10;不可以讲包租/保证回酬"></textarea>
+
+        <h3 class="sec">人话正文(重点!像跟同事交代一样写:卖点怎么讲、客户常问什么你怎么答)</h3>
+        <textarea id="f-body" class="body" placeholder="## 卖点&#10;这个盘最猛的是...带看的时候我都讲...&#10;&#10;## 客户常问&#10;问: 会不会很吵?&#10;答: 高楼层完全不吵,上次客户自己讲的。&#10;&#10;没核对的数字整行加 TODO,AI 就看不到那行。"></textarea>
+        <p class="hint">写 TODO 的行 AI 看不到。核对完删掉 TODO 两个字才生效。客户名字电话不要写进来。</p>
+
+        <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">进阶字段(YAML,一般不用动)</summary>
+          <textarea id="f-extra_yaml" class="small" placeholder="其他 frontmatter 字段, 例:&#10;waze: https://waze.com/ul/xxx"></textarea>
+        </details>
+
+        <div class="row">
+          <button class="primary" id="btn-save">💾 保存(即刻生效)</button>
+          <button class="ghost" id="btn-preview">👁 看 AI 眼中的这个盘</button>
+          <span id="msg"></span>
+        </div>
+        <div class="preview" id="preview" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TAB: 原料箱 ============ -->
+  <div id="tab-inbox" style="display:none">
+    <div class="panel">
+      <p class="hint" style="margin-top:0">Developer 发来的价单文字、package 详情、WhatsApp 转发——先丢进来,之后叫 Claude「把原料箱整理进 XX 的脑」。存去 <b>brain-vault/原料箱/</b>。</p>
+      <label class="fld" style="margin-top:10px"><span>标题(哪个盘/什么东西)</span><input id="i-title" placeholder="binastra 7月新 package" /></label>
+      <label class="fld" style="margin-top:10px"><span>原料(照贴,不用整理)</span><textarea id="i-text" class="body" placeholder="直接 paste..."></textarea></label>
+      <div class="row">
+        <button class="primary" id="btn-inbox-save">📥 丢进原料箱</button>
+        <span id="i-msg"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (url, opts) => {
+  const r = await fetch(url, opts ? { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(opts) } : undefined);
+  const d = await r.json();
+  if (!d.ok) throw new Error(d.error || "请求失败");
+  return d;
+};
+let currentFile = null;
+
+// ---- tabs ----
+document.querySelectorAll(".tab-btn").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tab-btn").forEach((x) => x.classList.toggle("active", x === b));
+  $("tab-sheets").style.display = b.dataset.tab === "sheets" ? "" : "none";
+  $("tab-inbox").style.display = b.dataset.tab === "inbox" ? "" : "none";
+});
+
+// ---- dynamic rows ----
+function promoRow(p = {}) {
+  const div = document.createElement("div");
+  div.className = "promo-row";
+  div.innerHTML = `<input class="p-desc" placeholder="Rebate 8% + free legal fee" value="${(p.desc||"").replace(/"/g,"&quot;")}" />
+    <input class="p-until" type="date" value="${p.valid_until||""}" />
+    <button class="del">✕</button>`;
+  div.querySelector(".del").onclick = () => div.remove();
+  $("promos").appendChild(div);
+}
+function typeRow(t = {}) {
+  const div = document.createElement("div");
+  div.className = "type-row";
+  div.innerHTML = `<input class="t-layout" placeholder="3R2B" value="${t.layout||""}" />
+    <input class="t-sqft" type="number" placeholder="sqft" value="${t.sqft||""}" />
+    <input class="t-from" type="number" placeholder="from RM" value="${t.from||""}" />
+    <button class="del">✕</button>`;
+  div.querySelector(".del").onclick = () => div.remove();
+  $("types").appendChild(div);
+}
+$("btn-add-promo").onclick = () => promoRow();
+$("btn-add-type").onclick = () => typeRow();
+
+// ---- list / load ----
+async function refreshList(selectFile) {
+  const d = await api("/api/knowledge/list");
+  const box = $("sheet-list");
+  box.innerHTML = "";
+  for (const s of d.sheets) {
+    const b = document.createElement("button");
+    b.className = "sheet-item" + (s.file === (selectFile ?? currentFile) ? " active" : "");
+    b.innerHTML = `<div>${s.broken ? "⚠️ " : ""}${s.name}</div><div class="sub">${s.file}${s.todoCount ? ` · ${s.todoCount} 个 TODO 待核对` : ""}</div>`;
+    b.onclick = () => loadSheet(s.file);
+    box.appendChild(b);
+  }
+}
+function clearForm() {
+  currentFile = null;
+  for (const id of ["f-name","f-project_id","f-one_liner","f-developer","f-area","f-landmark","f-price_min","f-price_max","f-monthly_from","f-target_buyer","f-gallery_address","f-gallery_hours","f-do_not_say","f-body","f-extra_yaml"]) $(id).value = "";
+  $("promos").innerHTML = ""; $("types").innerHTML = "";
+  $("preview").style.display = "none"; $("msg").textContent = "";
+  $("f-do_not_say").value = "不可以保证 loan 一定批\n不可以讲 \"包租\" / \"保证回酬\"";
+  refreshList();
+}
+$("btn-new").onclick = clearForm;
+
+async function loadSheet(file) {
+  const d = await api("/api/knowledge/get?file=" + encodeURIComponent(file));
+  currentFile = file;
+  const f = d.fields;
+  $("f-name").value = f.name || "";
+  $("f-project_id").value = f.project_id || "";
+  $("f-one_liner").value = f.one_liner || "";
+  $("f-developer").value = f.developer || "";
+  $("f-area").value = f.location?.area || "";
+  $("f-landmark").value = f.location?.landmark || "";
+  $("f-price_min").value = f.price_range?.[0] || "";
+  $("f-price_max").value = f.price_range?.[1] || "";
+  $("f-monthly_from").value = f.monthly_from || "";
+  $("f-target_buyer").value = (f.target_buyer || []).join(", ");
+  $("f-gallery_address").value = f.gallery?.address || "";
+  $("f-gallery_hours").value = f.gallery?.hours || "";
+  $("f-do_not_say").value = (f.do_not_say || []).join("\n");
+  $("f-body").value = d.body || "";
+  $("promos").innerHTML = ""; (f.promos || []).forEach(promoRow);
+  $("types").innerHTML = ""; (f.types || []).forEach(typeRow);
+  const known = ["project_id","name","one_liner","location","developer","price_range","monthly_from","types","target_buyer","promos","do_not_say","gallery","body"];
+  const extra = Object.fromEntries(Object.entries(f).filter(([k]) => !known.includes(k)));
+  $("f-extra_yaml").value = Object.keys(extra).length ? jsyamlDump(extra) : "";
+  $("preview").style.display = "none"; $("msg").textContent = "";
+  refreshList(file);
+}
+// 简易 yaml dump (只给进阶字段显示用, 保存时后端重新 parse)
+function jsyamlDump(obj) { return Object.entries(obj).map(([k,v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("\n"); }
+
+// ---- save / preview ----
+function collect() {
+  return {
+    file: currentFile,
+    name: $("f-name").value,
+    project_id: $("f-project_id").value,
+    one_liner: $("f-one_liner").value,
+    developer: $("f-developer").value,
+    area: $("f-area").value,
+    landmark: $("f-landmark").value,
+    price_min: $("f-price_min").value,
+    price_max: $("f-price_max").value,
+    monthly_from: $("f-monthly_from").value,
+    target_buyer: $("f-target_buyer").value,
+    gallery_address: $("f-gallery_address").value,
+    gallery_hours: $("f-gallery_hours").value,
+    do_not_say: $("f-do_not_say").value,
+    extra_yaml: $("f-extra_yaml").value,
+    body: $("f-body").value,
+    promos: [...document.querySelectorAll("#promos .promo-row")].map((r) => ({ desc: r.querySelector(".p-desc").value, valid_until: r.querySelector(".p-until").value })),
+    types: [...document.querySelectorAll("#types .type-row")].map((r) => ({ layout: r.querySelector(".t-layout").value, sqft: r.querySelector(".t-sqft").value, from: r.querySelector(".t-from").value })),
+  };
+}
+$("btn-save").onclick = async () => {
+  const msg = $("msg");
+  try {
+    const d = await api("/api/knowledge/save", collect());
+    currentFile = d.file;
+    msg.className = "ok";
+    msg.textContent = `已保存 ${d.file},即刻生效 ✅` + (d.inProjectsJson ? "" : " ⚠️ projects.json 里没有这个盘,blast 归属不会认得 — 记得注册");
+    refreshList(d.file);
+  } catch (e) { msg.className = "err"; msg.textContent = e.message; }
+};
+$("btn-preview").onclick = async () => {
+  const msg = $("msg");
+  try {
+    const d = await api("/api/knowledge/preview", { name: $("f-name").value });
+    const pv = $("preview");
+    pv.style.display = "";
+    pv.textContent = (d.matched ? "" : "⚠️ 还没保存/载入。\n\n") + d.preview + "\n\n—— 其他盘 index(AI 转推用)——\n" + d.indexLines.join("\n");
+    msg.textContent = "";
+  } catch (e) { msg.className = "err"; msg.textContent = e.message; }
+};
+
+// ---- inbox ----
+$("btn-inbox-save").onclick = async () => {
+  const msg = $("i-msg");
+  try {
+    const d = await api("/api/knowledge/inbox", { title: $("i-title").value, text: $("i-text").value });
+    msg.className = "ok"; msg.textContent = `已存 ${d.file} ✅`;
+    $("i-title").value = ""; $("i-text").value = "";
+  } catch (e) { msg.className = "err"; msg.textContent = e.message; }
+};
+
+clearForm();
+refreshList();
+</script>
+</body>
+</html>
