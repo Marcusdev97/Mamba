@@ -11,6 +11,7 @@
 #   com.mamba.tracker      blaster_tracker.mjs      — 面板+统计 (--no-webhook, brain 会转发)
 #   com.mamba.braincache   brain_cache_sync --watch — 每 30 分钟 Notion -> 本地知识缓存
 #   com.mamba.suppression  suppression.mjs          — 每 30 分钟同步全局 STOP 名单
+#   com.mamba.scorecard    daily_scorecard.mjs      — 每晚 22:00 成绩单 -> Mamba 系统台
 #
 # 前提: Evolution API 的 Docker 已设 restart=always (docker update --restart=always <container>)
 # 日志: <repo>/launchd/logs/*.log
@@ -21,7 +22,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node || true)"
 AGENTS="$HOME/Library/LaunchAgents"
 LOGS="$REPO/launchd/logs"
-LABELS=(com.mamba.brain com.mamba.tracker com.mamba.braincache com.mamba.suppression)
+LABELS=(com.mamba.brain com.mamba.tracker com.mamba.braincache com.mamba.suppression com.mamba.scorecard)
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   for label in "${LABELS[@]}"; do
@@ -79,6 +80,15 @@ write_plist com.mamba.braincache "    <string>$NODE</string>
 
 write_plist com.mamba.suppression "    <string>$NODE</string>
     <string>$REPO/campaign-app/suppression.mjs</string>" "$EVERY30"
+
+NIGHTLY22='  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>22</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>'
+
+write_plist com.mamba.scorecard "    <string>$NODE</string>
+    <string>$REPO/campaign-app/daily_scorecard.mjs</string>" "$NIGHTLY22"
 
 for label in "${LABELS[@]}"; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true

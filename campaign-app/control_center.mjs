@@ -45,6 +45,7 @@ const KNOWN = {
   "Flow Map.command":                  { emoji: "🧭", label: "Mamba Flow Map", desc: "看懂 blasting、大脑分类、Next Flow 和跟进追踪怎么串起来", group: "日常", order: 9 },
   "Bot Rules.command":                 { emoji: "🧠", label: "Bot Rules 大脑", desc: "自己改关键词 trigger,让 bot 分类 Warm / Cold / STOP / Spam", group: "设置 & 工具", order: 24 },
   "脑编辑器.command":                   { emoji: "📝", label: "脑编辑器(盘资料)", desc: "用人话写每个盘的资料和卖点,自动转成 AI 和 Obsidian 都懂的格式,保存即生效", group: "设置 & 工具", order: 23 },
+  "安装每晚成绩单.command":             { emoji: "📊", label: "安装每晚成绩单(一次永久)", desc: "双击一次,以后每晚 10 点自动把今天 blast/回复/温度/call 数发去 Mamba 系统台", group: "设置 & 工具", order: 27 },
   "号码连接.command":                   { emoji: "📱", label: "⓪ Settings / Phone Setup", desc: "扫码上线 WhatsApp、查看连接健康、删除设备。Docker/Evolution/Console 没跑都会自动先启动", group: "日常", order: 0 },
   "模板 Flow 面板.command":             { emoji: "🗂", label: "模板 & Flow 面板", desc: "网页看整个自动序列 + 拉 Notion 模板,一眼看出哪个 flow 缺模板要改", group: "设置 & 工具", order: 25 },
   "查找客户.command":                   { emoji: "🔎", label: "查找客户", desc: "输入号码/名字,查这个客户在哪些项目、什么时候 blast 过、现在到哪个 flow、有没有回复 / STOP", group: "设置 & 工具", order: 26 },
