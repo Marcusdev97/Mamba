@@ -51,6 +51,13 @@
   .modal-head { padding: 14px 18px; font-weight: 700; border-bottom: 1px solid #334155; }
   .modal-content { padding: 14px 18px; overflow: auto; }
   .modal-actions { padding: 12px 18px; border-top: 1px solid #334155; display: flex; gap: 10px; justify-content: flex-end; }
+  .busy { position: fixed; inset: 0; background: rgba(2,6,23,.74); display: flex; align-items: center; justify-content: center; z-index: 80; }
+  .busy.hidden { display: none; }
+  .busy-card { background: #0f172a; border: 1px solid #334155; border-radius: 14px; padding: 26px 34px; text-align: center; max-width: 460px; }
+  .busy-card .spin { width: 38px; height: 38px; margin: 0 auto 14px; border: 4px solid #334155; border-top-color: #38bdf8; border-radius: 50%; animation: nfspin .8s linear infinite; }
+  .busy-card .bmsg { font-weight: 700; font-size: 15px; }
+  .busy-card .bsub { color: #94a3b8; font-size: 12px; margin-top: 6px; }
+  @keyframes nfspin { to { transform: rotate(360deg); } }
   .tpl-lang { border: 1px solid #334155; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
   .tpl-tag { display: inline-block; font-size: 11px; color: #7dd3fc; text-transform: uppercase; letter-spacing: .04em; margin: 6px 0 2px; }
   .tpl-part pre { white-space: pre-wrap; word-break: break-word; background: #0b1322; border: 1px solid #1f2a3d; border-radius: 8px; padding: 8px 10px; margin: 2px 0; font: inherit; }
@@ -125,6 +132,14 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="busy hidden" id="busy">
+  <div class="busy-card">
+    <div class="spin"></div>
+    <div class="bmsg" id="busyMsg">正在更新 Notion…</div>
+    <div class="bsub" id="busySub">请不要关闭页面</div>
+  </div>
+</div>
+
 <script>
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 let toastTimer;
@@ -133,6 +148,12 @@ function toast(msg, isErr) {
   t.textContent = msg; t.className = "toast show" + (isErr ? " err" : "");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = "toast"), 3000);
 }
+function showBusy(msg, sub) {
+  document.getElementById("busyMsg").textContent = msg || "正在更新 Notion…";
+  document.getElementById("busySub").textContent = sub || "请不要关闭页面";
+  document.getElementById("busy").className = "busy";
+}
+function hideBusy() { document.getElementById("busy").className = "busy hidden"; }
 async function api(path, body, method) {
   const res = await fetch(path, body ? { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
                                      : { method: method || "GET", cache: "no-store" });
@@ -232,14 +253,37 @@ async function setGroup(fromFlow, btn) {
   const toFlow = sel.value;
   if (toFlow === fromFlow) return toast("目标和当前一样,不用改。", true);
   if (!confirm(`把「${currentProject}」里整组「${fromFlow}」的人全部改成「${toFlow}」?`)) return;
+  showBusy(`正在把「${fromFlow}」→「${toFlow}」写进 Notion…`, "整组人数多时要几十秒,请别关页面");
   try {
     const r = await api("/api/next-flow/set-group", { projectName: currentProject, fromFlow, toFlow });
+    // 没有一个人被改 -> 说明筛选没匹配到 / 全被拦截。以前这里静默 load(),
+    // 看起来就像"点了没反应,发出去还是旧的"。现在直接明说。
+    if (!r.set) {
+      const blocked = (r.skippedStop || 0) + (r.skippedRejected || 0);
+      toast(blocked
+        ? `0 人改动 — ${blocked} 个被拦截(退订/拒绝/转人工),没有可改的人。`
+        : `0 人改动 — 没匹配到「${currentProject} · ${fromFlow}」的人。`, true);
+      await load();
+      return;
+    }
+    // Notion 的 query 是写后读最终一致,刚 PATCH 完立刻 load() 可能还拿到旧的
+    // Next Flow,于是这组"看起来没动",接着发出去的还是旧 flow 的模板。
+    // 先在本地把这组人移到新 flow —— UI 和"下一步要发的模板"立刻就对;
+    // 再延迟和 Notion 对账,以真实数据为准。
+    for (const l of ALL) {
+      if (l.project === currentProject && l.nextFlow === fromFlow) {
+        l.nextFlow = toFlow;
+        if (FLOW_DAY[fromFlow]) l.cohortDay = FLOW_DAY[fromFlow];
+      }
+    }
+    render();
     let msg = `已把 ${r.set} 人 ${r.from} → ${r.to}`;
     if (r.skippedStop) msg += ` · ${r.skippedStop} 退订跳过`;
     if (r.skippedRejected) msg += ` · ${r.skippedRejected} 拒绝/转人工跳过`;
     toast(msg);
-    await load();
+    setTimeout(load, 5000); // 等 Notion 索引跟上再静默对账(本地已经先更新了,这步只是核对)
   } catch (e) { toast("失败:" + e.message, true); }
+  finally { hideBusy(); }
 }
 
 async function applySetFlow() {
@@ -248,16 +292,19 @@ async function applySetFlow() {
   if (!phones.length) return toast("先贴电话号码。", true);
   if (!nextFlow) return toast("先选一个 Flow。", true);
   if (!confirm(`把这 ${phones.length} 个号码设为「${nextFlow}」?`)) return;
+  showBusy(`正在把 ${phones.length} 个号码设为「${nextFlow}」…`, "请别关页面");
   try {
     const r = await api("/api/next-flow/set-flow", { phones, nextFlow });
     let msg = `已设 ${r.set} 人 → ${r.nextFlow}`;
     if (r.notFound) msg += ` · ${r.notFound} 个没找到`;
     if (r.skippedStop) msg += ` · ${r.skippedStop} 个已退订跳过`;
     if (r.skippedRejected) msg += ` · ${r.skippedRejected} 个拒绝/转人工跳过`;
-    toast(msg);
+    toast(msg, r.set ? false : true);
     document.getElementById("phonesBox").value = "";
-    await load();
+    // Notion 写后读有延迟,等索引跟上再刷新列表(否则刚改的还是显示旧 flow)。
+    setTimeout(load, 3000);
   } catch (e) { toast("失败:" + e.message, true); }
+  finally { hideBusy(); }
 }
 
 function closeModal() { document.getElementById("tplModal").classList.add("hidden"); }

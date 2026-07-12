@@ -38,40 +38,56 @@ async function readJsonSafe(p, fallback = null) {
   try { return JSON.parse(await fs.readFile(p, "utf8")); } catch { return fallback; }
 }
 
+// Load evolution-pilot/.env so scheduled/launchd runs have the Telegram token.
+// launchd's process.env only carries PATH, so relying on process.env alone means
+// the send silently no-ops. File values win over process.env (same as makeHub).
+async function loadEnvFile() {
+  const env = {};
+  try {
+    const text = await fs.readFile(path.join(rootDir, "evolution-pilot", ".env"), "utf8");
+    for (const raw of text.split(/\r?\n/)) {
+      const m = raw.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+  } catch { /* optional */ }
+  return { ...process.env, ...env };
+}
+
 // ---------- blast counts (per project) ----------
+// 关键: active-run.json 就是"当前那一批", 归档后 runs/ 里会有同一个 run (同 runId)。
+// 两边都数 = 每条重复计一次 (以前的 bug: 131 真实 -> 报 262)。所以按
+// runId::jobId 去重, 每个 job 全局只算一次, active-run 只补 runs/ 里还没有的。
 async function blastStats() {
   const perProject = new Map(); // project -> { sent, skippedStop, skippedReplied, failed }
-  let files = [];
-  try { files = (await fs.readdir(path.join(dataDir, "runs"))).filter((f) => f.endsWith(".json")); } catch { /* none */ }
-  for (const file of files) {
-    const run = await readJsonSafe(path.join(dataDir, "runs", file));
-    if (!run?.assignments) continue;
-    // 快速跳过整个 run 都不是今天的 (updatedAt/startAt 都不在今天且没有今天的 sentAt 很少见)
+  const seen = new Set(); // runId::jobId — 跨 runs/ 和 active-run 去重
+  const jobKey = (runId, job, idx) => `${runId ?? "?"}::${job?.id ?? job?.lead?.id ?? job?.lead?.phone ?? idx}`;
+
+  const tally = (run, source) => {
+    if (!run?.assignments) return;
+    const runId = run.runId || run.id || source;
     const project = run.project || "未知盘";
-    for (const job of run.assignments) {
+    run.assignments.forEach((job, idx) => {
+      const key = jobKey(runId, job, idx);
+      if (seen.has(key)) return; // 同一个 job 已经数过 (通常是 active-run 与归档重复)
       const sentDay = klDay(job?.part1?.sentAt);
       const touchedToday = sentDay === TODAY
         || (String(job.status).startsWith("SKIPPED") && klDay(run.updatedAt) === TODAY);
-      if (!touchedToday) continue;
+      if (!touchedToday) return;
+      seen.add(key);
       const s = perProject.get(project) ?? { sent: 0, skippedStop: 0, skippedReplied: 0, failed: 0 };
       if (sentDay === TODAY) s.sent += 1;
       else if (job.status === "SKIPPED_SUPPRESSED") s.skippedStop += 1;
       else if (job.status === "SKIPPED_REPLIED") s.skippedReplied += 1;
       if (job.status === "FAILED" && sentDay === TODAY) s.failed += 1;
       perProject.set(project, s);
-    }
-  }
-  // active-run (还没归档进 runs/ 的当前批) 也算进去
-  const active = await readJsonSafe(path.join(dataDir, "active-run.json"));
-  if (active?.assignments) {
-    const project = active.project || "未知盘";
-    for (const job of active.assignments) {
-      if (klDay(job?.part1?.sentAt) !== TODAY) continue;
-      const s = perProject.get(project) ?? { sent: 0, skippedStop: 0, skippedReplied: 0, failed: 0 };
-      s.sent += 1;
-      perProject.set(project, s);
-    }
-  }
+    });
+  };
+
+  let files = [];
+  try { files = (await fs.readdir(path.join(dataDir, "runs"))).filter((f) => f.endsWith(".json")); } catch { /* none */ }
+  for (const file of files) tally(await readJsonSafe(path.join(dataDir, "runs", file)), file);
+  // active-run: 只补进 runs/ 里还没归档的 job (同 runId::jobId 已被上面数过就跳过)。
+  tally(await readJsonSafe(path.join(dataDir, "active-run.json")), "active-run");
   return perProject;
 }
 
@@ -110,6 +126,8 @@ async function newStopsToday() {
 // ---------- Notion extras (从旧 nightly_summary 继承的两个指标) ----------
 // 今日 call 数 (Recycle "Call Date" + Ads call touches) 和新 ads lead。
 // Notion 挂了/没 token -> 返回 null, 成绩单其余部分照发 (best-effort)。
+// 单个表查失败 (例如 integration 没连上某个表, 404) -> degraded=true,
+// 那条数据算 0 但成绩单会加一行警告, 免得把"没连上"误读成"真的是 0"。
 async function notionExtras() {
   try {
     const { loadEnv } = await import("./campaign_core.mjs");
@@ -134,14 +152,23 @@ async function notionExtras() {
       return total;
     };
 
+    // 任何一个表查失败 -> 记 degraded, 返回 null 占位 (不静默当成真 0)。
+    const failed = [];
+    const safe = (name, promise) => promise.catch((e) => { failed.push(`${name}: ${e.message}`); return null; });
+
     const [recycleCalls, adsToday, newAdLeads] = await Promise.all([
-      countWhere(dbs.recycleLeads, { property: "Call Date", date: { equals: TODAY } }).catch(() => 0),
-      sync.queryDataSource(dbs.adsLeads, { property: "Last Touch At", date: { equals: TODAY } }, 100).catch(() => null),
-      countWhere(dbs.adsLeads, { property: "Lead Received At", date: { equals: TODAY } }).catch(() => 0),
+      safe("recycleLeads", countWhere(dbs.recycleLeads, { property: "Call Date", date: { equals: TODAY } })),
+      safe("adsLeads.touch", sync.queryDataSource(dbs.adsLeads, { property: "Last Touch At", date: { equals: TODAY } }, 100)),
+      safe("adsLeads.new", countWhere(dbs.adsLeads, { property: "Lead Received At", date: { equals: TODAY } })),
     ]);
     const callTypes = new Set(["Call Attempt", "Call Answered", "No Answer"]);
     const adsCalls = (adsToday?.results ?? []).filter((p) => callTypes.has(p?.properties?.["Last Touch Type"]?.select?.name)).length;
-    return { calls: recycleCalls + adsCalls, newAdLeads };
+    return {
+      calls: (recycleCalls ?? 0) + adsCalls,
+      newAdLeads: newAdLeads ?? 0,
+      degraded: failed.length > 0,
+      failed,
+    };
   } catch {
     return null;
   }
@@ -175,22 +202,27 @@ async function main() {
     const totalViewing = [...replies.values()].reduce((n, s) => n + s.viewing, 0);
     parts.push(`合计: 发 ${totalSent} · 回 ${totalReplies}${totalSent ? ` (${((totalReplies / totalSent) * 100).toFixed(1)}%)` : ""}${totalViewing ? ` · 约看 ${totalViewing}` : ""}${stops ? ` · 全局 STOP +${stops}` : ""}`);
   }
-  if (extras) parts.push(`📞 今日 call ${extras.calls} 通 · 新 ads lead ${extras.newAdLeads} 个`);
+  if (extras) {
+    parts.push(`📞 今日 call ${extras.calls} 通 · 新 ads lead ${extras.newAdLeads} 个`);
+    if (extras.degraded) parts.push("⚠️ Notion 有表没连上,call / ads lead 可能偏低 (把 integration 连上 Ads Leads 表)。");
+  }
   const message = parts.join("\n").trim();
+  if (extras?.degraded) console.error(`[scorecard] Notion degraded: ${extras.failed.join(" | ")}`);
 
   console.log("MAMBA | DAILY SCORECARD");
   console.log("=======================");
   console.log(message.replace(/<[^>]+>/g, ""));
 
   if (DRY) { console.log("\n(--dry: 没有发送)"); return; }
-  const hub = makeHub();
+  const env = await loadEnvFile();
+  const hub = makeHub(env);
   if (hub.hasOps) {
     await hub.postOps(message);
     console.log("\nSent to Mamba 系统台。");
   } else {
     const { makeTelegram } = await import("./telegram.mjs");
-    const tg = makeTelegram(Object.fromEntries(Object.entries(process.env)));
-    if (tg.enabled && tg.hasChatId) { await tg.send(message); console.log("\nSent to Telegram (私聊 fallback)。"); }
+    const tg = makeTelegram(env);
+    if (tg.enabled && tg.hasChatId) { await tg.send(message); console.log("\nSent to Telegram。"); }
     else console.log("\nTelegram 未配置,只打印。");
   }
 }

@@ -633,8 +633,13 @@ export function registerNextFlowRoutes(router) {
     };
     if (previous) props["Last Flow Sent"] = { select: { name: previous.label } };
 
+    // Phase 1 — collect ALL matching page ids first, WITHOUT writing yet.
+    // The filter pages through "Next Flow = fromFlow", but the write CHANGES
+    // "Next Flow" — so mutating mid-pagination drops rows out of the very set
+    // we're paging, and later pages skip people (the "only 58 changed" bug).
+    // Read the whole set first, then write.
+    const targets = [];
     let cursor;
-    let set = 0;
     let skippedStop = 0;
     let skippedRejected = 0;
     do {
@@ -654,14 +659,21 @@ export function registerNextFlowRoutes(router) {
           else skippedRejected += 1;
           continue;
         }
-        await nextFlow.notion("PATCH", `/pages/${pageId(page.id)}`, { properties: props });
-        set += 1;
-        await sleep(200);
+        targets.push(page.id);
       }
       cursor = query?.has_more ? query?.next_cursor : null;
     } while (cursor);
 
-    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop, skippedRejected });
+    // Phase 2 — now write to every collected page. 350ms keeps us under Notion's
+    // ~3 req/s average so a big group doesn't fail partway with 429.
+    let set = 0;
+    for (const id of targets) {
+      await nextFlow.notion("PATCH", `/pages/${pageId(id)}`, { properties: props });
+      set += 1;
+      await sleep(350);
+    }
+
+    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop, skippedRejected, matched: targets.length });
   });
 
   router.post("/api/next-flow/preview-template", async (req, res, runtime) => {
