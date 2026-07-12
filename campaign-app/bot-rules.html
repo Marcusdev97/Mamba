@@ -103,8 +103,8 @@
     </div>
     <div class="nav">
       <a class="btn" href="/" style="text-decoration:none">Campaign Console</a>
-      <a class="btn" href="/conversations" style="text-decoration:none">Conversations</a>
-      <a class="btn" href="/follow-up" style="text-decoration:none">Follow-Up Desk</a>
+      <a class="btn" href="/conversations" style="text-decoration:none">Customer Inbox</a>
+      <a class="btn" href="/follow-up" style="text-decoration:none">Follow-Up &amp; Appointments</a>
     </div>
   </header>
 
@@ -113,7 +113,7 @@
     <div class="toolbar">
       <button id="addRule" class="btn">+ Add Rule</button>
       <button id="saveRules" class="btn primary">Save Rules</button>
-      <button id="applyRules" class="btn">Apply to Conversations</button>
+      <button id="applyRules" class="btn">Apply to Customer Inbox</button>
       <label class="checkline compact"><input id="onlyUnclassified" type="checkbox" checked /> 只补空白分类</label>
     </div>
     <div class="mutedline" id="meta"></div>
@@ -134,7 +134,7 @@
       </div>
       <div id="testResult" class="result muted">输入一句客户回复测试分类。</div>
       <div class="mutedline">
-        保存后，Conversations / Follow-Up / Tracker 会使用这些规则。按 Apply to Conversations 会把现有 Notion latest replies 重新分类并写回 Notion。
+        保存后，Customer Inbox 会用这些规则分类回复，Follow-Up 会读取分类结果；Reply Intake 只负责后台记录。按 Apply to Customer Inbox 会把现有 Notion latest replies 重新分类并写回 Notion。
       </div>
     </aside>
   </div>
@@ -289,7 +289,7 @@ async function applyToConversations() {
     $("ok").textContent = `Applied to Notion: classified ${data.classified || 0}, candidates ${data.candidates || 0}`;
   } finally {
     $("applyRules").disabled = false;
-    $("applyRules").textContent = "Apply to Conversations";
+    $("applyRules").textContent = "Apply to Customer Inbox";
   }
 }
 

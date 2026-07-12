@@ -20,10 +20,24 @@ function richText(value) {
   return { rich_text: text ? [{ text: { content: text } }] : [] };
 }
 
+function dateValue(value) {
+  const cleanValue = clean(value);
+  if (!cleanValue) return { date: null };
+  const parsed = new Date(cleanValue);
+  if (Number.isNaN(parsed.getTime())) throw httpError(400, `日期时间格式不对: ${cleanValue}`);
+  return { date: { start: parsed.toISOString() } };
+}
+
 function choiceValue(schema, name, option) {
   const type = schema?.[name]?.type;
   if (!option) return type === "status" ? { status: null } : { select: null };
   return type === "status" ? { status: { name: option } } : { select: { name: option } };
+}
+
+function textOrChoiceValue(schema, name, value) {
+  const type = schema?.[name]?.type;
+  if (type === "select" || type === "status") return choiceValue(schema, name, clean(value));
+  return richText(value);
 }
 
 function dateOnlyKL(value = new Date()) {
@@ -50,9 +64,20 @@ function isHot(record) {
   return /warm|appointment|price|call|send price|interested|green|book/.test(values) && !isStop(record);
 }
 
+const APPOINTMENT_STAGES = ["Viewing Interest", "Slot Offered", "Pending", "Confirmed", "Attended", "No Show", "Cancelled"];
+const ACTIVE_APPOINTMENT_STAGES = new Set(["Viewing Interest", "Slot Offered", "Pending", "Confirmed"]);
+
+export function appointmentStageFor(record) {
+  const explicit = clean(record.appointmentStatus);
+  const matched = APPOINTMENT_STAGES.find((stage) => stage.toLowerCase() === explicit.toLowerCase());
+  if (matched) return matched;
+  const values = [record.nextAction, record.status, record.aiCategory].join(" ").toLowerCase();
+  if (/appointment|book|showroom|viewing/.test(values)) return "Viewing Interest";
+  return "";
+}
+
 function isAppointment(record) {
-  const values = [record.appointmentStatus, record.nextAction, record.status].join(" ").toLowerCase();
-  return /appointment|book|showroom|viewing|confirmed|pending/.test(values) && !isStop(record);
+  return ACTIVE_APPOINTMENT_STAGES.has(appointmentStageFor(record)) && !isStop(record);
 }
 
 function hasReply(record) {
@@ -106,9 +131,11 @@ function priorityFor(record, now) {
 
 function decorate(record, now = Date.now()) {
   const priority = priorityFor(record, now);
+  const appointmentStage = appointmentStageFor(record);
   return {
     ...record,
     priority,
+    appointmentStage,
     reason: reasonFor(record, now),
     bucket: isStop(record)
       ? "stop"
@@ -125,13 +152,18 @@ function decorate(record, now = Date.now()) {
 }
 
 function summarize(records) {
+  const pipeline = Object.fromEntries(APPOINTMENT_STAGES.map((stage) => [stage, 0]));
+  for (const record of records) {
+    if (record.appointmentStage) pipeline[record.appointmentStage] += 1;
+  }
   return {
     total: records.length,
     today: records.filter((record) => record.bucket === "today").length,
     overdue: records.filter((record) => record.bucket === "overdue").length,
     hot: records.filter((record) => record.bucket === "hot").length,
-    appointment: records.filter((record) => record.bucket === "appointment").length,
+    appointment: records.filter((record) => record.appointmentStage === "Confirmed").length,
     stop: records.filter((record) => record.bucket === "stop").length,
+    appointmentPipeline: pipeline,
   };
 }
 
@@ -151,9 +183,11 @@ function applyFilters(records, filters) {
   const bucket = clean(filters.bucket);
   const project = clean(filters.project);
   const q = clean(filters.q).toLowerCase();
+  const appointmentStage = clean(filters.appointmentStage);
   return records.filter((record) => {
     if (bucket && record.bucket !== bucket) return false;
     if (project && record.project !== project) return false;
+    if (appointmentStage && record.appointmentStage !== appointmentStage) return false;
     if (q) {
       const haystack = [record.name, record.phone, record.project, record.reason, record.nextAction, record.lastReplyText].join(" ").toLowerCase();
       if (!haystack.includes(q)) return false;
@@ -162,7 +196,41 @@ function applyFilters(records, filters) {
   });
 }
 
-function actionPatch(schema, action, body) {
+const APPOINTMENT_SCHEMA = {
+  "Follow Up At": { date: {} },
+  "Priority": { select: { options: [{ name: "HIGH", color: "red" }, { name: "MED", color: "yellow" }, { name: "LOW", color: "gray" }] } },
+  "Appointment Date": { date: {} },
+  "Appointment Time": { rich_text: {} },
+  "Appointment Place": { rich_text: {} },
+  "Appointment Status": { select: { options: APPOINTMENT_STAGES.map((name) => ({ name })) } },
+  "Assigned Sales": { rich_text: {} },
+  "Sales Notes": { rich_text: {} },
+};
+
+const APPOINTMENT_SCHEMA_TYPES = {
+  "Follow Up At": ["date"],
+  "Priority": ["select", "status"],
+  "Appointment Date": ["date"],
+  "Appointment Time": ["rich_text"],
+  "Appointment Place": ["rich_text"],
+  "Appointment Status": ["select", "status"],
+  "Assigned Sales": ["rich_text", "select", "status"],
+  "Sales Notes": ["rich_text"],
+};
+
+async function ensureAppointmentSchema(followUp, database) {
+  const schema = database?.properties || {};
+  const wrong = Object.entries(APPOINTMENT_SCHEMA)
+    .filter(([name]) => schema[name] && !APPOINTMENT_SCHEMA_TYPES[name].includes(schema[name].type))
+    .map(([name]) => name);
+  if (wrong.length) throw httpError(400, `Notion Appointment 字段类型不对: ${wrong.join(", ")}。请先在 Conversations 检查 Schema Health。`);
+  const missing = Object.fromEntries(Object.entries(APPOINTMENT_SCHEMA).filter(([name]) => !schema[name]));
+  if (!Object.keys(missing).length) return database;
+  await followUp.notion("PATCH", `/databases/${followUp.blastDatabaseId}`, { properties: missing });
+  return followUp.notion("GET", `/databases/${followUp.blastDatabaseId}`);
+}
+
+export function actionPatch(schema, action, body) {
   const now = new Date().toISOString();
   const note = clean(body.note);
   const props = {};
@@ -177,10 +245,35 @@ function actionPatch(schema, action, body) {
   } else if (action === "book_appointment") {
     props["Next Action"] = choiceValue(schema, "Next Action", "Book Appointment");
     props.Status = choiceValue(schema, "Status", "Appointment");
+    if (schema?.["Appointment Status"]) props["Appointment Status"] = choiceValue(schema, "Appointment Status", "Viewing Interest");
     props["AI Summary"] = richText(note || `Follow-up desk: appointment follow-up. Updated ${now}`);
+  } else if (action === "save_appointment") {
+    const stage = clean(body.appointmentStatus);
+    if (!APPOINTMENT_STAGES.includes(stage)) throw httpError(400, "请选择正确的 Appointment Stage。");
+    if (["Pending", "Confirmed", "Attended"].includes(stage) && !clean(body.appointmentDate)) {
+      throw httpError(400, `${stage} 必须填写 Appointment Date。`);
+    }
+    props["Appointment Status"] = choiceValue(schema, "Appointment Status", stage);
+    if (clean(body.appointmentDate)) props["Appointment Date"] = dateValue(`${clean(body.appointmentDate)}T00:00:00+08:00`);
+    if (body.appointmentTime !== undefined) props["Appointment Time"] = richText(body.appointmentTime);
+    if (body.appointmentPlace !== undefined) props["Appointment Place"] = richText(body.appointmentPlace);
+    if (body.assignedSales !== undefined) props["Assigned Sales"] = textOrChoiceValue(schema, "Assigned Sales", body.assignedSales);
+    if (body.note !== undefined) props["Sales Notes"] = richText(body.note);
+    if (body.followUpAt) props["Follow Up At"] = dateValue(body.followUpAt);
+    props.Priority = choiceValue(schema, "Priority", ["Viewing Interest", "Slot Offered", "Pending", "Confirmed"].includes(stage) ? "HIGH" : "MED");
+    props.Status = choiceValue(schema, "Status", stage === "Cancelled" ? "Follow Up" : "Appointment");
+    const nextAction = stage === "Confirmed" ? "Appointment Confirmed"
+      : stage === "Attended" ? "Done"
+        : ["No Show", "Cancelled"].includes(stage) ? "Follow Up"
+          : "Book Appointment";
+    props["Next Action"] = choiceValue(schema, "Next Action", nextAction);
+    if (schema?.["Sequence Status"]) props["Sequence Status"] = choiceValue(schema, "Sequence Status", "Human Takeover");
+    props["AI Summary"] = richText(note || `Appointment pipeline: ${stage}. Updated ${now}`);
   } else if (action === "follow_up") {
+    if (!clean(body.followUpAt)) throw httpError(400, "Follow Up 必须选择下一次跟进日期与时间。");
     props["Next Action"] = choiceValue(schema, "Next Action", "Follow Up");
     props.Status = choiceValue(schema, "Status", "Follow Up");
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = dateValue(body.followUpAt);
     props["AI Summary"] = richText(note || `Follow-up desk: follow up later. Updated ${now}`);
   } else if (action === "done") {
     props["Next Action"] = choiceValue(schema, "Next Action", "Done");
@@ -205,6 +298,7 @@ export function registerFollowUpRoutes(router) {
       bucket: url.searchParams.get("bucket") || "",
       project: url.searchParams.get("project") || "",
       q: url.searchParams.get("q") || "",
+      appointmentStage: url.searchParams.get("appointmentStage") || "",
     };
 
     let cache = await followUp.readCache();
@@ -240,7 +334,10 @@ export function registerFollowUpRoutes(router) {
     if (!id) throw httpError(400, "缺少客户 Notion page id。");
     if (!action) throw httpError(400, "缺少 follow-up action。");
 
-    const database = await followUp.notion("GET", `/databases/${followUp.blastDatabaseId}`);
+    let database = await followUp.notion("GET", `/databases/${followUp.blastDatabaseId}`);
+    if (["book_appointment", "save_appointment", "follow_up"].includes(action)) {
+      database = await ensureAppointmentSchema(followUp, database);
+    }
     const schema = database?.properties || {};
     const properties = actionPatch(schema, action, body);
     await followUp.notion("PATCH", `/pages/${id}`, { properties });

@@ -3,11 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Conversations · Mamba</title>
+<title>Customer Desk · Inbox · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
   .wrap { max-width: 1320px; }
   .nav { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .desk-tabs { display:flex; gap:6px; padding:5px; margin-bottom:16px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); width:max-content; max-width:100%; }
+  .desk-tab { display:block; padding:9px 14px; border-radius:6px; color:var(--muted); text-decoration:none; font-weight:700; }
+  .desk-tab.active { color:var(--text); background:var(--panel-2); box-shadow:inset 0 0 0 1px var(--line); }
   .stats { display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap:10px; }
   .stat { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--radius); padding:12px; }
   .stat span { display:block; color:var(--muted); font-size:12px; }
@@ -45,6 +48,8 @@
   .schema-top { display:flex; justify-content:space-between; gap:10px; align-items:center; }
   .schema-name { font-weight:750; }
   .schema-meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .advanced summary { cursor:pointer; font-weight:750; color:var(--muted); }
+  .advanced[open] summary { color:var(--text); margin-bottom:14px; }
   .history-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:14px; }
   .history-head h3 { font-size:14px; margin:0; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
   .history-list { margin-top:8px; display:grid; gap:8px; }
@@ -70,16 +75,20 @@
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>Conversations</h1>
-      <div class="sub">Notion Blast Leads · latest reply view</div>
+      <h1>Customer Desk</h1>
+      <div class="sub">Inbox · incoming replies, classification and conversation history</div>
     </div>
     <div class="nav">
       <a class="btn" href="/" style="text-decoration:none">Campaign Console</a>
-      <a class="btn" href="/follow-up" style="text-decoration:none">Follow-Up Desk</a>
       <a class="btn" href="/next-flow" style="text-decoration:none">Next Flow</a>
       <a class="btn" href="/logs" style="text-decoration:none">System Logs</a>
     </div>
   </header>
+
+  <nav class="desk-tabs" aria-label="Customer Desk sections">
+    <a class="desk-tab active" href="/conversations">Inbox</a>
+    <a class="desk-tab" href="/follow-up">Follow-Up &amp; Appointments</a>
+  </nav>
 
   <section class="card">
     <h2>Overview</h2>
@@ -98,15 +107,15 @@
     <div id="refreshReplyErr" class="err"></div>
   </section>
 
-  <section class="card">
-    <h2>Notion Schema Health</h2>
+  <details class="card advanced">
+    <summary>Advanced · Notion Schema Health</summary>
     <div class="healthbar">
       <button id="schemaHealth" class="btn">检查 Blast Leads 字段</button>
       <span id="schemaMeta" class="mutedline"></span>
     </div>
     <div id="schemaErr" class="err"></div>
     <div id="schemaRows" class="schema-grid"></div>
-  </section>
+  </details>
 
   <section class="card">
     <h2>Filter</h2>
@@ -115,7 +124,7 @@
       <label class="fld"><span>Project</span><select id="project"><option value="">All</option></select></label>
       <label class="fld"><span>Status</span><select id="status"><option value="">All</option></select></label>
       <label class="fld"><span>Sequence</span><select id="sequenceStatus"><option value="">All</option></select></label>
-      <label class="checkline"><input id="onlyReplied" type="checkbox" /> Replied only</label>
+      <label class="checkline"><input id="onlyReplied" type="checkbox" checked /> Replied only</label>
       <button id="refresh" class="btn primary">刷新</button>
     </div>
     <div id="meta" class="mutedline"></div>
@@ -162,21 +171,18 @@
         <div class="replybox" id="dSummary" style="min-height:80px"></div>
         <div class="manual-form">
           <div class="history-head" style="margin-top:0">
-            <h3>Human Correction</h3>
+            <h3>Classification Review</h3>
           </div>
           <div class="manual-grid">
             <label class="fld"><span>Status</span><select id="editStatus"></select></label>
             <label class="fld"><span>Last Replied</span><input id="editLastReplyAt" type="datetime-local" /></label>
-            <label class="fld"><span>Last Blasted Message Time</span><input id="editLastBlastAt" type="datetime-local" /></label>
-            <label class="fld"><span>Sequence</span><select id="editSequence"></select></label>
-            <label class="fld"><span>Next Action</span><select id="editNextAction"></select></label>
             <label class="fld"><span>AI Category</span><select id="editAiCategory"></select></label>
           </div>
           <label class="fld" style="margin-top:10px"><span>AI Summary</span><textarea id="editSummary"></textarea></label>
           <label class="fld" style="margin-top:10px"><span>Stop Reason</span><input id="editStopReason" type="text" /></label>
           <div class="manual-actions">
             <label class="checkline" style="height:auto"><input id="editStopFlag" type="checkbox" /> Stop Flag</label>
-            <button id="saveCorrection" class="btn primary" type="button">保存人工分类</button>
+            <button id="saveCorrection" class="btn primary" type="button">Save Classification</button>
             <span id="manualMsg" class="mutedline"></span>
           </div>
           <div id="manualErr" class="err"></div>
@@ -186,7 +192,10 @@
           <button id="historyRefresh" class="btn sm" type="button">刷新</button>
         </div>
         <div id="historyList" class="history-list"><div class="mutedline">No local history yet.</div></div>
-        <a id="dNotion" class="btn" href="#" target="_blank" style="display:inline-block;text-decoration:none;margin-top:12px">Open Notion</a>
+        <div class="actionbar">
+          <a id="dFollowUp" class="btn primary" href="/follow-up" style="text-decoration:none">Open in Follow-Up</a>
+          <a id="dNotion" class="btn" href="#" target="_blank" style="text-decoration:none">Open Notion</a>
+        </div>
       </div>
     </aside>
   </div>
@@ -200,8 +209,6 @@ let selectedPhone = "";
 
 const MANUAL_OPTIONS = {
   status: ["Blasted", "Warm", "Replied", "Appointment", "Follow Up", "Not Interested", "Stop", "Cold", "Invalid", "Needs Review"],
-  sequenceStatus: ["Running", "Human Takeover", "Not Interested", "Stopped"],
-  nextAction: ["Human Takeover", "Send Price List", "Ask Viewing", "Ask Budget", "Send Brochure", "Send Details", "Follow Up", "No Action"],
   aiCategory: ["Warm", "Price Inquiry", "Viewing Request", "Brochure Request", "Not Interested", "Stop", "Unknown"],
 };
 
@@ -321,11 +328,9 @@ function selectRecord(id, silent = false) {
   $("dReply").textContent = record.lastReplyText || "No latest reply.";
   $("dSummary").textContent = record.aiSummary || "No summary.";
   $("dNotion").href = record.url || "#";
+  $("dFollowUp").href = "/follow-up?q=" + encodeURIComponent(record.phone || record.name || "");
   setManualOptions($("editStatus"), MANUAL_OPTIONS.status, record.status || "");
   $("editLastReplyAt").value = toDateTimeLocal(record.lastReplyAt);
-  $("editLastBlastAt").value = toDateTimeLocal(record.lastBlastAt || record.firstBlastAt);
-  setManualOptions($("editSequence"), MANUAL_OPTIONS.sequenceStatus, record.sequenceStatus || "");
-  setManualOptions($("editNextAction"), MANUAL_OPTIONS.nextAction, record.nextAction || "");
   setManualOptions($("editAiCategory"), MANUAL_OPTIONS.aiCategory, record.aiCategory || "");
   $("editSummary").value = record.aiSummary || "";
   $("editStopFlag").checked = record.stopFlag === true;
@@ -524,12 +529,9 @@ async function saveManualCorrection() {
         project: record.project,
         lastReplyText: record.lastReplyText,
         status: $("editStatus").value,
-        sequenceStatus: $("editSequence").value,
-        nextAction: $("editNextAction").value,
         aiCategory: $("editAiCategory").value,
         aiSummary: $("editSummary").value,
         lastReplyAt: $("editLastReplyAt").value,
-        lastBlastAt: $("editLastBlastAt").value,
         stopFlag: $("editStopFlag").checked,
         stopReason: $("editStopReason").value,
       }),
@@ -548,7 +550,7 @@ async function saveManualCorrection() {
     $("manualErr").textContent = error.message;
   } finally {
     $("saveCorrection").disabled = false;
-    $("saveCorrection").textContent = "保存人工分类";
+    $("saveCorrection").textContent = "Save Classification";
   }
 }
 
@@ -591,7 +593,6 @@ $("refresh").addEventListener("click", load);
 ["project", "status", "sequenceStatus", "onlyReplied"].forEach((id) => $(id).addEventListener("change", load));
 $("q").addEventListener("keydown", (event) => { if (event.key === "Enter") load(); });
 load();
-loadSchemaHealth();
 </script>
 </body>
 </html>

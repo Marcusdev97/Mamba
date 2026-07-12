@@ -6,6 +6,8 @@ const schema = {
   "Sequence Status": { type: "select" },
   "AI Category": { type: "select" },
   "Next Action": { type: "select" },
+  "Appointment Status": { type: "select" },
+  Priority: { type: "select" },
 };
 
 const rejected = buildLeadReplyProperties(schema, {
@@ -43,6 +45,19 @@ const stopped = buildLeadReplyProperties(schema, {
 assert.equal(stopped["Sequence Status"].select.name, "Stopped");
 assert.equal(stopped["Stop Flag"].checkbox, true);
 assert.match(stopped["Stop Reason"].rich_text[0].text.content, /STOP_DNC/);
+
+const viewing = buildLeadReplyProperties(schema, {
+  receivedAt: "2026-07-11T03:00:00.000Z",
+  text: "Can view this Saturday?",
+  status: "Appointment",
+  sequenceStatus: "Human Takeover",
+  nextAction: "Ask Viewing",
+  aiCategory: "Viewing Request",
+  route: "VIEWING_REQUEST",
+  signal: "GREEN",
+}, 1, "2026-07-11T03:00:01.000Z");
+assert.equal(viewing["Appointment Status"].select.name, "Viewing Interest");
+assert.equal(viewing.Priority.select.name, "HIGH");
 
 const crossPc = new NotionSync({ token: "test", config: { databases: {}, dataSources: {} } });
 crossPc.state = { leadPages: {}, syncedReplyIds: {}, creditedResponses: {} };

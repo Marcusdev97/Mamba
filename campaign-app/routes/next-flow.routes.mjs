@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { httpError, json, readJson } from "../lib/http.mjs";
 
 function requireNextFlow(runtime) {
@@ -17,44 +19,43 @@ function pageId(id) {
   return String(id || "").replace(/[^a-fA-F0-9]/g, "");
 }
 
-function propertyChoice(page, name) {
-  const property = page?.properties?.[name];
-  return String(property?.select?.name ?? property?.status?.name ?? "").trim();
-}
+// 拦截逻辑统一搬去 lead_gatekeeper.mjs (2026-07-11 架构重构) — 这里 re-export
+// 保持 test_next_flow_safety.mjs 和旧 import 兼容。规则改动请去 gatekeeper 改。
+import { canSend, loadGateSnapshot, rowBlockReason, isStopReason } from "../lead_gatekeeper.mjs";
 
-function propertyText(page, name) {
-  const property = page?.properties?.[name];
-  const items = property?.rich_text ?? property?.title ?? [];
-  return items.map((item) => item?.plain_text ?? item?.text?.content ?? "").join("").trim();
-}
+export const nextFlowBlockReason = rowBlockReason;
 
-export function nextFlowBlockReason(page, classifyReplyText) {
-  if (page?.properties?.["Stop Flag"]?.checkbox === true) return "Stop Flag";
-
-  const status = propertyChoice(page, "Status");
-  if (["Stop", "Not Interested", "Appointment", "Invalid", "Do Not Contact"].includes(status)) {
-    return `Status: ${status}`;
-  }
-
-  const sequence = propertyChoice(page, "Sequence Status");
-  if (["Stopped", "Not Interested", "Human Takeover", "Completed"].includes(sequence)) {
-    return `Sequence Status: ${sequence}`;
-  }
-
-  const category = propertyChoice(page, "AI Category");
-  if (["Stop", "Not Interested", "Spam"].includes(category)) {
-    return `AI Category: ${category}`;
-  }
-
-  const lastReply = propertyText(page, "Last Reply Text");
-  if (lastReply && typeof classifyReplyText === "function") {
-    const verdict = classifyReplyText(lastReply);
-    if (["STOP_DNC", "COMPLAINT", "NOT_INTERESTED", "AGENT_OR_WRONG_TARGET"].includes(verdict?.route)) {
-      return `Last Reply: ${verdict.route}`;
+// 回复检测改读 tracker 的产物 (2026-07-11 架构重构): 实时监听已经在收同样的
+// 消息, list 不再每次全量扫 Evolution — 页面从"随消息量变慢"变成毫秒级。
+// 想直接问 WhatsApp 用 ?deep=1 (页面上的「深度扫描」按钮)。
+async function trackerInbound(runtime, leads) {
+  const trackerDir = path.join(runtime.paths.rootDir, "campaign-data", "tracker");
+  const inbound = new Map();
+  let updatedAt = null;
+  try {
+    const status = JSON.parse(await fs.readFile(path.join(trackerDir, "lead_status.json"), "utf8"));
+    updatedAt = status?.updatedAt ?? null;
+  } catch { /* tracker 从没跑过 — 前端会警告 */ }
+  const latest = new Map();
+  try {
+    const lines = (await fs.readFile(path.join(trackerDir, "replies.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (!event?.phone || !event?.receivedAt) continue;
+      const prev = latest.get(event.phone);
+      if (!prev || new Date(event.receivedAt) > new Date(prev.receivedAt)) latest.set(event.phone, event);
+    }
+  } catch { /* 还没有回复记录 */ }
+  for (const lead of leads) {
+    const event = latest.get(lead.phone);
+    if (!event) continue;
+    const since = lead.lastBlastAt ? new Date(lead.lastBlastAt).getTime() : Date.now() - 7 * 864e5;
+    if (new Date(event.receivedAt).getTime() >= since) {
+      inbound.set(lead.phone, { at: event.receivedAt, text: event.text || "[reply]" });
     }
   }
-
-  return "";
+  return { inbound, updatedAt };
 }
 
 function sleep(ms) {
@@ -333,12 +334,14 @@ export function registerNextFlowRoutes(router) {
     json(res, 200, { ok: true, replies: Object.values(state.repliesSeen) });
   });
 
-  router.get("/api/next-flow/list", async (_req, res, runtime) => {
+  router.get("/api/next-flow/list", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
     if (!nextFlow.blastDatabaseId) {
       json(res, 200, { ok: true, leads: [] });
       return;
     }
+    // deep=1 -> 直接扫 Evolution (慢, 手动按钮); 默认读 tracker 产物 (快)。
+    const deep = new URL(req.url, "http://x").searchParams.get("deep") === "1";
 
     const today = nextFlow.klTodayKL();
     const filter = { and: [
@@ -353,6 +356,7 @@ export function registerNextFlowRoutes(router) {
 
     const leads = [];
     const blocked = [];
+    const gateSnapshot = loadGateSnapshot(); // 全局 STOP 名单一次载入, 整批复用
     let cursor;
     try {
       do {
@@ -363,13 +367,13 @@ export function registerNextFlowRoutes(router) {
           const phone = nextFlow.normalizePhone(nextFlow.nfPhone(page, "Phone"));
           const next = nextFlow.nfSelect(page, "Next Flow");
           if (!phone || !next || next === "Completed") continue;
-          const blockReason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
-          if (blockReason) {
+          const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
+          if (!gate.ok) {
             blocked.push({
               pageId: page.id,
               name: nextFlow.nfTitle(page, "Name") || phone,
               phone,
-              reason: blockReason,
+              reason: gate.reason,
             });
             continue;
           }
@@ -402,21 +406,34 @@ export function registerNextFlowRoutes(router) {
     let instancesChecked = 0;
     let scanDiagnostics = [];
     let evoOffline = false;
+    let trackerUpdatedAt = null;
+    let inbound = new Map();
     if (leads.length) {
-      let instances = [];
-      try {
-        instances = await loadOpenInstances(nextFlow);
-      } catch {
-        evoOffline = true;
+      if (deep) {
+        // 深度扫描: 直接问 Evolution (旧默认行为, 现在只在手动按钮时跑)
+        let instances = [];
+        try {
+          instances = await loadOpenInstances(nextFlow);
+        } catch {
+          evoOffline = true;
+        }
+        if (!evoOffline && instances.length) {
+          instancesChecked = instances.length;
+          const byPhoneScan = new Map(leads.map((lead) => [lead.phone, lead]));
+          const scan = await latestInboundReplies(nextFlow, instances, byPhoneScan, (lead) =>
+            lead.lastBlastAt ? new Date(lead.lastBlastAt).getTime() : Date.now() - 7 * 864e5);
+          inbound = scan.inbound;
+          scanDiagnostics = scan.diagnostics;
+        } else {
+          evoOffline = true;
+        }
+      } else {
+        // 默认: 读实时追踪 (tracker/brain webhook) 已经收好的回复, 不碰 Evolution
+        ({ inbound, updatedAt: trackerUpdatedAt } = await trackerInbound(runtime, leads));
       }
 
-      if (!evoOffline && instances.length) {
-        instancesChecked = instances.length;
+      {
         const byPhone = new Map(leads.map((lead) => [lead.phone, lead]));
-        const scan = await latestInboundReplies(nextFlow, instances, byPhone, (lead) =>
-          lead.lastBlastAt ? new Date(lead.lastBlastAt).getTime() : Date.now() - 7 * 864e5);
-        const inbound = scan.inbound;
-        scanDiagnostics = scan.diagnostics;
 
         for (const [phone, event] of inbound) {
           const lead = byPhone.get(phone);
@@ -450,8 +467,6 @@ export function registerNextFlowRoutes(router) {
             if (skipPhones.has(leads[i].phone)) leads.splice(i, 1);
           }
         }
-      } else {
-        evoOffline = true;
       }
     }
 
@@ -464,6 +479,8 @@ export function registerNextFlowRoutes(router) {
       evoOffline,
       whatsappCheck: {
         checkedAt: new Date().toISOString(),
+        scanSource: deep ? "evolution-deep" : "tracker",
+        trackerUpdatedAt,
         candidates: candidatesChecked,
         instances: instancesChecked,
         repliesFound: skipped.length,
@@ -532,6 +549,7 @@ export function registerNextFlowRoutes(router) {
 
     const leads = [];
     const blocked = [];
+    const gateSnapshot = loadGateSnapshot();
     for (const item of normalized) {
       const phone = item.phone;
       const page = currentPages.get(pageId(item.pageId));
@@ -539,9 +557,9 @@ export function registerNextFlowRoutes(router) {
         blocked.push({ phone, name: String(item.name ?? "").trim() || phone, reason: "Notion row not found" });
         continue;
       }
-      const reason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
-      if (reason) {
-        blocked.push({ phone, name: String(item.name ?? "").trim() || phone, reason });
+      const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
+      if (!gate.ok) {
+        blocked.push({ phone, name: String(item.name ?? "").trim() || phone, reason: gate.reason });
         continue;
       }
       leads.push({
@@ -585,15 +603,16 @@ export function registerNextFlowRoutes(router) {
     let skippedStop = 0;
     let skippedRejected = 0;
     const notFound = [];
+    const gateSnapshot = loadGateSnapshot();
     for (const phone of phones) {
       const page = await queryLeadPage(nextFlow, phone);
       if (!page) {
         notFound.push(phone);
         continue;
       }
-      const blockReason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
-      if (blockReason) {
-        if (blockReason === "Stop Flag" || blockReason.startsWith("Status: Stop")) skippedStop += 1;
+      const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
+      if (!gate.ok) {
+        if (isStopReason(gate.reason)) skippedStop += 1;
         else skippedRejected += 1;
         continue;
       }
@@ -642,6 +661,7 @@ export function registerNextFlowRoutes(router) {
     let cursor;
     let skippedStop = 0;
     let skippedRejected = 0;
+    const groupGateSnapshot = loadGateSnapshot();
     do {
       const query = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, {
         filter: { and: [
@@ -653,9 +673,10 @@ export function registerNextFlowRoutes(router) {
         ...(cursor ? { start_cursor: cursor } : {}),
       });
       for (const page of query?.results ?? []) {
-        const blockReason = nextFlowBlockReason(page, nextFlow.classifyReplyText);
-        if (blockReason) {
-          if (blockReason === "Stop Flag" || blockReason.startsWith("Status: Stop")) skippedStop += 1;
+        // canSend 没给 phone 时会自己从行里抓 phone_number 查全局 STOP
+        const gate = canSend({ page, classifyReplyText: nextFlow.classifyReplyText, snapshot: groupGateSnapshot });
+        if (!gate.ok) {
+          if (isStopReason(gate.reason)) skippedStop += 1;
           else skippedRejected += 1;
           continue;
         }

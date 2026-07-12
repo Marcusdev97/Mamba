@@ -72,15 +72,15 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>📥 选人发下一轮</h1>
-  <div class="sub">列出今天该发下一条的人 · 勾选后直接发</div>
+  <h1>📣 发送台 · ② Flow 2-10 跟进</h1>
+  <div class="sub"><a href="/" style="color:#7dd3fc;text-decoration:none" onclick="if(window.top!==window.self&&window.parent.show){window.parent.show('flow1');return false}">① Flow 1 新名单群发</a> · <b style="color:#e2e8f0">② Flow 2-10 跟进(本页)</b> — 列出今天该发下一条的人,勾选后直接发</div>
 
   <div class="warn">发送会<b>自动按 Cohort Day 取模板</b>(Templates 库里 Status=Active、对应 Day 的那条)。一次只发一组(同一个 Next Flow)。请先把那一轮的模板放好并设 Active。</div>
 
   <div class="bar">
     <span class="pill">项目</span>
     <select id="projectSel"></select>
-    <button id="refreshBtn" class="ghost" onclick="refreshWhatsApp()">↻ Refresh + Check WhatsApp</button>
+    <button id="refreshBtn" class="ghost" onclick="refreshWhatsApp()" title="平时不用点:名单默认对照实时追踪的回复记录。这个按钮是直接去 WhatsApp 全量扫一次(慢但最彻底)">↻ 深度扫描 WhatsApp</button>
     <span id="instWrap" class="insts"></span>
     <span class="pill">发送时间</span>
     <input id="startTime" class="tinp" placeholder="现在" title="开始时间,如 14:00,留空=现在">
@@ -534,7 +534,7 @@ async function load(manualCheck = false) {
   document.getElementById("list").innerHTML = '<div class="empty">加载中…</div>';
   try {
     const [proj, inst, data] = await Promise.all([
-      api("/api/projects"), api("/api/instances"), api("/api/next-flow/list"),
+      api("/api/projects"), api("/api/instances"), api("/api/next-flow/list" + (manualCheck ? "?deep=1" : "")),
     ]);
     PROJECTS = proj.projects || [];
     PROJECT_ALIAS = proj.alias || {};
@@ -563,11 +563,17 @@ async function load(manualCheck = false) {
     const checkTime = check.checkedAt
       ? new Date(check.checkedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       : "";
-    const checkSummary = `已检查 ${check.candidates || 0} 位客户 · ${check.instances || 0} 个 WhatsApp connection · 实际读取 ${check.pagesRead || 0} 页 / ${check.messagesRead || 0} 条消息${checkTime ? ` · ${checkTime}` : ""}`;
+    const checkSummary = check.scanSource === "tracker"
+      ? `已对照 ${check.candidates || 0} 位客户 · 回复来源: 实时追踪记录${check.trackerUpdatedAt ? " (最后更新 " + new Date(check.trackerUpdatedAt).toLocaleString("en-GB", { hour12: false }) + ")" : ""}${checkTime ? ` · ${checkTime}` : ""}`
+      : `已检查 ${check.candidates || 0} 位客户 · ${check.instances || 0} 个 WhatsApp connection · 实际读取 ${check.pagesRead || 0} 页 / ${check.messagesRead || 0} 条消息${checkTime ? ` · ${checkTime}` : ""}`;
     if (data.evoOffline) {
       sp.style.display = "";
-      sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,本次没扫回复</div>' +
-        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先去 Settings / Phone Setup 把引擎带起来,再刷新本页。</div>';
+      sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,深度扫描没跑成</div>' +
+        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先去 Settings / Phone Setup 把引擎带起来,再扫一次。</div>';
+    } else if (check.scanSource === "tracker" && !check.trackerUpdatedAt && (data.leads || []).length) {
+      sp.style.display = "";
+      sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ 实时追踪从来没跑过 — 无法确认这批人最近有没有回复</div>' +
+        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">保持「Sales Brain」运行,Reply Intake 会在后台自动记录;也可以点上面「深度扫描 WhatsApp」直接查一次再发。发送时 runner 还有 7 天回复检查兜底,但先扫最稳。</div>';
     } else if ((check.errors || []).length) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead" style="color:#f87171">⚠️ WhatsApp 深度检查不完整</div>' +

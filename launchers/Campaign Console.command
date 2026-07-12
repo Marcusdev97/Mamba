@@ -21,7 +21,7 @@ if [[ ! -x "$NODE" ]]; then
 fi
 
 PORT="${CONSOLE_PORT:-8787}"
-URL="http://127.0.0.1:${PORT}/"
+URL="http://127.0.0.1:${PORT}/send"
 
 # Server 已经在跑(比如从「号码连接」或 一键启动 拉起的)-> 直接开网页,不再起第二个
 if curl -s -o /dev/null --max-time 2 "$URL"; then

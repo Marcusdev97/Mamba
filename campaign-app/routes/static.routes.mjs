@@ -14,6 +14,7 @@ const HTML_ROUTES = {
   "/bot-rules": "bot-rules.html",
   "/flow-map": "flow-map.html",
   "/knowledge": "knowledge.html",
+  "/send": "send.html",
 };
 
 async function serveHtml(res, appDir, filename) {

@@ -24,6 +24,15 @@ const CONSOLE_URL = `http://${HOST}:${CONSOLE_PORT}`;
 const SELF = "Mamba Control Center.command"; // don't list the launcher that started us
 const HIDDEN_LAUNCHERS = new Set([
   "Set Notion Token.command", // Settings now owns Notion / Telegram token setup.
+  // 发送台合并 (2026-07-11): Flow 1 + Flow 2-10 已经是一个页面的两个 tab,
+  // Control Center 只留一个「发送台」按钮。旧 launcher 文件保留 (直接双击还能用)。
+  "Campaign Console.command",
+  "选人发下一轮.command",
+  // Customer Desk is now the single daily entry point. These launchers remain
+  // on disk so old shortcuts still work, but they are no longer separate jobs.
+  "Conversations.command",
+  "Follow Up Desk.command",
+  "Live Reply Tracker.command",
 ]);
 
 // Design system (docs/MAMBA_UI_BIBLE.md) — inlined because this server has no /assets route.
@@ -34,14 +43,11 @@ const designCss = await fs.readFile(path.join(appDir, "assets", "mamba.css"), "u
 // `order` sets the click-through sequence within a group (lower = earlier), so
 // the daily flow reads top-to-bottom in the order you actually run it.
 const KNOWN = {
-  "Campaign Console.command":          { emoji: "📣", label: "① 首轮群发(Flow 1)", desc: "导入名单、设定时间、群发第一轮", group: "日常", order: 1 },
-  "选人发下一轮.command":               { emoji: "📥", label: "② 选人发下一轮(Flow 2~10)", desc: "网页列出该发下一轮的人,勾选后直接发(发完自动推进到下一轮),还能顺手标「不发」", group: "日常", order: 2 },
+  "发送台.command":                     { emoji: "📣", label: "① 发送台(Flow 1 群发 + Flow 2~10 跟进)", desc: "所有发送都在这里:tab ① 导入新名单群发第一轮,tab ② 选人发下一轮。切 tab 不打断进行中的发送", group: "日常", order: 1 },
   "Morning Follow-up Check.command":   { emoji: "☀️", label: "③ 早间跟进检查", desc: "结算回复、自动红旗退订的人、列出今天要跟进的人", group: "日常", order: 3 },
   "Update Notion Blast Leads.command": { emoji: "⬆️", label: "④ 上传 Blast 名单到 Notion(手动补跑)", desc: "群发完成后会自动上传;只有自动上传失败时才需要点这个补跑", group: "日常", order: 4 },
-  "Sales Brain.command":               { emoji: "🧠", label: "⑤ Sales Brain(AI 回复)", desc: "客户回复自动分类:简单的回罐头、复杂的 AI 按盘起草丢 Telegram 给你批准。会连 tracker 一起启动", group: "日常", order: 5 },
-  "Live Reply Tracker.command":        { emoji: "💬", label: "实时回复追踪(仅记录)", desc: "只记录回复、更新 Notion,不回复客户。开 Sales Brain 的话不用另外开这个", group: "日常", order: 6 },
-  "Conversations.command":             { emoji: "💬", label: "Conversations", desc: "从 Notion 查看全部客户、latest reply、状态和下一步动作", group: "日常", order: 7 },
-  "Follow Up Desk.command":            { emoji: "📋", label: "客户跟进台", desc: "今天该追谁、谁最热、谁要约、谁已经过期没跟进", group: "日常", order: 8 },
+  "Sales Brain.command":               { emoji: "🧠", label: "⑤ Sales Brain(AI 回复)", desc: "客户回复自动分类:简单的回罐头、复杂的 AI 按盘起草丢 Telegram 给你批准。回复记录服务会在后台一起启动", group: "日常", order: 5 },
+  "Customer Desk.command":             { emoji: "💬", label: "⑥ Customer Desk", desc: "一个入口处理客户:Inbox 扫描与分类回复,Follow-Up & Appointments 安排人工跟进和预约", group: "日常", order: 6 },
   "Flow Map.command":                  { emoji: "🧭", label: "Mamba Flow Map", desc: "看懂 blasting、大脑分类、Next Flow 和跟进追踪怎么串起来", group: "日常", order: 9 },
   "Bot Rules.command":                 { emoji: "🧠", label: "Bot Rules 大脑", desc: "自己改关键词 trigger,让 bot 分类 Warm / Cold / STOP / Spam", group: "设置 & 工具", order: 24 },
   "脑编辑器.command":                   { emoji: "📝", label: "脑编辑器(盘资料)", desc: "用人话写每个盘的资料和卖点,自动转成 AI 和 Obsidian 都懂的格式,保存即生效", group: "设置 & 工具", order: 23 },

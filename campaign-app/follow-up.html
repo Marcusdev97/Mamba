@@ -3,11 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Follow-Up Desk · Mamba</title>
+<title>Customer Desk · Follow-Up & Appointments · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
   .wrap { max-width: 1320px; }
   .nav { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .desk-tabs { display:flex; gap:6px; padding:5px; margin-bottom:16px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); width:max-content; max-width:100%; }
+  .desk-tab { display:block; padding:9px 14px; border-radius:6px; color:var(--muted); text-decoration:none; font-weight:700; }
+  .desk-tab.active { color:var(--text); background:var(--panel-2); box-shadow:inset 0 0 0 1px var(--line); }
   .stats { display:grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap:10px; }
   .stat { background:var(--panel-2); border:1px solid var(--line); border-radius:var(--radius); padding:12px; cursor:pointer; }
   .stat.active { border-color:var(--green); background:var(--green-bg); }
@@ -15,7 +18,8 @@
   .stat b { font-size:22px; }
   .filters { display:grid; grid-template-columns:1.4fr 180px auto auto; gap:10px; align-items:end; }
   .layout { display:grid; grid-template-columns:minmax(700px, 1.5fr) minmax(330px, .75fr); gap:16px; align-items:start; }
-  .tablebox { overflow:auto; border:1px solid var(--line); border-radius:var(--radius); }
+  .layout > * { min-width:0; }
+  .tablebox { overflow:auto; max-width:100%; border:1px solid var(--line); border-radius:var(--radius); }
   table { min-width: 1120px; }
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:rgba(255,255,255,.025); }
@@ -40,14 +44,27 @@
   .err { color:var(--red); margin-top:10px; }
   .ok { color:var(--green); margin-top:10px; }
   .mutedline { color:var(--muted); margin-top:8px; }
+  .pipeline { display:grid; grid-template-columns:repeat(7, minmax(120px, 1fr)); gap:10px; }
+  .stage { min-height:78px; padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); cursor:pointer; text-align:left; color:var(--text); }
+  .stage:hover, .stage.active { border-color:var(--blue); background:var(--blue-bg); }
+  .stage span { display:block; color:var(--muted); font-size:11px; line-height:1.35; }
+  .stage b { display:block; font-size:20px; margin-top:5px; }
+  .appointment-form { margin-top:16px; padding-top:16px; border-top:1px solid var(--line); }
+  .appointment-form h3 { font-size:14px; margin:0 0 12px; }
+  .appointment-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+  .appointment-grid .wide { grid-column:1 / -1; }
+  .appointment-form input, .appointment-form select { width:100%; box-sizing:border-box; }
   @media (max-width: 980px) {
     .layout { grid-template-columns:1fr; }
     .detail { position:static; }
     .stats { grid-template-columns:repeat(2, 1fr); }
     .filters { grid-template-columns:1fr 1fr; }
+    .pipeline { grid-template-columns:repeat(3, 1fr); }
   }
   @media (max-width: 560px) {
     .filters, .stats { grid-template-columns:1fr; }
+    .pipeline, .appointment-grid { grid-template-columns:1fr; }
+    .appointment-grid .wide { grid-column:auto; }
   }
 </style>
 </head>
@@ -55,15 +72,19 @@
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>Follow-Up Desk</h1>
-      <div class="sub">Agent Priority Queue · 只显示有回复或需要人工跟进的客户</div>
+      <h1>Customer Desk</h1>
+      <div class="sub">Follow-Up &amp; Appointments · agent action workspace</div>
     </div>
     <div class="nav">
       <a class="btn" href="/" style="text-decoration:none">Campaign Console</a>
-      <a class="btn" href="/conversations" style="text-decoration:none">Conversations</a>
       <a class="btn" href="/next-flow" style="text-decoration:none">Next Flow</a>
     </div>
   </header>
+
+  <nav class="desk-tabs" aria-label="Customer Desk sections">
+    <a class="desk-tab" href="/conversations">Inbox</a>
+    <a class="desk-tab active" href="/follow-up">Follow-Up &amp; Appointments</a>
+  </nav>
 
   <section class="card">
     <h2>Queue</h2>
@@ -72,11 +93,24 @@
       <div class="stat" data-bucket="today"><span>Today</span><b id="stToday">0</b></div>
       <div class="stat" data-bucket="overdue"><span>Overdue</span><b id="stOverdue">0</b></div>
       <div class="stat" data-bucket="hot"><span>Hot</span><b id="stHot">0</b></div>
-      <div class="stat" data-bucket="appointment"><span>Appointment</span><b id="stAppointment">0</b></div>
+      <div class="stat" data-bucket="" data-appointment-stage="Confirmed"><span>Confirmed</span><b id="stAppointment">0</b></div>
       <div class="stat" data-bucket="stop"><span>Stop</span><b id="stStop">0</b></div>
     </div>
     <div class="mutedline" id="meta"></div>
     <div class="err" id="err"></div>
+  </section>
+
+  <section class="card">
+    <h2>Appointment Pipeline</h2>
+    <div class="pipeline" id="pipeline">
+      <button class="stage" data-stage="Viewing Interest"><span>客户想了解看房</span><b id="apInterest">0</b>Viewing Interest</button>
+      <button class="stage" data-stage="Slot Offered"><span>已经给出两个时间</span><b id="apOffered">0</b>Slot Offered</button>
+      <button class="stage" data-stage="Pending"><span>等待客户确认</span><b id="apPending">0</b>Pending</button>
+      <button class="stage" data-stage="Confirmed"><span>日期时间已确认</span><b id="apConfirmed">0</b>Confirmed</button>
+      <button class="stage" data-stage="Attended"><span>客户已经到场</span><b id="apAttended">0</b>Attended</button>
+      <button class="stage" data-stage="No Show"><span>预约但没有出现</span><b id="apNoShow">0</b>No Show</button>
+      <button class="stage" data-stage="Cancelled"><span>客户取消预约</span><b id="apCancelled">0</b>Cancelled</button>
+    </div>
   </section>
 
   <section class="card">
@@ -96,10 +130,10 @@
         <table>
           <thead>
             <tr>
-              <th>Priority</th><th>Customer</th><th>Project</th><th>Why</th><th>Next Action</th><th>Status</th><th>Latest Reply</th><th>Last Reply</th><th>Last Blast</th>
+              <th>Priority</th><th>Customer</th><th>Project</th><th>Appointment</th><th>Why</th><th>Next Action</th><th>Status</th><th>Latest Reply</th><th>Last Reply</th><th>Last Blast</th>
             </tr>
           </thead>
-          <tbody id="rows"><tr><td colspan="9" class="muted">Loading...</td></tr></tbody>
+          <tbody id="rows"><tr><td colspan="10" class="muted">Loading...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -120,15 +154,38 @@
           <div>Last Flow</div><div id="dLastFlow">-</div>
           <div>Next Flow</div><div id="dNextFlow">-</div>
           <div>Sender</div><div id="dSender">-</div>
+          <div>Appointment</div><div id="dAppointmentStage">-</div>
+          <div>Date / Time</div><div id="dAppointmentWhen">-</div>
+          <div>Place</div><div id="dAppointmentPlace">-</div>
+          <div>Assigned Sales</div><div id="dAssignedSales">-</div>
         </div>
         <div class="replybox" id="dReply"></div>
         <div class="note">
           <label class="fld"><span>Sales Note / Reason</span><textarea id="note" placeholder="例: 客户问月供，先发 price 再 call"></textarea></label>
         </div>
+        <div class="appointment-form">
+          <h3>Appointment Pipeline</h3>
+          <div class="appointment-grid">
+            <label class="fld"><span>Stage</span><select id="appointmentStatus">
+              <option value="Viewing Interest">Viewing Interest</option>
+              <option value="Slot Offered">Slot Offered</option>
+              <option value="Pending">Pending</option>
+              <option value="Confirmed">Confirmed</option>
+              <option value="Attended">Attended</option>
+              <option value="No Show">No Show</option>
+              <option value="Cancelled">Cancelled</option>
+            </select></label>
+            <label class="fld"><span>Appointment Date</span><input id="appointmentDate" type="date" /></label>
+            <label class="fld"><span>Appointment Time</span><input id="appointmentTime" type="text" placeholder="例如 2:00 PM" /></label>
+            <label class="fld"><span>Place</span><input id="appointmentPlace" type="text" placeholder="Showroom / Gallery" /></label>
+            <label class="fld"><span>Assigned Sales</span><input id="assignedSales" type="text" placeholder="Agent name" /></label>
+            <label class="fld"><span>Next Follow-Up</span><input id="followUpAt" type="datetime-local" /></label>
+          </div>
+          <button class="btn primary" id="saveAppointment" style="margin-top:10px">保存 Appointment Stage</button>
+        </div>
         <div class="actionbar">
           <button class="btn" data-action="send_price">Send Price</button>
           <button class="btn" data-action="call">Call</button>
-          <button class="btn" data-action="book_appointment">Book Appointment</button>
           <button class="btn" data-action="follow_up">Follow Up</button>
           <button class="btn" data-action="done">Done</button>
           <button class="btn danger" data-action="stop">Stop</button>
@@ -147,6 +204,9 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 let records = [];
 let selectedId = "";
 let bucket = "";
+let appointmentStage = "";
+const initialQuery = new URLSearchParams(window.location.search).get("q") || "";
+$("q").value = initialQuery;
 
 function pill(text, tone = "") {
   if (!text) return "";
@@ -168,6 +228,13 @@ function fmt(value) {
   return date.toLocaleString("en-GB", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
 }
 
+function fmtDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-GB", { day:"2-digit", month:"2-digit", year:"numeric" });
+}
+
 function setOptions(select, items) {
   const current = select.value;
   select.innerHTML = '<option value="">All</option>' + items.map((item) => `<option value="${esc(item)}">${esc(item)}</option>`).join("");
@@ -179,12 +246,13 @@ function params() {
   if (bucket) p.set("bucket", bucket);
   if ($("project").value) p.set("project", $("project").value);
   if ($("q").value.trim()) p.set("q", $("q").value.trim());
+  if (appointmentStage) p.set("appointmentStage", appointmentStage);
   return p;
 }
 
 function renderRows() {
   if (!records.length) {
-    $("rows").innerHTML = '<tr><td colspan="9" class="muted">目前没有需要 Agent 跟进的客户。客户回复后会出现在这里。</td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="10" class="muted">这个阶段目前没有客户。客户回复或更新 Appointment Stage 后会出现在这里。</td></tr>';
     selectRecord("");
     return;
   }
@@ -193,6 +261,7 @@ function renderRows() {
       <td>${pill(record.priority, toneFor(record))}</td>
       <td><div class="name">${esc(record.name || "(No name)")}</div><div class="phone">${esc(record.phone || "")}</div></td>
       <td>${esc(record.project || "-")}</td>
+      <td>${pill(record.appointmentStage || "-", record.appointmentStage === "Confirmed" ? "green" : record.appointmentStage ? "blue" : "")}</td>
       <td>${esc(record.reason || "-")}</td>
       <td>${esc(record.nextAction || "-")}</td>
       <td>${pill(record.status || "-", toneFor(record))}</td>
@@ -231,15 +300,29 @@ function selectRecord(id) {
   $("dLastFlow").textContent = record.lastFlowSent || "-";
   $("dNextFlow").textContent = record.nextFlow || "-";
   $("dSender").textContent = record.senderInstance || "-";
+  $("dAppointmentStage").textContent = record.appointmentStage || "-";
+  $("dAppointmentWhen").textContent = [fmtDate(record.appointmentDate), record.appointmentTime || ""].filter(Boolean).join(" · ") || "-";
+  $("dAppointmentPlace").textContent = record.appointmentPlace || "-";
+  $("dAssignedSales").textContent = record.assignedSales || "-";
   $("dReply").textContent = record.lastReplyText || record.aiSummary || "没有 latest reply。";
   $("dNotion").href = record.url || "#";
+  $("appointmentStatus").value = record.appointmentStage || "Viewing Interest";
+  $("appointmentDate").value = record.appointmentDate ? String(record.appointmentDate).slice(0, 10) : "";
+  $("appointmentTime").value = record.appointmentTime || "";
+  $("appointmentPlace").value = record.appointmentPlace || "";
+  $("assignedSales").value = record.assignedSales || "";
+  $("followUpAt").value = record.followUpAt ? String(record.followUpAt).slice(0, 16) : "";
+  $("note").value = record.salesNotes || "";
 }
 
 async function load() {
   $("err").textContent = "";
   $("refresh").disabled = true;
   $("refresh").textContent = "读取中...";
-  document.querySelectorAll(".stat").forEach((item) => item.classList.toggle("active", item.dataset.bucket === bucket));
+  document.querySelectorAll(".stat").forEach((item) => item.classList.toggle(
+    "active",
+    (item.dataset.bucket || "") === bucket && (item.dataset.appointmentStage || "") === appointmentStage,
+  ));
   try {
     const res = await fetch("/api/follow-up?" + params().toString());
     const data = await res.json();
@@ -251,13 +334,22 @@ async function load() {
     $("stHot").textContent = s.hot || 0;
     $("stAppointment").textContent = s.appointment || 0;
     $("stStop").textContent = s.stop || 0;
+    const ap = s.appointmentPipeline || {};
+    $("apInterest").textContent = ap["Viewing Interest"] || 0;
+    $("apOffered").textContent = ap["Slot Offered"] || 0;
+    $("apPending").textContent = ap.Pending || 0;
+    $("apConfirmed").textContent = ap.Confirmed || 0;
+    $("apAttended").textContent = ap.Attended || 0;
+    $("apNoShow").textContent = ap["No Show"] || 0;
+    $("apCancelled").textContent = ap.Cancelled || 0;
+    document.querySelectorAll(".stage").forEach((item) => item.classList.toggle("active", item.dataset.stage === appointmentStage));
     setOptions($("project"), data.projects || []);
     records = data.records || [];
     $("meta").textContent = `${data.count || records.length} follow-up clients · only replied/actionable · source: ${data.source} · synced: ${data.syncedAt || "-"}`;
     renderRows();
   } catch (error) {
     $("err").textContent = error.message;
-    $("rows").innerHTML = '<tr><td colspan="9" class="muted">读取失败。</td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="10" class="muted">读取失败。</td></tr>';
   } finally {
     $("refresh").disabled = false;
     $("refresh").textContent = "刷新";
@@ -290,12 +382,21 @@ async function runAction(action) {
     const res = await fetch("/api/follow-up/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: record.id, action, note: $("note").value }),
+      body: JSON.stringify({
+        id: record.id,
+        action,
+        note: $("note").value,
+        followUpAt: $("followUpAt").value,
+        appointmentStatus: $("appointmentStatus").value,
+        appointmentDate: $("appointmentDate").value,
+        appointmentTime: $("appointmentTime").value,
+        appointmentPlace: $("appointmentPlace").value,
+        assignedSales: $("assignedSales").value,
+      }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Save failed");
-    $("actionOk").textContent = "已保存到 Notion";
-    $("note").value = "";
+    $("actionOk").textContent = action === "save_appointment" ? "Appointment Pipeline 已保存到 Notion" : "已保存到 Notion";
     await load();
     selectRecord(record.id);
   } catch (error) {
@@ -306,6 +407,14 @@ async function runAction(action) {
 document.querySelectorAll(".stat").forEach((item) => {
   item.addEventListener("click", () => {
     bucket = item.dataset.bucket || "";
+    appointmentStage = item.dataset.appointmentStage || "";
+    load();
+  });
+});
+document.querySelectorAll(".stage").forEach((item) => {
+  item.addEventListener("click", () => {
+    appointmentStage = appointmentStage === item.dataset.stage ? "" : item.dataset.stage;
+    bucket = "";
     load();
   });
 });
@@ -313,6 +422,7 @@ document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", () => runAction(button.dataset.action));
 });
 $("refresh").addEventListener("click", load);
+$("saveAppointment").addEventListener("click", () => runAction("save_appointment"));
 $("syncCache").addEventListener("click", syncCache);
 $("project").addEventListener("change", load);
 $("q").addEventListener("keydown", (event) => { if (event.key === "Enter") load(); });

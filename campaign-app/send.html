@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>发送台 · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  /* 发送台壳: 一个 program、两个 tab。每个 tab 承载现有页面 (iframe),
+     切换时两边都保持活着 — 正在跑的 blast 进度不会因为切 tab 而丢。
+     真正的 DOM 级合并等这个壳跑稳后再做 (两页 element id 有冲突, 硬合高风险)。 */
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--bg, #0b1120); }
+  .sendbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 18px; border-bottom: 1px solid var(--line, #1f2a3d);
+    background: var(--panel, #0f172a);
+  }
+  .sendbar h1 { margin: 0; font-size: 17px; color: var(--text, #e2e8f0); }
+  .tabs { display: flex; gap: 8px; margin-left: 8px; }
+  .tab {
+    padding: 8px 18px; border-radius: 10px; border: 1px solid var(--line, #334155);
+    background: transparent; color: var(--muted, #94a3b8); cursor: pointer;
+    font-weight: 700; font-size: 13.5px; font-family: inherit;
+  }
+  .tab.active { background: var(--panel-2, #1e293b); color: var(--text, #e2e8f0); border-color: #38bdf8; }
+  .tab .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; margin-right: 7px; vertical-align: 1px; opacity: 0; }
+  .tab.running .dot { opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .spacer { flex: 1; }
+  .sendbar a { color: var(--muted, #94a3b8); text-decoration: none; font-size: 13px; }
+  .sendbar a:hover { color: var(--text, #e2e8f0); }
+  .frames { flex: 1; position: relative; }
+  .frames iframe {
+    position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
+    background: transparent;
+  }
+  .frames iframe.hidden { visibility: hidden; pointer-events: none; }
+</style>
+</head>
+<body>
+  <div class="sendbar">
+    <h1>📣 发送台</h1>
+    <div class="tabs">
+      <button class="tab active" id="tab-flow1" onclick="show('flow1')"><span class="dot"></span>① Flow 1 · 新名单群发</button>
+      <button class="tab" id="tab-next" onclick="show('next')"><span class="dot"></span>② Flow 2-10 · 跟进</button>
+    </div>
+    <div class="spacer"></div>
+    <a href="/knowledge">🧠 脑编辑器</a>
+    <a href="/bot-rules">Bot Rules</a>
+    <a href="/settings">Settings</a>
+  </div>
+  <div class="frames">
+    <iframe id="frame-flow1" src="/"></iframe>
+    <iframe id="frame-next" class="hidden" data-src="/next-flow"></iframe>
+  </div>
+
+<script>
+// 第二个 tab 懒加载 (第一次点才载入), 之后一直活着 — 切 tab 不打断任何进行中的发送。
+function show(which) {
+  const next = document.getElementById("frame-next");
+  if (which === "next" && !next.src) next.src = next.dataset.src;
+  document.getElementById("frame-flow1").classList.toggle("hidden", which !== "flow1");
+  next.classList.toggle("hidden", which !== "next");
+  document.getElementById("tab-flow1").classList.toggle("active", which === "flow1");
+  document.getElementById("tab-next").classList.toggle("active", which === "next");
+  try { history.replaceState(null, "", "#" + which); } catch {}
+}
+// 深链接: /send#next 直接开第二个 tab (launcher 用)
+if (location.hash === "#next") show("next");
+
+// 有 campaign 在跑时给对应 tab 一个呼吸灯, 提醒你别关窗口。
+async function pollRunning() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    const d = await r.json().catch(() => ({}));
+    const running = d?.status === "RUNNING" || d?.state?.status === "RUNNING" || d?.running === true;
+    document.getElementById("tab-flow1").classList.toggle("running", Boolean(running));
+  } catch { /* console 自己会显示, 这里只是点缀 */ }
+  setTimeout(pollRunning, 15000);
+}
+pollRunning();
+</script>
+</body>
+</html>

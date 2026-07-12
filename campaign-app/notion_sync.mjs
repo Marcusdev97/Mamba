@@ -184,6 +184,10 @@ export function buildLeadReplyProperties(schema, event, replyCount = 1, checkedA
     properties["Stop Flag"] = checkbox(true);
     properties["Stop Reason"] = richText(`Auto: ${event.route || "STOP"}`);
   }
+  if (event?.route === "VIEWING_REQUEST") {
+    if (schema?.["Appointment Status"]) properties["Appointment Status"] = choice(schema, "Appointment Status", "Viewing Interest");
+    if (schema?.Priority) properties.Priority = choice(schema, "Priority", "HIGH");
+  }
   return properties;
 }
 
