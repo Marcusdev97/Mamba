@@ -77,6 +77,7 @@ try {
   notionConfig = JSON.parse(await fs.readFile(path.join(paths.rootDir, "campaign-data", "notion_config.json"), "utf8"));
 } catch { /* picker simply stays empty if config is missing */ }
 const blastDsId = String(notionConfig?.databases?.blastLeads ?? "").replace(/[^a-fA-F0-9]/g, "");
+const configuredBrainDb = (name, fallback) => String(notionConfig?.databases?.[name] || fallback).replace(/[^a-fA-F0-9]/g, "");
 
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
@@ -219,6 +220,22 @@ const runtime = await loadRuntime({
     readCache: blastCacheService.read,
     writeCache: blastCacheService.writeCache,
     queryNotionRows: blastCacheService.queryRows,
+  },
+  brainLearning: {
+    notion,
+    api,
+    openInstances: () => openInstances(api),
+    collectMessageObjects,
+    describeMessage,
+    resolvePhone,
+    messageTime,
+    normalizePhone: nfNormalizePhone,
+    history: conversationHistoryService,
+    readCache: blastCacheService.read,
+    systemLogs: systemLogService,
+    aiReplyLogDbId: configuredBrainDb("aiReplyLog", "4272e2edbf644f44b670c71ae4276051"),
+    goldenDbId: configuredBrainDb("goldenConversations", "dc5c303e463145abb9d635c007120157"),
+    objectionDbId: configuredBrainDb("objectionBank", "f73c35315d604aa682ecf84826cde123"),
   },
   templates: {
     rootDir: paths.rootDir,

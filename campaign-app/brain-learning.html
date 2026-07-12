@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Brain Learning Queue · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .wrap { max-width:1320px; }
+  .toolbar, .batch-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .brain-tabs { display:flex; gap:6px; padding:5px; margin-bottom:16px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); width:max-content; max-width:100%; }
+  .brain-tab { display:block; padding:9px 14px; border-radius:6px; color:var(--muted); text-decoration:none; font-weight:700; }
+  .brain-tab.active { color:var(--text); background:var(--panel-2); box-shadow:inset 0 0 0 1px var(--line); }
+  .stats { display:grid; grid-template-columns:repeat(3, minmax(140px, 1fr)); gap:10px; }
+  .stat { padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
+  .stat span { display:block; color:var(--muted); font-size:12px; }
+  .stat b { display:block; margin-top:3px; font-size:24px; }
+  .filters { display:grid; grid-template-columns:180px 190px minmax(260px, 1fr) auto; gap:10px; align-items:end; }
+  .queue-head { display:grid; grid-template-columns:auto 140px minmax(220px, .85fr) minmax(260px, 1fr); gap:12px; padding:0 10px 10px; color:var(--muted); font-size:12px; font-weight:750; text-transform:uppercase; }
+  .learning-row { display:grid; grid-template-columns:auto 140px minmax(220px, .85fr) minmax(260px, 1fr); gap:12px; align-items:start; padding:14px 10px; border-top:1px solid var(--line); }
+  .pick { width:18px; height:18px; margin-top:28px; }
+  .meta { display:grid; gap:7px; min-width:0; }
+  .meta b { font-size:14px; overflow-wrap:anywhere; }
+  .muted { color:var(--muted); }
+  .tag { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid var(--line); border-radius:var(--radius-full); color:var(--muted); font-size:12px; }
+  .learning-row textarea { min-height:112px; resize:vertical; line-height:1.45; }
+  .learning-row input, .learning-row select, .learning-row textarea { width:100%; box-sizing:border-box; }
+  .field-stack { display:grid; gap:8px; }
+  .edit-customer { grid-column:3; }
+  .edit-response { grid-column:4; }
+  .field-stack label span { display:block; margin-bottom:5px; color:var(--muted); font-size:12px; }
+  .conversation-thread { grid-column:3 / -1; min-width:0; padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:#0b1018; }
+  .thread-head { display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom:10px; color:var(--muted); font-size:12px; }
+  .thread-messages { display:grid; gap:8px; max-height:360px; overflow:auto; padding-right:4px; }
+  .bubble { width:min(78%, 720px); padding:9px 11px; border:1px solid var(--line); border-radius:8px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .bubble.inbound { justify-self:start; background:var(--panel-2); }
+  .bubble.outbound { justify-self:end; background:var(--green-bg); border-color:rgba(37,211,102,.3); }
+  .bubble-meta { margin-top:4px; color:var(--muted); font-size:10px; text-align:right; }
+  .thread-raw { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text); font:inherit; line-height:1.5; }
+  .empty { padding:28px 10px; color:var(--muted); text-align:center; border-top:1px solid var(--line); }
+  .ok { color:var(--green); margin-top:10px; white-space:pre-wrap; }
+  .err { color:var(--red); margin-top:10px; white-space:pre-wrap; }
+  .queue-note { color:var(--muted); margin-top:8px; font-size:13px; }
+  @media (max-width:900px) {
+    .filters { grid-template-columns:1fr 1fr; }
+    .queue-head { display:none; }
+    .learning-row { grid-template-columns:auto 1fr; }
+    .learning-row > .field-stack, .conversation-thread { grid-column:2; }
+  }
+  @media (max-width:560px) {
+    .stats, .filters { grid-template-columns:1fr; }
+    .learning-row { padding-left:0; padding-right:0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Brain Learning Queue</h1>
+      <div class="sub">批量审核真实回复，把好对话变成 Golden Conversation 或 Objection Playbook</div>
+    </div>
+  </header>
+
+  <nav class="brain-tabs" aria-label="Brain sections">
+    <a class="brain-tab" href="/bot-rules">Rules</a>
+    <a class="brain-tab active" href="/brain-learning">Learning Queue</a>
+  </nav>
+
+  <section class="card">
+    <h2>Learning Status</h2>
+    <div class="stats">
+      <div class="stat"><span>Pending Review</span><b id="stPending">0</b></div>
+      <div class="stat"><span>Approved</span><b id="stApproved">0</b></div>
+      <div class="stat"><span>Rejected</span><b id="stRejected">0</b></div>
+    </div>
+    <div class="queue-note">只有已有最终发送内容的 Edited / Sent As-Is 记录会进入候选。客户号码不会写入大脑。</div>
+  </section>
+
+  <section class="card">
+    <h2>Filter</h2>
+    <div class="filters">
+      <label class="fld"><span>Status</span><select id="status"><option>Pending</option><option>Approved</option><option>Rejected</option><option>All</option></select></label>
+      <label class="fld"><span>Project</span><select id="project"><option value="">All</option></select></label>
+      <label class="fld"><span>Search</span><input id="q" type="search" placeholder="Customer message / response / route" /></label>
+      <button id="refresh" class="btn primary">Refresh Queue</button>
+    </div>
+    <div id="meta" class="queue-note"></div>
+    <div id="loadErr" class="err"></div>
+  </section>
+
+  <section class="card">
+    <div class="toolbar">
+      <label class="checkline"><input id="selectAll" type="checkbox" /> Select all visible</label>
+      <div class="batch-actions">
+        <button id="approve" class="btn primary">Approve Selected</button>
+        <button id="reject" class="btn danger">Reject Selected</button>
+      </div>
+      <span id="selectedCount" class="muted">0 selected</span>
+    </div>
+    <div class="queue-head"><span></span><span>Source</span><span>Customer Said</span><span>Approved Response</span></div>
+    <div id="rows"><div class="empty">Loading learning candidates...</div></div>
+    <div id="actionOk" class="ok"></div>
+    <div id="actionErr" class="err"></div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[char]));
+let records = [];
+
+function fmt(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-MY", { timeZone:"Asia/Kuala_Lumpur", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false });
+}
+
+function setProjects(items) {
+  const current = $("project").value;
+  $("project").innerHTML = '<option value="">All</option>' + items.map((item) => `<option value="${esc(item)}">${esc(item)}</option>`).join("");
+  if ([...$("project").options].some((option) => option.value === current)) $("project").value = current;
+}
+
+function params() {
+  const result = new URLSearchParams({ status: $("status").value });
+  if ($("project").value) result.set("project", $("project").value);
+  if ($("q").value.trim()) result.set("q", $("q").value.trim());
+  return result;
+}
+
+function render() {
+  if (!records.length) {
+    $("rows").innerHTML = '<div class="empty">这个筛选目前没有 Learning Candidate。</div>';
+    updateSelected();
+    return;
+  }
+  const selectable = $("status").value === "Pending" || $("status").value === "All";
+  $("rows").innerHTML = records.map((item) => `
+    <div class="learning-row" data-id="${esc(item.id)}">
+      <input class="pick" type="checkbox" ${selectable && item.learningStatus === "Pending" ? "" : "disabled"} aria-label="Select learning candidate" />
+      <div class="meta">
+        <b>${esc(item.project || "General")}</b>
+        <span class="tag">${esc(item.route)}</span>
+        <span class="tag">${esc(item.action)}</span>
+        <span class="muted">${esc(fmt(item.timestamp))}</span>
+        <label class="fld"><span>Learning Type</span><select class="learning-type"><option value="Golden" ${item.learningType === "Golden" ? "selected" : ""}>Golden</option><option value="Objection" ${item.learningType === "Objection" ? "selected" : ""}>Objection</option></select></label>
+      </div>
+      <div class="conversation-thread">
+        <div class="thread-head"><b>Full Conversation</b><span class="thread-source">Loading WhatsApp history...</span></div>
+        <div class="thread-messages">${item.conversationText ? `<pre class="thread-raw">${esc(item.conversationText)}</pre>` : '<span class="muted">正在自动拉取完整双向对话...</span>'}</div>
+        <textarea class="conversation-context-value" hidden>${esc(item.conversationText || "")}</textarea>
+      </div>
+      <div class="field-stack edit-customer">
+        <label><span>Customer message</span><textarea class="customer-text">${esc(item.customerText)}</textarea></label>
+        <label><span>Review note</span><input class="review-note" value="${esc(item.learningNote || "")}" placeholder="为什么值得学习（可留空）" /></label>
+      </div>
+      <div class="field-stack edit-response">
+        <label><span>Final human-approved response</span><textarea class="response-text">${esc(item.responseText)}</textarea></label>
+        ${item.aiDraft && item.aiDraft !== item.responseText ? `<details><summary class="muted">Compare original AI draft</summary><div class="queue-note">${esc(item.aiDraft)}</div></details>` : ""}
+      </div>
+    </div>
+  `).join("");
+  document.querySelectorAll(".pick").forEach((box) => box.addEventListener("change", updateSelected));
+  updateSelected();
+  loadConversationThreads();
+}
+
+function renderThread(row, thread) {
+  const source = row.querySelector(".thread-source");
+  const container = row.querySelector(".thread-messages");
+  row.querySelector(".conversation-context-value").value = thread.conversationText || "";
+  source.textContent = thread.source || "conversation context";
+  if (thread.messages?.length) {
+    container.innerHTML = thread.messages.map((message) => `
+      <div class="bubble ${message.direction === "outbound" ? "outbound" : "inbound"}">
+        <div>${esc(message.text)}</div>
+        <div class="bubble-meta">${message.direction === "outbound" ? "Sales" : "Customer"} · ${esc(fmt(message.at))}</div>
+      </div>
+    `).join("");
+  } else if (thread.conversationText) {
+    container.innerHTML = `<pre class="thread-raw">${esc(thread.conversationText)}</pre>`;
+  } else {
+    container.innerHTML = '<span class="muted">没有找到可读取的对话记录。</span>';
+  }
+}
+
+async function loadConversationThreads() {
+  if (!records.length) return;
+  try {
+    const response = await fetch("/api/brain-learning/conversations", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({ items:records.map((item) => ({
+        id:item.id,
+        phone:item.phone,
+        project:item.project,
+        senderInstance:item.senderInstance,
+        timestamp:item.timestamp,
+        customerText:item.customerText,
+        responseText:item.responseText,
+        conversationText:item.conversationText,
+      })) }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "Full Conversation load failed");
+    for (const thread of data.threads || []) {
+      const record = records.find((item) => item.id === thread.id);
+      if (record) record.conversationText = thread.conversationText || record.conversationText || "";
+      const row = [...document.querySelectorAll(".learning-row")].find((item) => item.dataset.id === thread.id);
+      if (row) renderThread(row, thread);
+    }
+  } catch (error) {
+    document.querySelectorAll(".thread-source").forEach((item) => { item.textContent = "History unavailable"; });
+    document.querySelectorAll(".thread-messages").forEach((item) => {
+      if (!item.querySelector(".thread-raw")) item.innerHTML = `<span class="muted">${esc(error.message)}</span>`;
+    });
+  }
+}
+
+function selectedItems() {
+  return [...document.querySelectorAll(".learning-row")].filter((row) => row.querySelector(".pick")?.checked).map((row) => {
+    const original = records.find((item) => item.id === row.dataset.id) || {};
+    return {
+      id: row.dataset.id,
+      project: original.project,
+      route: original.route,
+      language: original.language,
+      action: original.action,
+      conversationText: row.querySelector(".conversation-context-value").value || original.conversationText || "",
+      learningType: row.querySelector(".learning-type").value,
+      customerText: row.querySelector(".customer-text").value,
+      responseText: row.querySelector(".response-text").value,
+      note: row.querySelector(".review-note").value,
+    };
+  });
+}
+
+function updateSelected() {
+  const available = [...document.querySelectorAll(".pick:not(:disabled)")];
+  const selected = available.filter((box) => box.checked);
+  $("selectedCount").textContent = `${selected.length} selected`;
+  $("selectAll").checked = available.length > 0 && selected.length === available.length;
+  $("selectAll").indeterminate = selected.length > 0 && selected.length < available.length;
+}
+
+async function load() {
+  $("loadErr").textContent = "";
+  $("refresh").disabled = true;
+  $("refresh").textContent = "Loading...";
+  try {
+    const response = await fetch("/api/brain-learning?" + params().toString());
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "Learning Queue load failed");
+    records = data.records || [];
+    $("stPending").textContent = data.summary?.Pending || 0;
+    $("stApproved").textContent = data.summary?.Approved || 0;
+    $("stRejected").textContent = data.summary?.Rejected || 0;
+    $("meta").textContent = `${data.count || 0} candidates shown · shared source: Notion AI Reply Log`;
+    setProjects(data.projects || []);
+    render();
+  } catch (error) {
+    records = [];
+    render();
+    $("loadErr").textContent = error.message;
+  } finally {
+    $("refresh").disabled = false;
+    $("refresh").textContent = "Refresh Queue";
+  }
+}
+
+async function review(decision) {
+  const items = selectedItems();
+  if (!items.length) {
+    $("actionErr").textContent = "请先勾选 Learning Candidate。";
+    return;
+  }
+  $("actionErr").textContent = "";
+  $("actionOk").textContent = "";
+  $("approve").disabled = true;
+  $("reject").disabled = true;
+  try {
+    const response = await fetch("/api/brain-learning/review", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({ decision, items }),
+    });
+    const data = await response.json();
+    if (!data.ok && !data.succeeded?.length) throw new Error(data.error || "Learning review failed");
+    const message = `${decision === "approve" ? "Approved" : "Rejected"} ${data.succeeded?.length || 0} candidate(s).`;
+    $("actionOk").textContent = data.cacheError ? `${message}\nBrain Cache refresh warning: ${data.cacheError}` : message;
+    if (data.failed?.length) $("actionErr").textContent = data.failed.map((item) => `${item.id}: ${item.error}`).join("\n");
+    await load();
+  } catch (error) {
+    $("actionErr").textContent = error.message;
+  } finally {
+    $("approve").disabled = false;
+    $("reject").disabled = false;
+  }
+}
+
+$("selectAll").addEventListener("change", () => {
+  document.querySelectorAll(".pick:not(:disabled)").forEach((box) => { box.checked = $("selectAll").checked; });
+  updateSelected();
+});
+$("approve").addEventListener("click", () => review("approve"));
+$("reject").addEventListener("click", () => review("reject"));
+$("refresh").addEventListener("click", load);
+$("status").addEventListener("change", load);
+$("project").addEventListener("change", load);
+$("q").addEventListener("keydown", (event) => { if (event.key === "Enter") load(); });
+load();
+</script>
+</body>
+</html>

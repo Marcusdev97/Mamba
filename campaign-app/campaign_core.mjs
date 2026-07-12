@@ -349,14 +349,43 @@ export function applyTemplateOverrides(state, overrides, config) {
 
 export function buildAssignments(leads, instances, startAt, endAt, config) {
   const part1Variants = firstFlowVariants(config);
-  const assignments = leads.map((lead, index) => {
+  // Per-sender quota (2026-07-12): instance 可带 max = 这个号本批最多发几个
+  // (UI 留空 = 不限)。分配规则:
+  //   1. sticky sender (跟进必须用原号) 永远赢 — 算用量但不受 cap 挡
+  //   2. 新客轮流分给还没到 cap 的号
+  //   3. 全部号都满 -> lead 进 overflow (不排队, 预览可见, 留给下一批)
+  const capOf = (item) => {
+    const max = Number(item?.max);
+    return Number.isFinite(max) && max > 0 ? max : Infinity;
+  };
+  const used = new Map(instances.map((item) => [item.name, 0]));
+  const overflow = [];
+  let rotation = 0;
+  const assignments = [];
+  for (const lead of leads) {
+    const index = assignments.length;
     const preferredSender = String(lead.senderInstance || "").trim();
-    const instance = preferredSender
-      ? instances.find((item) => item.name === preferredSender)
-      : instances[index % instances.length];
-    if (!instance) {
-      throw new Error(`Sender Instance ${preferredSender} 不在线或没有被勾选。请到 Settings reconnect，或不要勾选这个客户。`);
+    let instance = null;
+    if (preferredSender) {
+      instance = instances.find((item) => item.name === preferredSender);
+      if (!instance) {
+        throw new Error(`Sender Instance ${preferredSender} 不在线或没有被勾选。请到 Settings reconnect，或不要勾选这个客户。`);
+      }
+    } else {
+      for (let step = 0; step < instances.length; step += 1) {
+        const candidate = instances[(rotation + step) % instances.length];
+        if ((used.get(candidate.name) ?? 0) < capOf(candidate)) {
+          instance = candidate;
+          rotation = (rotation + step + 1) % instances.length;
+          break;
+        }
+      }
+      if (!instance) {
+        overflow.push({ name: lead.name, phone: lead.phone });
+        continue;
+      }
     }
+    used.set(instance.name, (used.get(instance.name) ?? 0) + 1);
     let language = lead.language ?? chooseLanguage(config);
 
     // Fall back to a language that actually has templates (projects may be EN-only, etc.).
@@ -378,7 +407,7 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
       return v ? { variant: v.id ?? null, text: personalize(v.text, lead.name), media: v.media || "", sentInfo: null } : null;
     }).filter(Boolean);
 
-    return {
+    assignments.push({
       id: `job_${String(index + 1).padStart(5, "0")}`,
       lead,
       instanceName: instance.name,
@@ -397,15 +426,15 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
       part1: null,
       part2: null,
       error: null,
-    };
-  });
+    });
+  }
 
   const latestPart1 = endAt.getTime() - config.delivery.partGapSeconds * 1000;
   const interval = assignments.length > 1 ? (latestPart1 - startAt.getTime()) / (assignments.length - 1) : 0;
   assignments.forEach((job, index) => {
     job.scheduledAt = new Date(startAt.getTime() + interval * index).toISOString();
   });
-  return assignments;
+  return { assignments, overflow, perSender: Object.fromEntries(used) };
 }
 
 // Drives one campaign run. Holds state in memory and mirrors it to disk so the
@@ -480,6 +509,7 @@ export class CampaignRunner {
     const runId = `run_${new Date().toISOString().replace(/[:.]/g, "-")}`;
     this.runPath = path.join(paths.runsDir, `${runId}.json`);
     await fs.mkdir(paths.runsDir, { recursive: true });
+    const built = buildAssignments(leads, instances, startAt, endAt, this.config);
     this.state = {
       runId,
       project: project ?? null,
@@ -491,7 +521,9 @@ export class CampaignRunner {
       startAt: startAt.toISOString(),
       endAt: endAt.toISOString(),
       instances,
-      assignments: buildAssignments(leads, instances, startAt, endAt, this.config),
+      assignments: built.assignments,
+      overflow: built.overflow,
+      perSender: built.perSender,
     };
     if (mode === "TEST") {
       for (const job of this.state.assignments) job.scheduledAt = startAt.toISOString();
@@ -1024,6 +1056,8 @@ export class CampaignRunner {
             endAt: this.state.endAt,
             total: this.state.assignments.length,
             summary: this.summary(),
+            perSender: this.state.perSender ?? null,
+            overflow: this.state.overflow ?? [],
             flowLabel: this.state.flowLabel ?? null,
             templateSource: this.state.templateSource ?? null,
             templateFlow: this.state.templateFlow ?? null,

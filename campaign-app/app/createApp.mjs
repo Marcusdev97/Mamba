@@ -1,5 +1,6 @@
 import { createRouter, json, notFound } from "../lib/http.mjs";
 import { registerBotRulesRoutes } from "../routes/bot-rules.routes.mjs";
+import { registerBrainLearningRoutes } from "../routes/brain-learning.routes.mjs";
 import { registerCampaignRoutes } from "../routes/campaign.routes.mjs";
 import { registerConversationsRoutes } from "../routes/conversations.routes.mjs";
 import { registerFollowUpRoutes } from "../routes/follow-up.routes.mjs";
@@ -9,6 +10,7 @@ import { registerKnowledgeRoutes } from "../routes/knowledge.routes.mjs";
 import { registerLookupRoutes } from "../routes/lookup.routes.mjs";
 import { registerNextFlowRoutes } from "../routes/next-flow.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
+import { registerProjectBrainRoutes } from "../routes/project-brain.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
 import { registerSystemLogsRoutes } from "../routes/system-logs.routes.mjs";
@@ -19,11 +21,13 @@ export function createApp(runtime) {
   registerStaticRoutes(router);
   registerSettingsRoutes(router);
   registerProjectsRoutes(router);
+  registerProjectBrainRoutes(router);
   registerInstancesRoutes(router);
   registerImportRoutes(router);
   registerLookupRoutes(router);
   registerTemplatesRoutes(router);
   registerBotRulesRoutes(router);
+  registerBrainLearningRoutes(router);
   registerKnowledgeRoutes(router);
   registerCampaignRoutes(router);
   registerNextFlowRoutes(router);

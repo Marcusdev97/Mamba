@@ -7,10 +7,22 @@ function requireCampaign(runtime) {
   return runtime.campaign;
 }
 
+// requested 支持两种形态 (向后兼容):
+//   ["wa_01", "wa_02"]                        — 旧格式, 不限量
+//   [{ name: "wa_01", max: 100 }, "wa_02"]    — 带 per-sender quota (max = 本批上限)
 function selectedOpenInstances(open, requested) {
   if (!Array.isArray(requested) || !requested.length) return open;
-  const wanted = new Set(requested);
-  const selected = open.filter((item) => wanted.has(item.name));
+  const wantedMax = new Map();
+  for (const item of requested) {
+    if (typeof item === "string") wantedMax.set(item, null);
+    else if (item?.name) {
+      const max = Number(item.max);
+      wantedMax.set(String(item.name), Number.isFinite(max) && max > 0 ? max : null);
+    }
+  }
+  const selected = open
+    .filter((item) => wantedMax.has(item.name))
+    .map((item) => ({ ...item, max: wantedMax.get(item.name) }));
   if (!selected.length) {
     throw httpError(400, "所选号码都不在线。请到 Settings 检查 Phone Health，确认号码是 OPEN。");
   }

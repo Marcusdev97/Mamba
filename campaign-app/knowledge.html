@@ -7,6 +7,12 @@
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
   .wrap { max-width: 1280px; }
+  .page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:12px; }
+  .page-head h1 { margin:0; }
+  .page-head p { color:var(--muted); margin:4px 0 0; }
+  .module-tabs { display:flex; gap:6px; padding:4px; border:1px solid var(--line); background:var(--panel); border-radius:var(--radius); }
+  .module-tabs a { padding:8px 14px; border-radius:7px; color:var(--muted); text-decoration:none; font-weight:650; }
+  .module-tabs a.active { color:var(--text); background:var(--panel-3); }
   .tabs { display:flex; gap:8px; margin:14px 0; flex-wrap:wrap; }
   .tab-btn {
     padding:9px 16px; border:1px solid var(--line); border-radius:var(--radius);
@@ -45,12 +51,18 @@
   .type-row { display:grid; grid-template-columns:1fr 110px 140px 40px; gap:8px; margin-top:6px; }
   .del { border:1px solid var(--line); background:transparent; color:var(--red, #f87171); border-radius:var(--radius); cursor:pointer; }
   h3.sec { margin:20px 0 6px; font-size:14px; color:var(--muted); text-transform:none; }
-  @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .grid2,.grid3 { grid-template-columns:1fr; } }
+  @media (max-width: 900px) { .layout { grid-template-columns:1fr; } .grid2,.grid3 { grid-template-columns:1fr; } .page-head { display:block; } .module-tabs { margin-top:12px; width:max-content; max-width:100%; } }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>🧠 脑编辑器 <span style="color:var(--muted);font-size:14px;font-weight:400">你用人话写,我转成系统 + Obsidian 懂的格式</span></h1>
+  <div class="page-head">
+    <div><h1>Project Brain</h1><p>Project Editor · 用人话维护 Active Brain 与 Obsidian 盘资料</p></div>
+    <nav class="module-tabs" aria-label="Project Brain views">
+      <a href="/project-brain">Market Dashboard</a>
+      <a class="active" href="/knowledge">Project Editor</a>
+    </nav>
+  </div>
 
   <div class="tabs">
     <button class="tab-btn active" data-tab="sheets">盘资料 (Layer 2)</button>

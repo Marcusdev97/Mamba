@@ -268,7 +268,12 @@ async function refreshInstances() {
     sc.dataset.list = openSenders.join(",");
     sc.innerHTML = openSenderItems.map((item) => {
       const number = item.number && item.number !== "Not connected" ? " · " + item.number : "";
-      return '<label><input type="checkbox" class="sender" value="' + item.name + '" checked> <b>' + item.name + '</b><span class="muted">' + number + "</span></label>";
+      return '<span style="display:inline-flex;align-items:center;gap:8px;margin-right:14px">' +
+        '<label><input type="checkbox" class="sender" value="' + item.name + '" checked> <b>' + item.name + '</b><span class="muted">' + number + "</span></label>" +
+        '<input type="number" class="sendermax" data-inst="' + item.name + '" min="1" placeholder="不限" ' +
+        'title="这个号本批最多发几个,留空 = 不限。跟进客户(绑定原号的)不受上限影响" ' +
+        'style="width:72px;background:var(--panel-2,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--line,#334155);border-radius:8px;padding:5px 8px;font:inherit;font-size:12.5px">' +
+        '</span>';
     }).join("");
     applyProjectSenders();
   }
@@ -354,7 +359,11 @@ $("btnSaveNames").addEventListener("click", async () => {
 // ---- prepare / preview ----
 $("btnPrepare").addEventListener("click", async () => {
   $("prepErr").textContent = "";
-  const senders = [...document.querySelectorAll(".sender:checked")].map((c) => c.value);
+  const senders = [...document.querySelectorAll(".sender:checked")].map((c) => {
+    const maxEl = document.querySelector('.sendermax[data-inst="' + c.value + '"]');
+    const max = maxEl && maxEl.value.trim() ? Number(maxEl.value.trim()) : 0;
+    return max > 0 ? { name: c.value, max } : c.value;
+  });
   const r = await post("/api/prepare", {
     project: currentProject,
     mode,
@@ -371,11 +380,17 @@ $("btnPrepare").addEventListener("click", async () => {
 function renderPreview(r) {
   const s = r.snapshot.state;
   $("previewCard").classList.remove("hidden");
+  const senderChips = s.perSender
+    ? Object.entries(s.perSender).filter(([, n]) => n > 0).map(([name, n]) => '<div class="chip">' + name + ' <b>' + n + ' 个</b></div>').join("")
+    : '<div class="chip">Connection <b>' + s.assignments.map(a=>a.instanceKey || a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>";
+  const overflowChip = (s.overflow || []).length
+    ? '<div class="chip" style="border-color:#f59e0b;color:#fbbf24">⚠️ 超量未排队 <b>' + s.overflow.length + ' 人</b>(全部号已到上限,留给下一批)</div>'
+    : "";
   $("previewChips").innerHTML =
     '<div class="chip">模式 <b>' + s.mode + "</b></div>" +
     '<div class="chip">时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>" +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
-    '<div class="chip">Connection <b>' + s.assignments.map(a=>a.instanceKey || a.instanceName).filter((v,i,a)=>a.indexOf(v)===i).join(", ") + "</b></div>" +
+    senderChips + overflowChip +
     '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>";
   $("previewBody").innerHTML = s.assignments.map((a) =>
     '<tr><td><label style="display:flex;align-items:center;gap:7px;white-space:nowrap"><input type="checkbox" class="sendToggle" data-id="' + a.id + '" checked> 发</label></td><td>' +

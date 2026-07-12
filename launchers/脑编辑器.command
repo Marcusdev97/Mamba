@@ -12,7 +12,7 @@ if [[ ! -x "$NODE" ]]; then
 fi
 
 PORT="${CONSOLE_PORT:-8787}"
-URL="http://127.0.0.1:${PORT}/knowledge"
+URL="http://127.0.0.1:${PORT}/project-brain"
 
 if [[ ! -x "$NODE" ]]; then
   echo "找不到 Node.js。"
@@ -26,7 +26,7 @@ if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/"; then
   sleep 3
 fi
 
-echo "打开脑编辑器:$URL"
+echo "打开 Project Brain:$URL"
 open "$URL"
 echo ""
 read "?Press Enter to close..."

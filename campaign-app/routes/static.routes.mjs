@@ -12,8 +12,10 @@ const HTML_ROUTES = {
   "/conversations": "conversations.html",
   "/follow-up": "follow-up.html",
   "/bot-rules": "bot-rules.html",
+  "/brain-learning": "brain-learning.html",
   "/flow-map": "flow-map.html",
   "/knowledge": "knowledge.html",
+  "/project-brain": "project-brain.html",
   "/send": "send.html",
 };
 

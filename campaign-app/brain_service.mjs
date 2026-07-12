@@ -39,7 +39,7 @@ import { classifyReplyText } from "./flow_sequence.mjs";
 import { loadSuppressionSync, isSuppressed, normalizePhone, addLocalStop } from "./suppression.mjs";
 import { loadBrainCacheSync } from "./brain_cache_sync.mjs";
 import { loadProjectContext, resolveProjectLocal, listProjects } from "./knowledge_layer.mjs";
-import { collectMessages, inboundEvent } from "./reply_intake.mjs";
+import { collectMessages, describeMessage, inboundEvent, resolvePhone } from "./reply_intake.mjs";
 import { makeTelegram, parseUpdate } from "./telegram.mjs";
 import {
   decideAction, logRouteOf, detectLanguage, pickModel, buildPrompt,
@@ -311,6 +311,72 @@ function configuredDb(name, fallback) {
   return clean || fallback;
 }
 
+let aiReplyContextFieldsReady = false;
+
+async function ensureAiReplyContextFields() {
+  if (!notionToken()) return false;
+  const databaseId = configuredDb("aiReplyLog", AI_REPLY_LOG_DB);
+  const database = await notionCall("GET", `/databases/${databaseId}`);
+  const schema = database?.properties || {};
+  const missing = {};
+  if (!schema["Conversation Context"]) missing["Conversation Context"] = { rich_text: {} };
+  if (!schema["Sender Instance"]) missing["Sender Instance"] = { rich_text: {} };
+  if (Object.keys(missing).length) await notionCall("PATCH", `/databases/${databaseId}`, { properties: missing });
+  aiReplyContextFieldsReady = true;
+  return true;
+}
+
+function notionLongText(value) {
+  const text = String(value || "").trim().slice(0, 50000);
+  return { rich_text: text ? text.match(/[\s\S]{1,1900}/g).map((content) => ({ text: { content } })) : [] };
+}
+
+function messageAt(message) {
+  const raw = Number(message?.messageTimestamp || 0);
+  if (!raw) return "";
+  return new Date(raw < 100000000000 ? raw * 1000 : raw).toISOString();
+}
+
+async function fetchConversationContext(event, finalSent) {
+  const fallback = [
+    `[${event.receivedAt || new Date().toISOString()}] CUSTOMER: ${event.text}`,
+    finalSent ? `[${new Date().toISOString()}] SALES: ${finalSent}` : "",
+  ].filter(Boolean).join("\n");
+  if (SIMULATE || !event.instanceName || !event.phone) return fallback;
+  try {
+    const response = await api(`/chat/findMessages/${encodeURIComponent(event.instanceName)}`, {
+      method: "POST",
+      body: JSON.stringify({ where: { key: { remoteJid: `${event.phone}@s.whatsapp.net` } }, limit: 100 }),
+    });
+    const seen = new Set();
+    const messages = [];
+    for (const message of collectMessages(response)) {
+      const phone = resolvePhone(message);
+      if (phone && phone !== event.phone) continue;
+      const id = String(message?.key?.id || `${messageAt(message)}:${describeMessage(message)}`);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      messages.push({
+        at: messageAt(message),
+        role: message?.key?.fromMe ? "SALES" : "CUSTOMER",
+        text: describeMessage(message),
+      });
+    }
+    const lines = messages
+      .filter((message) => message.text)
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+      .slice(-40)
+      .map((message) => `[${message.at || "time unknown"}] ${message.role}: ${message.text}`);
+    if (finalSent && !lines.some((line) => line.includes(`SALES: ${finalSent}`))) {
+      lines.push(`[${new Date().toISOString()}] SALES: ${finalSent}`);
+    }
+    return lines.join("\n") || fallback;
+  } catch (error) {
+    console.log(`[learning] conversation context fallback for ${event.phone}: ${error.message}`);
+    return fallback;
+  }
+}
+
 function brainProject() {
   return process.env.BRAIN_PROJECT || env.BRAIN_PROJECT || readJsonSyncSafe(path.join(paths.dataDir, "notion_config.json"))?.project || "Enlace";
 }
@@ -358,6 +424,7 @@ async function resolveProject(event) {
 
 // Every decision lands locally FIRST (survives Notion being down), Notion best-effort after.
 async function logReply({ event, classified, aiDraft, finalSent, action, project = null }) {
+  const conversationContext = await fetchConversationContext(event, finalSent);
   const entry = {
     at: new Date().toISOString(),
     phone: event.phone,
@@ -367,6 +434,9 @@ async function logReply({ event, classified, aiDraft, finalSent, action, project
     aiDraft: aiDraft ?? null,
     finalSent: finalSent ?? null,
     action,
+    project,
+    instanceName: event.instanceName || null,
+    conversationContext,
   };
   await appendJsonl(brainLogPath, entry);
   if (SIMULATE) { console.log(`[simulate] AI Reply Log: ${action} (${logRouteOf(classified.route)})`); return; }
@@ -383,6 +453,10 @@ async function logReply({ event, classified, aiDraft, finalSent, action, project
         "Action": { select: { name: action } },
         "Project": { select: { name: project || brainProject() } },
         "Timestamp": { date: { start: entry.at } },
+        ...(aiReplyContextFieldsReady ? {
+          "Conversation Context": notionLongText(conversationContext),
+          "Sender Instance": { rich_text: event.instanceName ? [{ text: { content: String(event.instanceName).slice(0, 200) } }] : [] },
+        } : {}),
       },
     });
   } catch (error) {
@@ -685,6 +759,13 @@ server.listen(PORT, HOST, async () => {
   console.log(`Brain:     ${cache.knowledge.count} facts / ${cache.golden.count} golden / ${cache.objections.count} objections${cache.knowledge.count === 0 ? "  ⚠️ 库是空的 — 先做缺口 1" : ""}`);
   const projects = listProjects();
   console.log(`Layer 2:   ${projects.length ? projects.map((p) => p.name).join(", ") : "⚠️ 没有 YAML sheet — 放进 campaign-assets/knowledge/"} (丢 YAML 进去自动生效)`);
+
+  try {
+    await ensureAiReplyContextFields();
+    console.log("Learning:  full Conversation Context -> Notion AI Reply Log");
+  } catch (error) {
+    console.log(`Learning context setup failed: ${error.message} — replies still work, Queue will use WhatsApp fallback.`);
+  }
 
   if (!skipWebhookSetup) {
     try {

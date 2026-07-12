@@ -171,7 +171,7 @@ export function buildPrompt({ event, classified, cache, lead, projectCtx = null 
   const golden = (cache?.golden?.conversations ?? [])
     .filter((g) => !projectCtx?.projectName || !g.project || projectKeyNorm(g.project) === projectKeyNorm(projectCtx.projectName))
     .slice(0, 5)
-    .map((g) => `### ${g.title} (${g.scenario ?? "-"} -> ${g.outcome ?? "-"})\n${g.text}\n为什么有效: ${g.why}`)
+    .map((g) => `### ${g.title} (${g.scenario ?? "-"} -> ${g.outcome ?? "-"})\n${String(g.text || "").slice(-6000)}\n为什么有效: ${g.why}`)
     .join("\n\n");
 
   const projectName = projectCtx?.projectName ?? null;

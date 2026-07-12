@@ -7,7 +7,9 @@
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
   .wrap { max-width: 1440px; }
-  .nav { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .brain-tabs { display:flex; gap:6px; padding:5px; margin-bottom:16px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); width:max-content; max-width:100%; }
+  .brain-tab { display:block; padding:9px 14px; border-radius:6px; color:var(--muted); text-decoration:none; font-weight:700; }
+  .brain-tab.active { color:var(--text); background:var(--panel-2); box-shadow:inset 0 0 0 1px var(--line); }
   .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .rules-tools {
     display:grid;
@@ -101,12 +103,12 @@
       <h1>Bot Rules</h1>
       <div class="sub">可视化编辑大脑关键词 · Warm / Cold / STOP / Spam trigger</div>
     </div>
-    <div class="nav">
-      <a class="btn" href="/" style="text-decoration:none">Campaign Console</a>
-      <a class="btn" href="/conversations" style="text-decoration:none">Customer Inbox</a>
-      <a class="btn" href="/follow-up" style="text-decoration:none">Follow-Up &amp; Appointments</a>
-    </div>
   </header>
+
+  <nav class="brain-tabs" aria-label="Brain sections">
+    <a class="brain-tab active" href="/bot-rules">Rules</a>
+    <a class="brain-tab" href="/brain-learning">Learning Queue</a>
+  </nav>
 
   <section class="card rules-tools">
     <h2>Rules</h2>
