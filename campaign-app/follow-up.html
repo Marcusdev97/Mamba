@@ -97,7 +97,7 @@
     <h2>Queue</h2>
     <div class="stats">
       <div class="stat" data-bucket=""><span>Follow-Up</span><b id="stTotal">0</b></div>
-      <div class="stat" data-bucket="today"><span>Today</span><b id="stToday">0</b></div>
+      <div class="stat" data-bucket="today"><span>Today Queue</span><b id="stToday">0</b></div>
       <div class="stat" data-bucket="overdue"><span>Overdue</span><b id="stOverdue">0</b></div>
       <div class="stat" data-bucket="hot"><span>Hot</span><b id="stHot">0</b></div>
       <div class="stat" data-bucket="" data-appointment-stage="Confirmed"><span>Confirmed</span><b id="stAppointment">0</b></div>
@@ -158,6 +158,7 @@
           <div>Status</div><div id="dStatus">-</div>
           <div>AI Category</div><div id="dCategory">-</div>
           <div>Next Action</div><div id="dNextAction">-</div>
+          <div>Next Follow-Up</div><div id="dFollowUpAt">-</div>
           <div>Last Flow</div><div id="dLastFlow">-</div>
           <div>Next Flow</div><div id="dNextFlow">-</div>
           <div>Sender</div><div id="dSender">-</div>
@@ -193,7 +194,7 @@
             <label class="fld"><span>Appointment Time</span><input id="appointmentTime" type="text" placeholder="例如 2:00 PM" /></label>
             <label class="fld"><span>Place</span><input id="appointmentPlace" type="text" placeholder="Showroom / Gallery" /></label>
             <label class="fld"><span>Assigned Sales</span><input id="assignedSales" type="text" placeholder="Agent name" /></label>
-            <label class="fld"><span>Next Follow-Up</span><input id="followUpAt" type="datetime-local" /></label>
+            <label class="fld"><span>Reschedule (blank = tomorrow 10:00)</span><input id="followUpAt" type="datetime-local" /></label>
           </div>
           <button class="btn primary" id="saveAppointment" style="margin-top:10px">保存 Appointment Stage</button>
         </div>
@@ -347,6 +348,7 @@ function selectRecord(id) {
   $("dStatus").textContent = record.status || "-";
   $("dCategory").textContent = record.aiCategory || "-";
   $("dNextAction").textContent = record.nextAction || "-";
+  $("dFollowUpAt").textContent = fmt(record.followUpAt);
   $("dLastFlow").textContent = record.lastFlowSent || "-";
   $("dNextFlow").textContent = record.nextFlow || "-";
   $("dSender").textContent = record.senderInstance || "-";
@@ -362,7 +364,7 @@ function selectRecord(id) {
   $("appointmentTime").value = record.appointmentTime || "";
   $("appointmentPlace").value = record.appointmentPlace || "";
   $("assignedSales").value = record.assignedSales || "";
-  $("followUpAt").value = record.followUpAt ? String(record.followUpAt).slice(0, 16) : "";
+  $("followUpAt").value = "";
   $("note").value = record.salesNotes || "";
 }
 
@@ -396,7 +398,7 @@ async function load() {
     document.querySelectorAll(".stage").forEach((item) => item.classList.toggle("active", item.dataset.stage === appointmentStage));
     setOptions($("project"), data.projects || []);
     records = data.records || [];
-    $("meta").textContent = `${data.count || records.length} follow-up clients · only replied/actionable · source: ${data.source} · synced: ${data.syncedAt || "-"}`;
+    $("meta").textContent = `${data.count || records.length} active follow-up clients · Today includes overdue and unscheduled work · source: ${data.source} · synced: ${data.syncedAt || "-"}`;
     renderRows();
   } catch (error) {
     $("err").textContent = error.message;

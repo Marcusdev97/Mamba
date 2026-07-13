@@ -121,6 +121,11 @@ function isStop(record) {
   return record.stopFlag || ["Stop", "Not Interested", "Do Not Contact"].includes(record.status);
 }
 
+function isCompleted(record) {
+  return ["Done", "Completed", "Closed"].includes(clean(record.nextAction))
+    || ["Done", "Completed", "Closed"].includes(clean(record.status));
+}
+
 function isHot(record) {
   const values = [record.status, record.aiCategory, record.nextAction].join(" ").toLowerCase();
   return /warm|appointment|price|call|send price|interested|green|book/.test(values) && !isStop(record);
@@ -149,32 +154,45 @@ function hasReply(record) {
 function hasHumanAction(record) {
   const nextAction = clean(record.nextAction);
   const category = clean(record.aiCategory);
-  return Boolean(nextAction && !["-", "None"].includes(nextAction))
+  return Boolean(nextAction && !["-", "None", "No Action", "Done", "Stop"].includes(nextAction))
     || Boolean(category && !["-", "Unknown"].includes(category))
     || Boolean(record.followUpAt)
     || isAppointment(record);
 }
 
 function isActionableLead(record) {
-  return hasReply(record) || hasHumanAction(record) || isStop(record);
+  return !isCompleted(record) && (hasReply(record) || hasHumanAction(record) || isStop(record));
+}
+
+function effectiveFollowUpAt(record) {
+  if (record.followUpAt) return record.followUpAt;
+  if (isAppointment(record) && record.appointmentDate) return record.appointmentDate;
+  return null;
 }
 
 function isToday(record, today) {
-  return record.followUpAt && dateOnlyKL(record.followUpAt) === today && !isStop(record);
+  if (isStop(record) || isCompleted(record)) return false;
+  const dueAt = effectiveFollowUpAt(record);
+  // An actionable customer without a date must stay visible until an agent
+  // handles the task and schedules the next touch.
+  return !dueAt || dateOnlyKL(dueAt) <= today;
 }
 
 function isOverdue(record, today) {
-  return record.followUpAt && dateOnlyKL(record.followUpAt) < today && !isStop(record);
+  const dueAt = effectiveFollowUpAt(record);
+  return Boolean(dueAt) && dateOnlyKL(dueAt) < today && !isStop(record) && !isCompleted(record);
 }
 
 function reasonFor(record, now) {
   if (isStop(record)) return record.stopReason || "Stopped";
-  if (record.followUpAt) {
-    const day = dateOnlyKL(record.followUpAt);
+  const followUpAt = effectiveFollowUpAt(record);
+  if (followUpAt) {
+    const day = dateOnlyKL(followUpAt);
     const today = dateOnlyKL(now);
     if (day < today) return `Overdue follow-up ${day}`;
     if (day === today) return "Follow-up today";
   }
+  if (!followUpAt && !isStop(record) && !isCompleted(record)) return "Needs follow-up today";
   if (record.lastReplyText) return record.aiCategory || record.nextAction || "Customer replied";
   if (hoursSince(record.lastBlastAt || record.firstBlastAt, now) >= 24) return "No reply after blast";
   return record.nextAction || "Review";
@@ -194,20 +212,27 @@ function priorityFor(record, now) {
 function decorate(record, now = Date.now()) {
   const priority = priorityFor(record, now);
   const appointmentStage = appointmentStageFor(record);
+  const today = dateOnlyKL(now);
+  const overdue = isOverdue(record, today);
+  const dueToday = isToday(record, today);
+  const hot = isHot(record);
   return {
     ...record,
     priority,
     appointmentStage,
+    overdue,
+    dueToday,
+    hot,
     reason: reasonFor(record, now),
     bucket: isStop(record)
       ? "stop"
-      : isOverdue(record, dateOnlyKL(now))
+      : overdue
         ? "overdue"
-        : isToday(record, dateOnlyKL(now))
+        : dueToday
           ? "today"
           : isAppointment(record)
             ? "appointment"
-            : isHot(record)
+            : hot
               ? "hot"
               : "later",
   };
@@ -219,10 +244,10 @@ function summarize(records) {
     if (record.appointmentStage) pipeline[record.appointmentStage] += 1;
   }
   return {
-    total: records.length,
-    today: records.filter((record) => record.bucket === "today").length,
-    overdue: records.filter((record) => record.bucket === "overdue").length,
-    hot: records.filter((record) => record.bucket === "hot").length,
+    total: records.filter((record) => record.bucket !== "stop").length,
+    today: records.filter((record) => record.dueToday).length,
+    overdue: records.filter((record) => record.overdue).length,
+    hot: records.filter((record) => record.hot).length,
     appointment: records.filter((record) => record.appointmentStage === "Confirmed").length,
     stop: records.filter((record) => record.bucket === "stop").length,
     appointmentPipeline: pipeline,
@@ -247,7 +272,11 @@ function applyFilters(records, filters) {
   const q = clean(filters.q).toLowerCase();
   const appointmentStage = clean(filters.appointmentStage);
   return records.filter((record) => {
-    if (bucket && record.bucket !== bucket) return false;
+    if (!bucket && record.bucket === "stop") return false;
+    if (bucket === "today" && !record.dueToday) return false;
+    else if (bucket === "overdue" && !record.overdue) return false;
+    else if (bucket === "hot" && !record.hot) return false;
+    else if (bucket && !["today", "overdue", "hot"].includes(bucket) && record.bucket !== bucket) return false;
     if (project && record.project !== project) return false;
     if (appointmentStage && record.appointmentStage !== appointmentStage) return false;
     if (q) {
@@ -268,6 +297,17 @@ const APPOINTMENT_SCHEMA = {
   "Assigned Sales": { rich_text: {} },
   "Sales Notes": { rich_text: {} },
 };
+
+function nextDayAtTenKL(now = new Date()) {
+  const today = dateOnlyKL(now);
+  const date = new Date(`${today}T10:00:00+08:00`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString();
+}
+
+function nextFollowUpValue(body, now) {
+  return clean(body.followUpAt) || nextDayAtTenKL(now);
+}
 
 const APPOINTMENT_SCHEMA_TYPES = {
   "Follow Up At": ["date"],
@@ -292,18 +332,21 @@ async function ensureAppointmentSchema(followUp, database) {
   return followUp.notion("GET", `/databases/${followUp.blastDatabaseId}`);
 }
 
-export function actionPatch(schema, action, body) {
-  const now = new Date().toISOString();
+export function actionPatch(schema, action, body, nowValue = new Date()) {
+  const nowDate = new Date(nowValue);
+  const now = nowDate.toISOString();
   const note = clean(body.note);
   const props = {};
   if (action === "call") {
     props["Next Action"] = choiceValue(schema, "Next Action", "Call");
     props.Status = choiceValue(schema, "Status", "Warm");
     props["AI Summary"] = richText(note || `Follow-up desk: call customer. Updated ${now}`);
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = dateValue(nextFollowUpValue(body, nowDate));
   } else if (action === "send_price") {
     props["Next Action"] = choiceValue(schema, "Next Action", "Send Price");
     props.Status = choiceValue(schema, "Status", "Warm");
     props["AI Summary"] = richText(note || `Follow-up desk: send price details. Updated ${now}`);
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = dateValue(nextFollowUpValue(body, nowDate));
   } else if (action === "book_appointment") {
     props["Next Action"] = choiceValue(schema, "Next Action", "Book Appointment");
     props.Status = choiceValue(schema, "Status", "Appointment");
@@ -332,24 +375,31 @@ export function actionPatch(schema, action, body) {
     if (schema?.["Sequence Status"]) props["Sequence Status"] = choiceValue(schema, "Sequence Status", "Human Takeover");
     props["AI Summary"] = richText(note || `Appointment pipeline: ${stage}. Updated ${now}`);
   } else if (action === "follow_up") {
-    if (!clean(body.followUpAt)) throw httpError(400, "Follow Up 必须选择下一次跟进日期与时间。");
     props["Next Action"] = choiceValue(schema, "Next Action", "Follow Up");
     props.Status = choiceValue(schema, "Status", "Follow Up");
-    if (schema?.["Follow Up At"]) props["Follow Up At"] = dateValue(body.followUpAt);
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = dateValue(nextFollowUpValue(body, nowDate));
     props["AI Summary"] = richText(note || `Follow-up desk: follow up later. Updated ${now}`);
   } else if (action === "done") {
     props["Next Action"] = choiceValue(schema, "Next Action", "Done");
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
     props["AI Summary"] = richText(note || `Follow-up desk: marked done. Updated ${now}`);
   } else if (action === "stop") {
     props.Status = choiceValue(schema, "Status", "Stop");
     props["Next Action"] = choiceValue(schema, "Next Action", "Stop");
     props["Stop Flag"] = { checkbox: true };
     props["Stop Reason"] = richText(note || "Manual stop from Follow-Up Desk");
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
   } else {
     throw httpError(400, "未知 follow-up action。");
   }
   if (schema?.["Reply Checked At"]) props["Reply Checked At"] = { date: { start: now } };
   return props;
+}
+
+export function buildFollowUpDesk(records, now = Date.now()) {
+  const actionable = (records || []).filter(isActionableLead);
+  const decorated = sortFollowUps(actionable.map((record) => decorate(record, now)));
+  return { records: decorated, summary: summarize(decorated) };
 }
 
 export function registerFollowUpRoutes(router) {
@@ -372,15 +422,15 @@ export function registerFollowUpRoutes(router) {
     }
 
     const now = Date.now();
-    const actionable = cache.records.filter(isActionableLead);
-    const decorated = sortFollowUps(actionable.map((record) => decorate(record, now)));
+    const desk = buildFollowUpDesk(cache.records, now);
+    const decorated = desk.records;
     const filtered = applyFilters(decorated, filters);
     const projects = [...new Set(decorated.map((record) => record.project).filter(Boolean))].sort();
     json(res, 200, {
       ok: true,
       source,
       syncedAt: cache.syncedAt || null,
-      summary: summarize(decorated),
+      summary: desk.summary,
       projects,
       count: filtered.length,
       records: filtered.slice(0, 500),

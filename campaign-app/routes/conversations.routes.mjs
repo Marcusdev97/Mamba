@@ -299,6 +299,13 @@ async function latestInboundMessages(conversations, instances, recordsByPhone) {
   return { inbound, historyEvents, instanceErrors };
 }
 
+function shouldScheduleAgentFollowUp(verdict) {
+  const terminal = [verdict?.status, verdict?.nextAction, verdict?.route].join(" ").toLowerCase();
+  return !verdict?.stopFlag
+    && verdict?.route !== "SPAM_IGNORE"
+    && !/not interested|do not contact|stop_dnc/.test(terminal);
+}
+
 function replyProperties(schema, verdict, event, record) {
   const replyCount = Number(record.replyCount || 0) + 1;
   const props = {
@@ -315,6 +322,9 @@ function replyProperties(schema, verdict, event, record) {
   if (verdict.stopFlag) {
     props["Stop Flag"] = { checkbox: true };
     props["Stop Reason"] = richText(`Auto: ${verdict.route}`);
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
+  } else if (shouldScheduleAgentFollowUp(verdict) && schema?.["Follow Up At"]) {
+    props["Follow Up At"] = dateValue(Date.now());
   }
   return props;
 }
@@ -331,6 +341,9 @@ function classificationProperties(schema, verdict) {
   if (verdict.stopFlag) {
     props["Stop Flag"] = { checkbox: true };
     props["Stop Reason"] = richText(`Auto: ${verdict.route}`);
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
+  } else if (shouldScheduleAgentFollowUp(verdict) && schema?.["Follow Up At"]) {
+    props["Follow Up At"] = dateValue(Date.now());
   }
   return props;
 }

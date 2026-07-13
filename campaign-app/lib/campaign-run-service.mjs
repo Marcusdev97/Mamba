@@ -25,6 +25,21 @@ export function createCampaignRunService({
   async function autoAdvanceFlow(runner) {
     if (!blastDatabaseId || !runner?.state?.assignments) return;
     let advanced = 0;
+    let alreadyAdvanced = 0;
+    let skippedSafety = 0;
+    let notFound = 0;
+    let flowMismatch = 0;
+    const sentFlow = flowByLabel(runner.state.flowLabel);
+    if (!sentFlow) throw new Error(`无法识别已发送 Flow: ${runner.state.flowLabel || "(empty)"}`);
+    const nextState = flowStateAfter(sentFlow.key);
+
+    runner.state.advanceDone = false;
+    runner.state.advanceStatus = "RUNNING";
+    runner.state.advanceError = null;
+    runner.state.advanceSummary = null;
+    await runner.saveState();
+    runner.pushLog?.(`正在更新 Notion Flow 状态:${runner.state.flowLabel}…`);
+
     try {
       for (const job of runner.state.assignments) {
         if (!job.part1?.sentAt) continue;
@@ -32,44 +47,85 @@ export function createCampaignRunService({
         if (!phone) continue;
 
         const query = await notion("POST", `/databases/${blastDatabaseId}/query`, {
-          filter: { property: "Phone", phone_number: { equals: phone } },
+          filter: runner.state.project
+            ? { and: [
+                { property: "Phone", phone_number: { equals: phone } },
+                { property: "Project", select: { equals: runner.state.project } },
+              ] }
+            : { property: "Phone", phone_number: { equals: phone } },
           page_size: 1,
         });
         const page = query?.results?.[0];
-        if (!page) continue;
-        if (page.properties?.["Stop Flag"]?.checkbox === true) continue;
-        if (nfSelect(page, "Sequence Status") !== "Running") continue;
+        if (!page) {
+          notFound += 1;
+          continue;
+        }
+        if (page.properties?.["Stop Flag"]?.checkbox === true || nfSelect(page, "Sequence Status") !== "Running") {
+          skippedSafety += 1;
+          continue;
+        }
 
         const currentNext = nfSelect(page, "Next Flow");
-        if (runner.state.flowLabel && currentNext !== runner.state.flowLabel) continue;
-        const sentFlow = flowByLabel(currentNext);
-        if (!sentFlow) continue;
-        const state = flowStateAfter(sentFlow.key);
+        if (currentNext === nextState.nextFlowLabel && nfSelect(page, "Last Flow Sent") === nextState.lastFlowLabel) {
+          alreadyAdvanced += 1;
+          continue;
+        }
+        if (currentNext !== runner.state.flowLabel) {
+          flowMismatch += 1;
+          continue;
+        }
         const props = {
-          "Last Flow Sent": { select: { name: state.lastFlowLabel } },
-          "Next Flow": { select: { name: state.nextFlowLabel } },
-          "Cohort Day": { select: { name: state.cohortDay } },
+          "Last Flow Sent": { select: { name: nextState.lastFlowLabel } },
+          "Next Flow": { select: { name: nextState.nextFlowLabel } },
+          "Cohort Day": { select: { name: nextState.cohortDay } },
           "Last Blast At": { date: { start: job.part2?.sentAt ?? job.part1?.sentAt } },
         };
-        if (state.nextFlowLabel === "Completed") {
+        if (nextState.nextFlowLabel === "Completed") {
           props["Sequence Status"] = { select: { name: "Completed" } };
           props["Flow Completed At"] = { date: { start: new Date().toISOString() } };
           props["Follow Up Due"] = { date: null };
         } else {
-          props["Follow Up Due"] = { date: { start: nfAddDaysKL(state.dueDays) } };
+          props["Follow Up Due"] = { date: { start: nfAddDaysKL(nextState.dueDays) } };
         }
 
         await notion("PATCH", `/pages/${pageId(page.id)}`, { properties: props });
         advanced += 1;
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      runner.state.advanceDone = true;
+      const issueCount = notFound + flowMismatch;
+      runner.state.advanceDone = issueCount === 0;
+      runner.state.advanceStatus = issueCount ? "PARTIAL" : "SUCCEEDED";
+      runner.state.advanceError = issueCount
+        ? `${notFound} 个 Notion row 找不到，${flowMismatch} 个客户的 Next Flow 与本轮不一致。`
+        : null;
+      runner.state.advanceSummary = { advanced, alreadyAdvanced, skippedSafety, notFound, flowMismatch };
       await runner.saveState();
-      runner.pushLog?.(`Flow 状态已自动推进:${advanced} 人进入下一轮。`);
+      if (issueCount) {
+        runner.pushLog?.(`Flow 状态只完成一部分:推进 ${advanced}，已推进 ${alreadyAdvanced}，找不到 ${notFound}，Flow 不一致 ${flowMismatch}。`);
+        await runner.systemLog?.("warn", "flow_advance_partial", "Notion Flow advance completed partially.", {
+          flowLabel: runner.state.flowLabel,
+          ...runner.state.advanceSummary,
+        });
+      } else {
+        runner.pushLog?.(`Flow 状态已自动推进:${advanced} 人进入下一轮${alreadyAdvanced ? `，${alreadyAdvanced} 人之前已推进` : ""}。`);
+        await runner.systemLog?.("info", "flow_advance_succeeded", "Notion Flow advance completed.", {
+          flowLabel: runner.state.flowLabel,
+          ...runner.state.advanceSummary,
+        });
+      }
     } catch (error) {
-      runner.state.advanceDone = true;
+      runner.state.advanceDone = false;
+      runner.state.advanceStatus = "FAILED";
+      runner.state.advanceError = error.message;
+      runner.state.advanceSummary = { advanced, alreadyAdvanced, skippedSafety, notFound, flowMismatch };
       await runner.saveState().catch(() => {});
-      runner.pushLog?.(`自动推进 Flow 出错:${error.message}`);
+      runner.pushLog?.(`自动推进 Flow 失败:${error.message}`);
+      await runner.systemLog?.("error", "flow_advance_failed", "Notion Flow advance failed.", {
+        flowLabel: runner.state.flowLabel,
+        error: error.message,
+        ...runner.state.advanceSummary,
+      });
+      throw error;
     }
   }
 

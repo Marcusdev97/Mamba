@@ -112,6 +112,15 @@ function markNotionSyncWaiting(runner) {
   };
 }
 
+function markFlowAdvanceWaiting(runner) {
+  if (runner?.state?.mode !== "LIVE" || !runner.state.flowLabel) return false;
+  runner.state.advanceDone = false;
+  runner.state.advanceStatus = "WAITING";
+  runner.state.advanceError = null;
+  runner.state.advanceSummary = null;
+  return true;
+}
+
 async function writeCampaignLog(runtime, level, event, message, context = {}) {
   if (!runtime.systemLogs) return;
   try {
@@ -225,13 +234,13 @@ export function registerCampaignRoutes(router) {
       throw httpError(400, `模板安全检查失败: ${error.message}`);
     }
     markNotionSyncWaiting(runner);
+    const autoAdvance = markFlowAdvanceWaiting(runner);
     try {
       await runner.saveState();
     } catch (error) {
       throw httpError(500, `保存 campaign 状态失败: ${error.message}`);
     }
 
-    const autoAdvance = body.autoAdvance === true && runner.state.mode === "LIVE";
     runner.run()
       .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
       .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
@@ -254,9 +263,12 @@ export function registerCampaignRoutes(router) {
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
 
     markNotionSyncWaiting(runner);
+    const autoAdvance = markFlowAdvanceWaiting(runner);
     await runner.saveState();
 
     runner.run()
+      .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
+      .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
       .then(() => campaign.autoNotionUpload(runner))
       .catch(async (error) => {
         runner.pushLog(`运行出错：${error.message}`);
@@ -285,9 +297,9 @@ export function registerCampaignRoutes(router) {
       queued,
     });
     markNotionSyncWaiting(runner);
+    const autoAdvance = markFlowAdvanceWaiting(runner);
     await runner.saveState();
 
-    const autoAdvance = body.autoAdvance === true && runner.state.mode === "LIVE";
     runner.run()
       .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
       .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))

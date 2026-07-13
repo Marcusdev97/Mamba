@@ -64,7 +64,13 @@ const stopRequestsPath = path.join(brainDir, "stop_requests.jsonl");
 
 const env = await loadEnv();
 const api = makeApi(env);
-const tg = makeTelegram(env);
+// Customer alerts and approval drafts belong in the Telegram Inbox. Keep the
+// legacy chat as a fallback for older single-chat installations only.
+const tg = makeTelegram({
+  ...env,
+  TELEGRAM_BOT_TOKEN: env.TELEGRAM_HUB_BOT_TOKEN || env.TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID: env.TELEGRAM_INBOX_CHAT_ID || env.TELEGRAM_CHAT_ID,
+});
 
 // ---------- tiny persistence ----------
 

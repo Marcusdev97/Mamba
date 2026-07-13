@@ -94,6 +94,10 @@ function matchAlertGroups(text, cfg) {
   return cfg.groups.filter((g) => g.keywords.some((k) => lower.includes(k))).map((g) => g.label);
 }
 async function sendKeywordAlert(event, labels) {
+  // The Hub already forwards every inbound customer message to the Inbox.
+  // Sending the same reply through the legacy chat would leak customer
+  // content into the Ops/System channel and create a duplicate notification.
+  if (hub.enabled) return;
   if (!tg.enabled || !tg.hasChatId || !labels.length) return;
   const who = event.name && event.name !== "Unknown" ? `${event.name} (${event.phone})` : event.phone;
   const message = [

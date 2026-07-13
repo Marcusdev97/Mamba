@@ -7,6 +7,7 @@ const schema = {
   "AI Category": { type: "select" },
   "Next Action": { type: "select" },
   "Appointment Status": { type: "select" },
+  "Follow Up At": { type: "date" },
   Priority: { type: "select" },
 };
 
@@ -29,6 +30,7 @@ assert.equal(rejected["Next Action"].select.name, "No Action");
 assert.equal(rejected["Reply Count"].number, 2);
 assert.equal(rejected["Reply Checked At"].date.start, "2026-07-11T02:00:01.000Z");
 assert.equal(rejected["Stop Flag"], undefined);
+assert.equal(rejected["Follow Up At"], undefined);
 
 const stopped = buildLeadReplyProperties(schema, {
   receivedAt: "2026-07-11T02:00:00.000Z",
@@ -45,6 +47,7 @@ const stopped = buildLeadReplyProperties(schema, {
 assert.equal(stopped["Sequence Status"].select.name, "Stopped");
 assert.equal(stopped["Stop Flag"].checkbox, true);
 assert.match(stopped["Stop Reason"].rich_text[0].text.content, /STOP_DNC/);
+assert.equal(stopped["Follow Up At"].date, null);
 
 const viewing = buildLeadReplyProperties(schema, {
   receivedAt: "2026-07-11T03:00:00.000Z",
@@ -58,6 +61,7 @@ const viewing = buildLeadReplyProperties(schema, {
 }, 1, "2026-07-11T03:00:01.000Z");
 assert.equal(viewing["Appointment Status"].select.name, "Viewing Interest");
 assert.equal(viewing.Priority.select.name, "HIGH");
+assert.equal(viewing["Follow Up At"].date.start, "2026-07-11T03:00:01.000Z");
 
 const crossPc = new NotionSync({ token: "test", config: { databases: {}, dataSources: {} } });
 crossPc.state = { leadPages: {}, syncedReplyIds: {}, creditedResponses: {} };

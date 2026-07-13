@@ -1063,6 +1063,9 @@ export class CampaignRunner {
             templateFlow: this.state.templateFlow ?? null,
             templateProject: this.state.templateProject ?? null,
             advanceDone: this.state.advanceDone ?? false,
+            advanceStatus: this.state.advanceStatus ?? null,
+            advanceError: this.state.advanceError ?? null,
+            advanceSummary: this.state.advanceSummary ?? null,
             notionSync: this.state.notionSync ?? null,
             assignments: this.state.assignments.map((job) => ({
               id: job.id,

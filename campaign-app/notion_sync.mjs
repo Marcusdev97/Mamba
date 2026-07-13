@@ -166,6 +166,13 @@ function sequenceStatusFromReply(event) {
   return event?.sequenceStatus || "Human Takeover";
 }
 
+function shouldScheduleAgentFollowUp(event) {
+  const terminal = [event?.status, event?.nextAction, event?.route].join(" ").toLowerCase();
+  return !event?.stopFlag
+    && event?.route !== "SPAM_IGNORE"
+    && !/not interested|do not contact|stop_dnc/.test(terminal);
+}
+
 export function buildLeadReplyProperties(schema, event, replyCount = 1, checkedAt = new Date().toISOString()) {
   const properties = {
     Status: choice(schema, "Status", leadStatusFromReply(event)),
@@ -183,6 +190,11 @@ export function buildLeadReplyProperties(schema, event, replyCount = 1, checkedA
   if (event?.stopFlag) {
     properties["Stop Flag"] = checkbox(true);
     properties["Stop Reason"] = richText(`Auto: ${event.route || "STOP"}`);
+    if (schema?.["Follow Up At"]) properties["Follow Up At"] = { date: null };
+  } else if (shouldScheduleAgentFollowUp(event) && schema?.["Follow Up At"]) {
+    // Every real inbound reply becomes an agent task immediately. The desk
+    // rolls it forward after each human touch until Done or STOP.
+    properties["Follow Up At"] = dateValue(checkedAt);
   }
   if (event?.route === "VIEWING_REQUEST") {
     if (schema?.["Appointment Status"]) properties["Appointment Status"] = choice(schema, "Appointment Status", "Viewing Interest");

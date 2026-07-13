@@ -482,10 +482,13 @@ async function pollStatus() {
     const running = !!s.running;
     const isFlowRun = !!s.state.flowLabel;   // a picker flow send (has auto-advance)
     const advanceDone = !!s.state.advanceDone; // server says the Notion update finished
+    const advanceStatus = String(s.state.advanceStatus || "").toUpperCase();
+    const advanceProblem = advanceStatus === "FAILED" || advanceStatus === "PARTIAL";
     const recent = log.slice(-10).reverse()
       .map((e) => `<div class="logline"><span class="muted">${esc(hhmmss(e.time))}</span> ${esc(e.message)}</div>`).join("");
     const head = running ? "🟢 发送中"
       : !isFlowRun ? "✅ 完成"
+      : advanceProblem ? `⚠️ Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${esc(s.state.advanceError || "请查看 System Logs")}`
       : advanceDone ? "✅ 已更新完毕,可以继续"
       : "⚪️ Notion 更新中…(正在推进已发的人)";
     const stopBtn = running
@@ -510,6 +513,10 @@ async function pollStatus() {
       if (!isFlowRun || advanceDone) {
         wasRunning = false;
         toast(isFlowRun ? "✅ 已更新完毕,列表已刷新" : "✅ 完成");
+        load();
+      } else if (advanceProblem) {
+        wasRunning = false;
+        toast(`Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${s.state.advanceError || "请查看 System Logs"}`, true);
         load();
       } else if (postDoneChecks < 80) { // wait up to ~4 min (Notion can be slow)
         postDoneChecks += 1;
