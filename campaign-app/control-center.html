@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mamba Control Center</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<script src="/assets/mamba-shell.js" defer></script>
+<style>
+  .cc-wrap { max-width: 1280px; margin: 0 auto; padding: 24px 22px 60px; }
+  .cc-head { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:20px; align-items:start; margin-bottom:18px; }
+  .cc-head h1 { margin:0; font-size:28px; letter-spacing:0; }
+  .cc-head p { margin:4px 0 0; color:var(--muted); }
+  .head-tools { display:grid; gap:9px; }
+  .global-search { position:relative; }
+  .global-search input { height:42px; padding-left:38px; }
+  .global-search::before { content:"⌕"; position:absolute; left:13px; top:7px; color:var(--muted); font-size:21px; z-index:1; }
+  .health-banner { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); background:var(--panel); border-radius:8px; }
+  .health-banner .health-dot { width:11px; height:11px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px var(--green-bg); }
+  .health-banner.warn .health-dot { background:var(--amber); box-shadow:0 0 0 4px var(--amber-bg); }
+  .health-banner strong { display:block; font-size:12.5px; }
+  .health-banner small { display:block; color:var(--muted); font-size:11px; }
+  .kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+  .kpi { min-height:118px; padding:15px 16px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  .kpi-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .kpi-label { color:var(--muted); font-size:12px; }
+  .kpi-code { width:31px; height:31px; display:inline-flex; align-items:center; justify-content:center; border-radius:7px; font-size:9px; font-weight:800; background:var(--panel-2); color:var(--blue); }
+  .kpi.green .kpi-code { color:var(--green); background:var(--green-bg); }
+  .kpi.amber .kpi-code { color:var(--amber); background:var(--amber-bg); }
+  .kpi.purple .kpi-code { color:#b794f6; background:rgba(168,85,247,.16); }
+  .kpi strong { display:block; margin-top:10px; font-size:30px; line-height:1; }
+  .kpi small { display:block; margin-top:9px; color:var(--muted); font-size:11px; }
+  .split { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(330px,.75fr); gap:14px; margin-bottom:14px; }
+  .panel { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:15px 16px; min-width:0; }
+  .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+  .panel-head h2 { margin:0; font-size:14px; text-transform:none; letter-spacing:0; color:var(--text); }
+  .panel-head a { color:var(--green); text-decoration:none; font-size:11.5px; }
+  .queue-list,.health-list,.activity-list { display:grid; }
+  .queue-item,.health-item,.activity-item { min-height:48px; display:grid; align-items:center; border-top:1px solid var(--line); }
+  .queue-item:first-child,.health-item:first-child,.activity-item:first-child { border-top:0; }
+  .queue-item { grid-template-columns:12px minmax(0,1fr) auto 18px; gap:10px; color:var(--text); text-decoration:none; }
+  .signal { width:8px; height:8px; border-radius:50%; background:var(--blue); }
+  .signal.red { background:var(--red); }.signal.amber { background:var(--amber); }.signal.green { background:var(--green); }.signal.purple { background:#a855f7; }
+  .queue-item span:nth-child(2) { font-size:12.5px; }
+  .queue-count { font-weight:700; font-size:12.5px; }
+  .chev { color:var(--faint); font-size:17px; }
+  .health-item { grid-template-columns:minmax(0,1fr) auto; gap:12px; }
+  .health-name { font-size:12.5px; }.health-detail { color:var(--muted); font-size:10.5px; margin-top:2px; }
+  .health-state { display:flex; align-items:center; gap:7px; font-size:10.5px; color:var(--muted); }
+  .health-state i { width:8px; height:8px; border-radius:50%; background:var(--red); }
+  .health-state.ok i { background:var(--green); }
+  .quick-panel { margin-bottom:14px; }
+  .quick-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+  .quick { display:flex; align-items:center; gap:11px; min-height:58px; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:var(--panel-2); color:var(--text); text-decoration:none; }
+  .quick:hover { border-color:var(--line-2); background:var(--panel-3); }
+  .quick.primary { border-color:rgba(37,211,102,.55); background:var(--green-bg); }
+  .quick-code { width:30px; height:30px; display:flex; align-items:center; justify-content:center; border-radius:7px; background:rgba(255,255,255,.04); color:var(--green); font-size:9px; font-weight:800; }
+  .quick b { display:block; font-size:12px; }.quick small { display:block; color:var(--muted); font-size:10px; margin-top:2px; }
+  .bottom-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; }
+  .campaign-empty,.empty { min-height:120px; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; text-align:center; }
+  .campaign-title { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+  .campaign-title h3 { margin:0; font-size:15px; }.campaign-title p { margin:3px 0 0; color:var(--muted); font-size:11px; }
+  .campaign-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:16px 0 12px; }
+  .campaign-stat { padding:9px; background:var(--panel-2); border-radius:7px; }
+  .campaign-stat span { display:block; color:var(--muted); font-size:10px; }.campaign-stat b { display:block; margin-top:3px; font-size:15px; }
+  .campaign-progress { height:7px; border-radius:999px; background:var(--panel-2); overflow:hidden; }
+  .campaign-progress i { display:block; height:100%; background:var(--green); }
+  .activity-item { grid-template-columns:34px minmax(0,1fr) auto; gap:10px; padding:8px 0; }
+  .avatar { width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:var(--blue-bg); color:var(--blue); font-size:10px; font-weight:800; }
+  .activity-main b { display:block; font-size:12px; }.activity-main small { display:block; color:var(--muted); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .activity-meta { text-align:right; }.activity-meta time { display:block; color:var(--faint); font-size:10px; }.activity-meta span { display:inline-block; margin-top:3px; padding:2px 7px; border-radius:999px; font-size:9.5px; background:var(--blue-bg); color:var(--blue); }
+  .activity-meta span.stop { background:var(--red-bg); color:var(--red); }.activity-meta span.appointment { background:rgba(168,85,247,.16); color:#b794f6; }
+  .cache-line { color:var(--muted); font-size:10.5px; margin-top:10px; }
+  .error-text { color:var(--red); }
+  @media (max-width:1050px) { .kpi-grid { grid-template-columns:repeat(2,1fr); } .split,.bottom-grid { grid-template-columns:1fr; } }
+  @media (max-width:720px) { .cc-wrap { padding:16px 12px 48px; } .cc-head { grid-template-columns:1fr; } .cc-head h1 { font-size:23px; } .kpi-grid { gap:8px; } .kpi { min-height:102px; padding:12px; } .kpi strong { font-size:25px; } .quick-grid { grid-template-columns:repeat(2,1fr); } }
+  @media (max-width:440px) { .quick-grid { grid-template-columns:1fr; } .campaign-stats { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+<main class="cc-wrap">
+  <header class="cc-head">
+    <div><h1 id="greeting">Mamba Control Center</h1><p>今天最重要的客户、Campaign 与系统状态都在这里。</p></div>
+    <div class="head-tools">
+      <form class="global-search" id="searchForm"><input id="globalSearch" type="search" placeholder="Search customer name or phone" aria-label="Search customer" /></form>
+      <div class="health-banner" id="healthBanner"><span class="health-dot"></span><div><strong>Checking system status</strong><small>Reading local services...</small></div></div>
+    </div>
+  </header>
+
+  <section class="kpi-grid" aria-label="Today overview">
+    <div class="kpi green"><div class="kpi-top"><span class="kpi-label">今日发送</span><span class="kpi-code">TX</span></div><strong id="todaySent">-</strong><small id="sentNote">From Notion cache</small></div>
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">客户回复</span><span class="kpi-code">RX</span></div><strong id="todayReplies">-</strong><small id="replyNote">Today</small></div>
+    <div class="kpi amber"><div class="kpi-top"><span class="kpi-label">待跟进</span><span class="kpi-code">FU</span></div><strong id="followUps">-</strong><small id="followNote">Agent work queue</small></div>
+    <div class="kpi purple"><div class="kpi-top"><span class="kpi-label">AI 待审核</span><span class="kpi-code">AI</span></div><strong id="aiPending">-</strong><small id="brainNote">Approval queue</small></div>
+  </section>
+
+  <section class="split">
+    <div class="panel"><div class="panel-head"><h2>Today Action Queue</h2><a href="/follow-up">View work desk →</a></div><div class="queue-list" id="queue"><div class="empty">Loading action queue...</div></div></div>
+    <div class="panel"><div class="panel-head"><h2>System Health</h2><a href="/settings">Settings →</a></div><div class="health-list" id="health"><div class="empty">Checking services...</div></div><div class="cache-line" id="cacheLine"></div></div>
+  </section>
+
+  <section class="panel quick-panel">
+    <div class="panel-head"><h2>Quick Actions</h2></div>
+    <div class="quick-grid">
+      <a class="quick primary" href="/send"><span class="quick-code">GO</span><span><b>开始群发</b><small>Campaign Center</small></span></a>
+      <a class="quick" href="/conversations"><span class="quick-code">IN</span><span><b>查看客户回复</b><small>Customer Inbox</small></span></a>
+      <a class="quick" href="/follow-up"><span class="quick-code">FU</span><span><b>建立 Follow-up</b><small>Appointments & tasks</small></span></a>
+      <a class="quick" href="/project-brain"><span class="quick-code">PB</span><span><b>搜索项目</b><small>Project Brain</small></span></a>
+    </div>
+  </section>
+
+  <section class="bottom-grid">
+    <div class="panel"><div class="panel-head"><h2>Current Campaign</h2><a href="/send">Open Campaign →</a></div><div id="campaign"><div class="campaign-empty">No campaign data loaded yet.</div></div></div>
+    <div class="panel"><div class="panel-head"><h2>Recent Customer Activity</h2><a href="/conversations">View inbox →</a></div><div class="activity-list" id="recent"><div class="empty">Loading recent activity...</div></div></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[char]);
+const initials = (name) => String(name || "?").split(/\s+/).slice(0, 2).map((part) => part[0] || "").join("").toUpperCase();
+const relative = (value) => {
+  if (!value) return "";
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 60000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+};
+
+function setGreeting() {
+  const hour = new Date().getHours();
+  const period = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  $("greeting").textContent = `${period}, Marcus`;
+}
+
+function renderQueue(items) {
+  $("queue").innerHTML = items.length ? items.map((item) => `
+    <a class="queue-item" href="${item.href}"><i class="signal ${esc(item.tone)}"></i><span>${esc(item.label)}</span><b class="queue-count">${esc(item.count)}</b><span class="chev">›</span></a>`).join("") : '<div class="empty">No action required right now.</div>';
+}
+
+function renderHealth(items, logs) {
+  $("health").innerHTML = items.map((item) => `
+    <div class="health-item"><div><div class="health-name">${esc(item.label)}</div><div class="health-detail">${esc(item.detail)}</div></div><div class="health-state ${item.ok ? "ok" : ""}"><span>${item.ok ? "Healthy" : "Check"}</span><i></i></div></div>`).join("");
+  const allGood = items.every((item) => item.ok) && !logs.errorsToday;
+  $("healthBanner").classList.toggle("warn", !allGood);
+  $("healthBanner").innerHTML = `<span class="health-dot"></span><div><strong>${allGood ? "System ready" : "System needs attention"}</strong><small>${logs.errorsToday} errors · ${logs.warningsToday} warnings today</small></div>`;
+}
+
+function renderCampaign(campaign) {
+  if (!campaign) {
+    $("campaign").innerHTML = '<div class="campaign-empty">No campaign run has been prepared on this computer.</div>';
+    return;
+  }
+  const percent = campaign.total ? Math.round(campaign.sent / campaign.total * 100) : 0;
+  $("campaign").innerHTML = `
+    <div class="campaign-title"><div><h3>${esc(campaign.project)}</h3><p>${esc(campaign.mode || "")} · ${esc(campaign.instances.join(", ") || "No sender")}</p></div><span class="badge ${campaign.failed ? "b-fail" : campaign.running ? "b-go" : "b-queued"}">${esc(campaign.status)}</span></div>
+    <div class="campaign-stats"><div class="campaign-stat"><span>Total</span><b>${campaign.total}</b></div><div class="campaign-stat"><span>Sent</span><b>${campaign.sent}</b></div><div class="campaign-stat"><span>Failed</span><b>${campaign.failed}</b></div><div class="campaign-stat"><span>Skipped</span><b>${campaign.skipped}</b></div></div>
+    <div class="campaign-progress"><i style="width:${percent}%"></i></div><div class="cache-line">${percent}% complete · updated ${esc(relative(campaign.updatedAt))}</div>`;
+}
+
+function renderRecent(items) {
+  $("recent").innerHTML = items.length ? items.map((item) => `
+    <div class="activity-item"><span class="avatar">${esc(initials(item.name))}</span><div class="activity-main"><b>${esc(item.name)}</b><small>${esc(item.project ? `${item.project} · ${item.detail}` : item.detail)}</small></div><div class="activity-meta"><time>${esc(relative(item.at))}</time><span class="${esc(item.type)}">${esc(item.type)}</span></div></div>`).join("") : '<div class="empty">No recent customer activity in the local cache.</div>';
+}
+
+async function loadDashboard() {
+  try {
+    const response = await fetch("/api/control-center");
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "Unable to load Control Center.");
+    $("todaySent").textContent = data.metrics.todaySent;
+    $("todayReplies").textContent = data.metrics.todayReplies;
+    $("followUps").textContent = data.metrics.followUps;
+    $("aiPending").textContent = data.metrics.aiPending;
+    $("sentNote").textContent = `${data.metrics.totalCustomers} customers in cache`;
+    $("replyNote").textContent = data.metrics.appointments ? `${data.metrics.appointments} active appointments` : "No active appointments";
+    $("followNote").textContent = `${data.metrics.overdue} overdue · ${data.metrics.dueToday} today`;
+    $("brainNote").textContent = `${data.brain.provider} · ${data.brain.activeProjects} active projects`;
+    $("cacheLine").textContent = data.cache.syncedAt ? `Customer cache synced ${relative(data.cache.syncedAt)}${data.cache.stale ? " · refresh recommended" : ""}` : "Customer cache has not been synced.";
+    renderQueue(data.queue || []);
+    renderHealth(data.health || [], data.logs || { errorsToday:0, warningsToday:0 });
+    renderCampaign(data.campaign);
+    renderRecent(data.recent || []);
+  } catch (error) {
+    $("healthBanner").classList.add("warn");
+    $("healthBanner").innerHTML = `<span class="health-dot"></span><div><strong>Dashboard unavailable</strong><small>${esc(error.message)}</small></div>`;
+    $("queue").innerHTML = `<div class="empty error-text">${esc(error.message)}</div>`;
+    $("health").innerHTML = `<div class="empty error-text">${esc(error.message)}</div>`;
+    $("recent").innerHTML = `<div class="empty error-text">${esc(error.message)}</div>`;
+  }
+}
+
+$("searchForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const query = $("globalSearch").value.trim();
+  if (query) window.location.href = `/lookup?q=${encodeURIComponent(query)}`;
+});
+setGreeting();
+loadDashboard();
+setInterval(loadDashboard, 60000);
+</script>
+</body>
+</html>

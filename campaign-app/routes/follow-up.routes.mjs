@@ -11,6 +11,68 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function conversationEntries(followUp, messages, phone) {
+  const seen = new Set();
+  return (messages || []).map((message) => {
+    const messagePhone = followUp.resolvePhone(message);
+    if (messagePhone && messagePhone !== phone) return null;
+    const remote = clean(message?.key?.remoteJid);
+    if (!messagePhone && !remote.startsWith(phone)) return null;
+    const atMs = Number(followUp.messageTime(message) || 0);
+    const at = atMs ? new Date(atMs).toISOString() : "";
+    const id = clean(message?.key?.id) || `${remote}:${at}:${followUp.describeMessage(message)}`;
+    if (seen.has(id)) return null;
+    seen.add(id);
+    return {
+      id,
+      at,
+      direction: message?.key?.fromMe ? "outbound" : "inbound",
+      text: followUp.describeMessage(message),
+    };
+  }).filter((entry) => entry?.text)
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+    .slice(-200);
+}
+
+async function completeConversation(followUp, phone, preferredSender) {
+  const errors = [];
+  if (followUp.api && followUp.openInstances) {
+    const instances = await followUp.openInstances().catch((error) => {
+      errors.push(`读取 WhatsApp connections 失败: ${error.message}`);
+      return [];
+    });
+    const names = [...new Set([
+      clean(preferredSender),
+      ...instances.map((instance) => clean(instance?.name)),
+    ].filter(Boolean))];
+    for (const instanceName of names) {
+      try {
+        const response = await followUp.api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+          method: "POST",
+          body: JSON.stringify({ where: { key: { remoteJid: `${phone}@s.whatsapp.net` } }, limit: 200 }),
+        });
+        const entries = conversationEntries(followUp, followUp.collectMessageObjects(response), phone);
+        if (entries.length) return { source: `whatsapp:${instanceName}`, entries, errors };
+      } catch (error) {
+        errors.push(`${instanceName}: ${error.message}`);
+      }
+    }
+  }
+
+  const local = await followUp.history?.read(phone, { limit: 200 }).catch((error) => {
+    errors.push(`读取本地历史失败: ${error.message}`);
+    return [];
+  }) || [];
+  const entries = local.slice().reverse().map((entry) => ({
+    id: entry.eventKey || entry.messageId || `${entry.at}:${entry.text}`,
+    at: entry.at || entry.savedAt || "",
+    direction: ["outbound", "operator"].includes(entry.direction) ? "outbound" : "inbound",
+    text: entry.text || "[message]",
+    route: entry.route || entry.aiCategory || entry.status || "",
+  }));
+  return { source: entries.length ? "local-history" : "none", entries, errors };
+}
+
 function pageId(id) {
   return String(id || "").replace(/[^a-fA-F0-9]/g, "");
 }
@@ -323,6 +385,16 @@ export function registerFollowUpRoutes(router) {
       count: filtered.length,
       records: filtered.slice(0, 500),
     });
+  });
+
+  router.get("/api/follow-up/conversation", async (req, res, runtime) => {
+    const followUp = requireFollowUp(runtime);
+    const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
+    const phone = followUp.normalizePhone(url.searchParams.get("phone"));
+    const sender = clean(url.searchParams.get("sender"));
+    if (!phone) throw httpError(400, "缺少有效客户电话号码。");
+    const result = await completeConversation(followUp, phone, sender);
+    json(res, 200, { ok: true, phone, ...result });
   });
 
   router.post("/api/follow-up/action", async (req, res, runtime) => {

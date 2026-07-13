@@ -6,19 +6,13 @@
 <title>Mamba Flow Map</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
-  body {
-    background:
-      radial-gradient(circle at 52% 28%, rgba(37,211,102,.13), transparent 34%),
-      radial-gradient(circle at 80% 42%, rgba(133,92,255,.12), transparent 32%),
-      radial-gradient(circle at 22% 48%, rgba(74,158,255,.10), transparent 28%),
-      var(--bg);
-  }
+  body { background: var(--bg); }
   .shell {
     max-width: 1480px;
     min-height: calc(100vh - 16px);
     margin: 8px auto;
     border: 1px solid rgba(255,255,255,.08);
-    border-radius: 18px;
+    border-radius: 8px;
     overflow: hidden;
     background: rgba(10,13,17,.82);
     box-shadow: 0 22px 70px rgba(0,0,0,.38);
@@ -33,8 +27,7 @@
   }
   h1 { margin: 0; font-size: 30px; letter-spacing: -.2px; }
   .sub { color: var(--muted); margin-top: 4px; }
-  .nav { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-  .nav-pill, .static-pill {
+  .static-pill {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -46,7 +39,7 @@
     color: var(--muted);
     font-weight: 700;
   }
-  .nav-pill.primary, .static-pill.primary {
+  .static-pill.primary {
     color: var(--green);
     border-color: rgba(37,211,102,.32);
     background: rgba(37,211,102,.10);
@@ -413,7 +406,7 @@
   @media (max-width: 900px) {
     .shell { margin:0; border-radius:0; }
     .content { padding:20px; }
-    .topbar, .nav { justify-content:flex-start; }
+    .topbar { justify-content:flex-start; }
     .topbar { flex-direction:column; }
     .status-strip { grid-template-columns:1fr 1fr; }
     .status-cell { border-bottom:1px solid rgba(255,255,255,.08); }
@@ -426,6 +419,7 @@
     .brain-orb { width:210px; height:210px; }
   }
 </style>
+<script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
 <div class="shell">
@@ -433,19 +427,14 @@
     <div class="topbar">
       <div>
         <h1>Mamba Flow Map</h1>
-        <div class="sub">一眼看懂系统怎么跑: 群发 → 对话 → Brain 判断 → 通知 Notion</div>
-      </div>
-      <div class="nav">
-        <span class="nav-pill">Campaign Console</span>
-        <span class="nav-pill">Bot Rules</span>
-        <span class="nav-pill primary">Customer Desk</span>
+        <div class="sub">流程示意: 群发 → 对话 → Rule / AI 判断 → 更新 Notion → 人工跟进</div>
       </div>
     </div>
 
     <section class="status-strip">
       <div class="status-cell run">
-        <div class="pulse">系统运行中</div>
-        <b>Flow 1 / Next Flow ready</b>
+        <div class="pulse">Mamba 工作流程</div>
+        <b>Flow 1 → Reply → Next Flow</b>
         <div class="wave"></div>
       </div>
       <div class="status-cell"><span>发送入口</span><b><i class="status-emoji">📣</i>Blasting</b></div>
@@ -488,7 +477,7 @@
 
       <article class="brain-card">
         <div class="node-head" style="justify-content:center"><div class="node-no">03</div><h3>Mamba Brain</h3></div>
-        <div class="sub">AI 决策中枢</div>
+        <div class="sub">Rule / AI 判断中枢</div>
         <div class="brain-orb"><div class="brain-emoji">🧠</div></div>
         <div class="trigger">✓ Trigger matched</div>
         <div class="tags">

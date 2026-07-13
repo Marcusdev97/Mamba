@@ -136,7 +136,9 @@ export function registerTemplatesRoutes(router) {
       // Fall back to existing rows below.
     }
     if (!projects.length) projects = all.map((page) => templatesSvc.nfSelect(page, "Project")).filter(Boolean);
-    projects = [...new Set(projects)].sort();
+    projects = [...new Set(projects)]
+      .filter((name) => !/^mid\s*valley$/i.test(String(name || "").trim()))
+      .sort();
     const project = projectQ || templatesSvc.resolveTemplateProject(templatesSvc.notionConfig?.project) || projects[0] || "";
 
     const items = [];

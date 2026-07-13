@@ -4,6 +4,7 @@ import { json, text } from "../lib/http.mjs";
 
 const HTML_ROUTES = {
   "/": "console.html",
+  "/control-center": "control-center.html",
   "/next-flow": "next-flow.html",
   "/templates": "templates.html",
   "/lookup": "lookup.html",
@@ -17,6 +18,7 @@ const HTML_ROUTES = {
   "/knowledge": "knowledge.html",
   "/project-brain": "project-brain.html",
   "/send": "send.html",
+  "/campaign-todo": "campaign-todo.html",
 };
 
 async function serveHtml(res, appDir, filename) {

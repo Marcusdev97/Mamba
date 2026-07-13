@@ -58,6 +58,7 @@
   .err { color: #fca5a5; margin-top: 8px; }
   .muted { color: #94a3b8; }
 </style>
+<script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -193,6 +194,8 @@ async function search() {
 $("btnSync").onclick = doSync;
 $("btn").onclick = search;
 $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+const initialQuery = new URLSearchParams(window.location.search).get("q") || "";
+if (initialQuery) { $("q").value = initialQuery; search(); }
 const drop = $("drop"), fileInput = $("file");
 drop.onclick = () => fileInput.click();
 fileInput.onchange = () => { if (fileInput.files[0]) matchFile(fileInput.files[0]); };

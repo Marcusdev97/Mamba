@@ -69,6 +69,7 @@
   .rep { padding: 3px 0; font-size: 13px; }
   .rep.red { color: #f87171; } .rep.green { color: #4ade80; } .rep.grey { color: #94a3b8; }
 </style>
+<script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -114,8 +115,8 @@
     <span class="muted">本批只发前</span>
     <input id="limitN" class="tinp" placeholder="全部" style="width:64px" title="本批只发前几个(按每日量),留空=全部选中的">
     <span class="muted">个</span>
-    <button onclick="startBlast('TEST')">🧪 测试(发给自己)</button>
-    <button class="primary" onclick="startBlast('LIVE')">🚀 开始发 (LIVE)</button>
+    <button id="btnNextTest" onclick="startBlast('TEST')">🧪 测试(发给自己)</button>
+    <button id="btnNextLive" class="primary" onclick="startBlast('LIVE')" disabled>🚀 开始发 (LIVE)</button>
   </div>
 </div></div>
 
@@ -166,6 +167,7 @@ let ALL = [];          // all due leads from Notion
 let PROJECTS = [];      // console projects [{id,name}]
 let PROJECT_ALIAS = {}; // lead-project -> template/console project (e.g. Gen Starz -> Gen Starz)
 let currentProject = "";
+let REPLY_SAFETY_OK = false;
 
 // Which Cohort Day's templates to send for each Next Flow (mirrors FLOW_SEQUENCE).
 // Flow 5 / 9 / 10 are conditional and not auto-mapped.
@@ -368,6 +370,9 @@ async function previewGroup(flow) {
 }
 
 async function startBlast(mode) {
+  if (mode === "LIVE" && !REPLY_SAFETY_OK) {
+    return toast("回复检查已过期。先按 Refresh + Check WhatsApp 深度扫描，确认没有新回复后才能 LIVE。", true);
+  }
   const wanted = PROJECT_ALIAS[currentProject] || currentProject;
   const proj = PROJECTS.find((p) => p.name === wanted);
   if (!proj) return toast("Console 里找不到对应 project:" + currentProject, true);
@@ -560,6 +565,12 @@ async function load(manualCheck = false) {
     const sp = document.getElementById("scanPanel");
     const skipped = data.skipped || [];
     const check = data.whatsappCheck || {};
+    REPLY_SAFETY_OK = check.safeToSend === true;
+    const liveButton = document.getElementById("btnNextLive");
+    if (liveButton) {
+      liveButton.disabled = !REPLY_SAFETY_OK;
+      liveButton.title = REPLY_SAFETY_OK ? "回复检查有效，可以发送" : "先完成最新 WhatsApp 回复检查";
+    }
     const checkTime = check.checkedAt
       ? new Date(check.checkedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       : "";
@@ -570,10 +581,11 @@ async function load(manualCheck = false) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,深度扫描没跑成</div>' +
         '<div style="color:#94a3b8;font-size:13px;margin-top:4px">名单里可能混着已回复的客户。先去 Settings / Phone Setup 把引擎带起来,再扫一次。</div>';
-    } else if (check.scanSource === "tracker" && !check.trackerUpdatedAt && (data.leads || []).length) {
+    } else if (!check.safeToSend && (data.leads || []).length) {
       sp.style.display = "";
-      sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ 实时追踪从来没跑过 — 无法确认这批人最近有没有回复</div>' +
-        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">保持「Sales Brain」运行,Reply Intake 会在后台自动记录;也可以点上面「深度扫描 WhatsApp」直接查一次再发。发送时 runner 还有 7 天回复检查兜底,但先扫最稳。</div>';
+      sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ 回复检查已过期 — LIVE 已锁定</div>' +
+        '<div style="color:#94a3b8;font-size:13px;margin-top:4px">Tracker ' + (check.trackerUpdatedAt ? '最后更新于 ' + esc(new Date(check.trackerUpdatedAt).toLocaleString("en-GB", { hour12:false })) : '从未成功更新') +
+        '。安全时限是 ' + esc(check.maxAgeMinutes || 10) + ' 分钟。请按「Refresh + Check WhatsApp」完成深度扫描后再发。</div>';
     } else if ((check.errors || []).length) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead" style="color:#f87171">⚠️ WhatsApp 深度检查不完整</div>' +

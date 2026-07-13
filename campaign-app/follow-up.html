@@ -38,6 +38,16 @@
   .kv { display:grid; grid-template-columns:150px 1fr; gap:8px 12px; margin-top:14px; }
   .kv div:nth-child(odd) { color:var(--muted); }
   .replybox { margin-top:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:12px; white-space:pre-wrap; word-break:break-word; min-height:110px; }
+  .conversation { margin-top:16px; padding-top:16px; border-top:1px solid var(--line); }
+  .conversation-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .conversation-head h3 { margin:0; font-size:14px; }
+  .conversation-source { color:var(--muted); font-size:11px; margin-top:3px; }
+  .conversation-list { display:flex; flex-direction:column; gap:8px; max-height:420px; overflow:auto; margin-top:10px; padding:2px; }
+  .message { width:min(86%, 440px); padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:var(--panel-2); }
+  .message.outbound { align-self:flex-end; border-color:rgba(37,211,102,.3); background:var(--green-bg); }
+  .message.inbound { align-self:flex-start; }
+  .message-text { white-space:pre-wrap; word-break:break-word; }
+  .message-meta { display:flex; justify-content:space-between; gap:8px; color:var(--muted); font-size:10px; margin-top:5px; }
   .actionbar { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
   .note { margin-top:12px; }
   .note textarea { min-height:76px; resize:vertical; }
@@ -67,6 +77,7 @@
     .appointment-grid .wide { grid-column:auto; }
   }
 </style>
+<script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -156,6 +167,13 @@
           <div>Assigned Sales</div><div id="dAssignedSales">-</div>
         </div>
         <div class="replybox" id="dReply"></div>
+        <div class="conversation">
+          <div class="conversation-head">
+            <div><h3>Complete Conversation</h3><div class="conversation-source" id="conversationSource">选择客户后自动读取 WhatsApp。</div></div>
+            <button class="btn sm" id="conversationRefresh" type="button">刷新聊天</button>
+          </div>
+          <div class="conversation-list" id="conversationList"><div class="mutedline">还没有读取聊天。</div></div>
+        </div>
         <div class="note">
           <label class="fld"><span>Sales Note / Reason</span><textarea id="note" placeholder="例: 客户问月供，先发 price 再 call"></textarea></label>
         </div>
@@ -231,6 +249,42 @@ function fmtDate(value) {
   return date.toLocaleDateString("en-GB", { day:"2-digit", month:"2-digit", year:"numeric" });
 }
 
+function renderConversation(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  $("conversationList").innerHTML = list.length ? list.map((entry) => {
+    const direction = ["outbound", "operator"].includes(entry.direction) ? "outbound" : "inbound";
+    return `<div class="message ${direction}">
+      <div class="message-text">${esc(entry.text || "[message]")}</div>
+      <div class="message-meta"><span>${direction === "outbound" ? "Sales" : "Customer"}</span><span>${esc(fmt(entry.at || entry.savedAt))}</span></div>
+    </div>`;
+  }).join("") : '<div class="mutedline">目前没有找到聊天记录。请确认负责这个客户的 WhatsApp connection 已经 OPEN。</div>';
+  $("conversationList").scrollTop = $("conversationList").scrollHeight;
+}
+
+async function loadConversation(record = records.find((item) => item.id === selectedId)) {
+  if (!record?.phone) {
+    renderConversation([]);
+    return;
+  }
+  const requestId = record.id;
+  $("conversationList").innerHTML = '<div class="mutedline">正在从 WhatsApp 读取完整聊天...</div>';
+  $("conversationSource").textContent = "读取中...";
+  try {
+    const query = new URLSearchParams({ phone: record.phone, sender: record.senderInstance || "" });
+    const res = await fetch("/api/follow-up/conversation?" + query.toString());
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Conversation load failed");
+    if (requestId !== selectedId) return;
+    renderConversation(data.entries || []);
+    const source = String(data.source || "none").replace("whatsapp:", "WhatsApp · ");
+    $("conversationSource").textContent = `${source} · ${data.entries?.length || 0} messages${data.errors?.length ? ` · ${data.errors.length} connection warning` : ""}`;
+  } catch (error) {
+    if (requestId !== selectedId) return;
+    $("conversationSource").textContent = "读取失败";
+    $("conversationList").innerHTML = `<div class="err">${esc(error.message)}</div>`;
+  }
+}
+
 function setOptions(select, items) {
   const current = select.value;
   select.innerHTML = '<option value="">All</option>' + items.map((item) => `<option value="${esc(item)}">${esc(item)}</option>`).join("");
@@ -301,6 +355,7 @@ function selectRecord(id) {
   $("dAppointmentPlace").textContent = record.appointmentPlace || "-";
   $("dAssignedSales").textContent = record.assignedSales || "-";
   $("dReply").textContent = record.lastReplyText || record.aiSummary || "没有 latest reply。";
+  loadConversation(record);
   $("dNotion").href = record.url || "#";
   $("appointmentStatus").value = record.appointmentStage || "Viewing Interest";
   $("appointmentDate").value = record.appointmentDate ? String(record.appointmentDate).slice(0, 10) : "";
@@ -418,6 +473,7 @@ document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", () => runAction(button.dataset.action));
 });
 $("refresh").addEventListener("click", load);
+$("conversationRefresh").addEventListener("click", () => loadConversation());
 $("saveAppointment").addEventListener("click", () => runAction("save_appointment"));
 $("syncCache").addEventListener("click", syncCache);
 $("project").addEventListener("change", load);

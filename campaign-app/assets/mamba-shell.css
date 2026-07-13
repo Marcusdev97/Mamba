@@ -1,0 +1,121 @@
+.mamba-shell {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 228px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: #101419;
+  border-right: 1px solid var(--line);
+  color: var(--text);
+  transition: width var(--t-med) var(--ease), transform var(--t-med) var(--ease);
+}
+.mamba-shell-brand {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.mamba-shell-mark { min-width: 0; }
+.mamba-shell-mark strong { display: block; font-size: 16px; letter-spacing: .4px; }
+.mamba-shell-mark small { display: block; color: var(--green); font-size: 10px; text-transform: uppercase; letter-spacing: .8px; }
+.mamba-shell-collapse {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 22px/1 var(--font-sans);
+  cursor: pointer;
+}
+.mamba-shell-collapse:hover { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+.mamba-shell-scroll { flex: 1; overflow-y: auto; padding: 10px; }
+.mamba-shell-group { margin-bottom: 14px; }
+.mamba-shell-group-title {
+  padding: 0 9px 5px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+}
+.mamba-shell-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.mamba-shell-link:hover { color: var(--text); background: var(--panel-2); }
+.mamba-shell-link.active { color: var(--text); background: var(--green-bg); border-color: rgba(37,211,102,.28); }
+.mamba-shell-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 23px;
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .3px;
+}
+.mamba-shell-link.active .mamba-shell-icon { color: var(--green); background: rgba(37,211,102,.12); }
+.mamba-shell-footer { padding: 12px 16px; border-top: 1px solid var(--line); }
+.mamba-shell-footer strong { display: block; font-size: 12.5px; }
+.mamba-shell-footer small { color: var(--muted); font-size: 10.5px; }
+.mamba-mobile-bar { display: none; }
+body.mamba-has-shell { padding-left: 228px; transition: padding-left var(--t-med) var(--ease); }
+body.mamba-shell-collapsed { padding-left: 72px; }
+body.mamba-shell-collapsed .mamba-shell { width: 72px; }
+body.mamba-shell-collapsed .mamba-shell-mark,
+body.mamba-shell-collapsed .mamba-shell-group-title,
+body.mamba-shell-collapsed .mamba-shell-link-label,
+body.mamba-shell-collapsed .mamba-shell-footer { display: none; }
+body.mamba-shell-collapsed .mamba-shell-brand { justify-content: center; padding-inline: 8px; }
+body.mamba-shell-collapsed .mamba-shell-link { justify-content: center; padding-inline: 6px; }
+body.mamba-shell-collapsed .mamba-shell-icon { width: 30px; height: 30px; flex-basis: 30px; }
+
+@media (max-width: 900px) {
+  body.mamba-has-shell,
+  body.mamba-shell-collapsed { padding-left: 0; padding-top: 52px; }
+  .mamba-shell,
+  body.mamba-shell-collapsed .mamba-shell { width: min(82vw, 280px); transform: translateX(-102%); box-shadow: var(--shadow-3); }
+  body.mamba-shell-open .mamba-shell { transform: translateX(0); }
+  body.mamba-shell-collapsed .mamba-shell-mark,
+  body.mamba-shell-collapsed .mamba-shell-group-title,
+  body.mamba-shell-collapsed .mamba-shell-link-label,
+  body.mamba-shell-collapsed .mamba-shell-footer { display: block; }
+  body.mamba-shell-collapsed .mamba-shell-brand { justify-content: space-between; padding-inline: 16px; }
+  body.mamba-shell-collapsed .mamba-shell-link { justify-content: flex-start; padding-inline: 10px; }
+  .mamba-mobile-bar {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 999;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    background: #101419;
+    border-bottom: 1px solid var(--line);
+  }
+  .mamba-mobile-bar button { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); font-size: 19px; }
+  .mamba-mobile-bar strong { font-size: 13px; }
+  .mamba-shell-collapse { font-size: 0; }
+  .mamba-shell-collapse::after { content: "Close"; font-size: 10px; }
+}

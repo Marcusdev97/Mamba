@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Next Campaign · TODO · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .wrap { max-width:1180px; }
+  .status-line { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:8px; }
+  .status { display:inline-flex; align-items:center; min-height:28px; padding:4px 9px; border:1px solid rgba(245,179,66,.35); border-radius:999px; color:var(--amber); background:var(--amber-bg); font-size:12px; font-weight:800; }
+  .summary { color:var(--muted); }
+  .milestones { display:grid; gap:1px; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--line); }
+  .milestone { display:grid; grid-template-columns:34px minmax(180px,.7fr) minmax(260px,1.3fr) 130px; gap:14px; align-items:center; padding:14px 16px; background:var(--panel); }
+  .milestone-no { width:28px; height:28px; display:grid; place-items:center; border-radius:6px; background:var(--panel-2); color:var(--muted); font-weight:800; }
+  .milestone b { display:block; }
+  .milestone p { margin:3px 0 0; color:var(--muted); font-size:13px; }
+  .state { justify-self:end; color:var(--muted); font-size:12px; font-weight:750; }
+  .state.ready { color:var(--green); }
+  .decision-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .decision { padding:14px; border-left:3px solid var(--blue); background:var(--panel-2); }
+  .decision b { display:block; margin-bottom:5px; }
+  .decision span { color:var(--muted); font-size:13px; }
+  .warning { border-left-color:var(--amber); }
+  @media (max-width:760px) {
+    .milestone { grid-template-columns:34px 1fr; }
+    .milestone > p, .milestone > .state { grid-column:2; justify-self:start; }
+    .decision-grid { grid-template-columns:1fr; }
+  }
+</style>
+<script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div>
+      <h1>Next Campaign</h1>
+      <div class="sub">TODO · daily automated Next Flow campaign</div>
+      <div class="status-line"><span class="status">PLANNING ONLY</span><span class="summary">目前不会定时发送，也不会影响现有 Campaign。</span></div>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Goal</h2>
+    <p class="summary">未来每天固定时间，先完成 WhatsApp 与回复安全检查，再只发送当天到期的一个 Next Flow。任何 STOP、拒绝、Warm 或人工接管客户必须退出自动序列。</p>
+  </section>
+
+  <section class="card">
+    <h2>Launch Checklist</h2>
+    <div class="milestones">
+      <div class="milestone"><div class="milestone-no">1</div><div><b>Flow 状态机测试</b><p>从 Flow 1 推进到 Completed</p></div><p>模拟链已经通过；当前自动链在 Day 18 完成。</p><span class="state ready">TESTED</span></div>
+      <div class="milestone"><div class="milestone-no">2</div><div><b>STOP / Warm 安全门</b><p>客户回复后退出自动发送</p></div><p>STOP、拒绝、Warm 与未知回复都会拦截并转人工。</p><span class="state ready">TESTED</span></div>
+      <div class="milestone"><div class="milestone-no">3</div><div><b>Tracker 健康检查</b><p>发送前必须读取最新回复</p></div><p>Tracker 过期或没有在线 instance 时，整个自动批次必须暂停。</p><span class="state">TODO</span></div>
+      <div class="milestone"><div class="milestone-no">4</div><div><b>Flow 5 / Flow 9 决策</b><p>条件模板是否加入自动链</p></div><p>目前 Furnished List 与 Rental 只供条件式发送。</p><span class="state">DECIDE</span></div>
+      <div class="milestone"><div class="milestone-no">5</div><div><b>10 天或 18 天节奏</b><p>确定正式发送频率</p></div><p>现在是 Day 0、2、4、6、9、12、15、18。</p><span class="state">DECIDE</span></div>
+      <div class="milestone"><div class="milestone-no">6</div><div><b>Scheduler 与通知</b><p>固定时间、锁定、发送报告</p></div><p>加入 TEST 模式、每日上限、Send Lock 与 Telegram 总结。</p><span class="state">TODO</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Required Decisions</h2>
+    <div class="decision-grid">
+      <div class="decision"><b>Automatic chain</b><span>保持现有 8 个自动 Flow，或把 Flow 5 / 9 也加入。</span></div>
+      <div class="decision warning"><b>Sending cadence</b><span>维持较温和的 18 天，或重新设计成 10 天版本。</span></div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

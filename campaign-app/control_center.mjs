@@ -182,8 +182,9 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, LOCAL_URL);
     if (req.method === "GET" && url.pathname === "/") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(page());
+      await ensureCampaignConsole();
+      res.writeHead(302, { Location: `${CONSOLE_URL}/control-center` });
+      res.end();
       return;
     }
     if (req.method === "GET" && ["/logs", "/settings", "/lookup", "/templates", "/next-flow", "/conversations", "/follow-up", "/bot-rules", "/flow-map"].includes(url.pathname)) {

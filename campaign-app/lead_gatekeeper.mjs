@@ -60,7 +60,10 @@ export function rowBlockReason(page, classifyReplyText) {
   const lastReply = propertyText(page, "Last Reply Text");
   if (lastReply && typeof classifyReplyText === "function") {
     const verdict = classifyReplyText(lastReply);
-    if (["STOP_DNC", "COMPLAINT", "NOT_INTERESTED", "AGENT_OR_WRONG_TARGET"].includes(verdict?.route)) {
+    // Any real reply that leaves the automatic sequence must be respected even
+    // when the Notion Sequence Status update was delayed or failed. This keeps
+    // warm leads with an agent and prevents a later drip from interrupting them.
+    if (["Stopped", "Not Interested", "Human Takeover", "Completed"].includes(verdict?.sequenceStatus)) {
       return `Last Reply: ${verdict.route}`;
     }
   }

@@ -24,6 +24,44 @@ function pageId(id) {
 import { canSend, loadGateSnapshot, rowBlockReason, isStopReason } from "../lead_gatekeeper.mjs";
 
 export const nextFlowBlockReason = rowBlockReason;
+const REPLY_SAFETY_TTL_MS = 10 * 60 * 1000;
+let deepReplySafety = { checkedAt: null, ok: false, instances: 0 };
+
+export function replySafetyStatus({ trackerUpdatedAt, deepCheckedAt, deepOk = false, now = Date.now() } = {}) {
+  const trackerMs = new Date(trackerUpdatedAt || 0).getTime();
+  const deepMs = new Date(deepCheckedAt || 0).getTime();
+  const trackerAgeMs = Number.isFinite(trackerMs) && trackerMs > 0 ? Math.max(0, now - trackerMs) : Infinity;
+  const deepAgeMs = Number.isFinite(deepMs) && deepMs > 0 ? Math.max(0, now - deepMs) : Infinity;
+  const trackerFresh = trackerAgeMs <= REPLY_SAFETY_TTL_MS;
+  const deepFresh = deepOk === true && deepAgeMs <= REPLY_SAFETY_TTL_MS;
+  return {
+    safeToSend: trackerFresh || deepFresh,
+    trackerFresh,
+    deepFresh,
+    trackerAgeMinutes: Number.isFinite(trackerAgeMs) ? Math.round(trackerAgeMs / 60000) : null,
+    deepAgeMinutes: Number.isFinite(deepAgeMs) ? Math.round(deepAgeMs / 60000) : null,
+    maxAgeMinutes: Math.round(REPLY_SAFETY_TTL_MS / 60000),
+  };
+}
+
+async function currentReplySafety(runtime) {
+  let trackerUpdatedAt = null;
+  try {
+    const trackerPath = path.join(runtime.paths.rootDir, "campaign-data", "tracker", "lead_status.json");
+    const status = JSON.parse(await fs.readFile(trackerPath, "utf8"));
+    trackerUpdatedAt = status?.updatedAt || null;
+  } catch {
+    // Missing tracker state is handled as stale below.
+  }
+  return {
+    trackerUpdatedAt,
+    ...replySafetyStatus({
+      trackerUpdatedAt,
+      deepCheckedAt: deepReplySafety.checkedAt,
+      deepOk: deepReplySafety.ok,
+    }),
+  };
+}
 
 // 回复检测改读 tracker 的产物 (2026-07-11 架构重构): 实时监听已经在收同样的
 // 消息, list 不再每次全量扫 Evolution — 页面从"随消息量变慢"变成毫秒级。
@@ -470,6 +508,14 @@ export function registerNextFlowRoutes(router) {
       }
     }
 
+    if (deep) {
+      const scanOk = !evoOffline
+        && instancesChecked > 0
+        && !scanDiagnostics.some((item) => item.error || item.truncated);
+      deepReplySafety = { checkedAt: new Date().toISOString(), ok: scanOk, instances: instancesChecked };
+    }
+    const replySafety = await currentReplySafety(runtime);
+
     json(res, 200, {
       ok: true,
       today,
@@ -481,6 +527,7 @@ export function registerNextFlowRoutes(router) {
         checkedAt: new Date().toISOString(),
         scanSource: deep ? "evolution-deep" : "tracker",
         trackerUpdatedAt,
+        ...replySafety,
         candidates: candidatesChecked,
         instances: instancesChecked,
         repliesFound: skipped.length,
@@ -521,6 +568,10 @@ export function registerNextFlowRoutes(router) {
     const nextFlow = requireNextFlow(runtime);
     const runner = nextFlow.getRunner();
     if (runner && runner.running) throw httpError(409, "campaign 正在运行，请先停止。");
+    const replySafety = await currentReplySafety(runtime);
+    if (!replySafety.safeToSend) {
+      throw httpError(409, `回复安全检查已过期。Tracker 超过 ${replySafety.maxAgeMinutes} 分钟没有更新，请先按「Refresh + Check WhatsApp」完成深度扫描。`);
+    }
 
     const body = await readJson(req);
     let project;
