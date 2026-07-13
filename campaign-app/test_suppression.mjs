@@ -10,6 +10,7 @@ import { normalizePhone, loadSuppressionSync, isSuppressed } from "./suppression
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const snapshotPath = path.join(__dirname, "..", "campaign-data", "suppressed.json");
+const localOverlayPath = path.join(__dirname, "..", "campaign-data", "suppressed_local.json");
 
 let fail = 0;
 function check(label, got, expected) {
@@ -28,8 +29,12 @@ check("null -> null", normalizePhone(null), null);
 
 // --- snapshot round-trip + gate ---
 const backup = fs.existsSync(snapshotPath) ? fs.readFileSync(snapshotPath, "utf8") : null;
+const localBackup = fs.existsSync(localOverlayPath) ? fs.readFileSync(localOverlayPath, "utf8") : null;
 try {
   fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+  // Production reads union the Notion snapshot with instant local STOPs. Keep
+  // this snapshot round-trip test isolated from real customer STOP records.
+  fs.writeFileSync(localOverlayPath, JSON.stringify({ updatedAt: null, entries: {} }));
   fs.writeFileSync(snapshotPath, JSON.stringify({
     updatedAt: "2026-07-04T00:00:00.000Z",
     count: 2,
@@ -56,6 +61,8 @@ try {
 } finally {
   if (backup !== null) fs.writeFileSync(snapshotPath, backup);
   else if (fs.existsSync(snapshotPath)) fs.rmSync(snapshotPath);
+  if (localBackup !== null) fs.writeFileSync(localOverlayPath, localBackup);
+  else if (fs.existsSync(localOverlayPath)) fs.rmSync(localOverlayPath);
 }
 
 console.log(fail ? `${fail} test(s) failed` : "✅ all suppression tests passed");

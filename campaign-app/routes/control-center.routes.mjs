@@ -138,6 +138,8 @@ export function registerControlCenterRoutes(router) {
     const warningsToday = logs.filter((entry) => entry.level === "warn").length;
     const cacheAgeMinutes = cache.syncedAt ? Math.max(0, Math.round((Date.now() - dateMs(cache.syncedAt)) / 60000)) : null;
     const activeBrain = listProjects();
+    const replyServices = await runtime.replyServices?.status?.().catch(() => ({ tracker: false, brain: false }))
+      || { tracker: false, brain: false };
 
     const queue = [
       { id: "overdue", label: "Overdue follow-ups", count: metrics.overdue, tone: "red", href: "/follow-up?bucket=overdue" },
@@ -170,7 +172,8 @@ export function registerControlCenterRoutes(router) {
         { id: "whatsapp", label: "WhatsApp (Evolution)", ok: whatsapp.ok, detail: whatsapp.label },
         { id: "notion", label: "Notion Cache", ok: Boolean(settings.notion?.configured && cache.syncedAt && cacheAgeMinutes <= 60), detail: cache.syncedAt ? `Synced ${cacheAgeMinutes} min ago${cacheAgeMinutes > 60 ? " · stale" : ""}` : "No local snapshot" },
         { id: "telegram", label: "Telegram Approval", ok: Boolean(settings.telegram?.botConfigured && settings.telegram?.chatConfigured), detail: settings.telegram?.chatConfigured ? "Bot and chat configured" : "Setup incomplete" },
-        { id: "brain", label: "Sales Brain", ok: settings.brain?.provider === "rules" || Boolean(settings[settings.brain?.provider]?.configured), detail: `${settings.brain?.provider || "rules"} · ${activeBrain.length} active projects` },
+        { id: "tracker", label: "Reply Tracker", ok: replyServices.tracker, detail: replyServices.tracker ? "Listening for inbound replies" : "Offline · replies will not reach Notion or Telegram" },
+        { id: "brain", label: "Sales Brain", ok: replyServices.brain, detail: replyServices.brain ? `${settings.brain?.provider || "rules"} · Telegram alerts online` : "Offline · Telegram alerts unavailable" },
       ],
       logs: { errorsToday, warningsToday },
     });

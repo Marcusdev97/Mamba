@@ -13,6 +13,7 @@ import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createProjectService } from "./lib/project-service.mjs";
+import { createReplyServiceManager } from "./lib/reply-service-manager.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createTemplateService } from "./lib/template-service.mjs";
@@ -81,6 +82,10 @@ const configuredBrainDb = (name, fallback) => String(notionConfig?.databases?.[n
 
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
+const replyServiceManager = createReplyServiceManager({
+  rootDir: paths.rootDir,
+  onLog: (message) => console.log(message),
+});
 const conversationHistoryService = createConversationHistoryService({ rootDir: paths.rootDir });
 const blastCacheService = createBlastCacheService({
   rootDir: paths.rootDir,
@@ -157,6 +162,7 @@ const runtime = await loadRuntime({
   getRunner: () => runner,
   systemLogs: systemLogService,
   settings: settingsService,
+  replyServices: replyServiceManager,
   projects: {
     alias: notionConfig?.projectAlias || {},
     firstFlowLabel: FIRST_FLOW_LABEL,
@@ -339,5 +345,16 @@ server.listen(PORT, HOST, () => {
   console.log("================================");
   console.log(`Open in your browser: ${openUrl}`);
   console.log("Close this window to stop the console.");
+  replyServiceManager.startMonitoring();
+  replyServiceManager.ensureStarted()
+    .then((status) => console.log(`Reply services: tracker ${status.tracker ? "ONLINE" : "OFFLINE"} · brain ${status.brain ? "ONLINE" : "OFFLINE"}`))
+    .catch((error) => console.log(`Reply services could not start: ${error.message}`));
   if (process.env.MAMBA_AUTO_OPEN !== "0") exec(`open "${openUrl}"`);
 });
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.once(signal, () => {
+    replyServiceManager.stopManaged();
+    server.close(() => process.exit(0));
+  });
+}
