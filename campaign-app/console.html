@@ -468,9 +468,11 @@ async function pollStatus() {
   if (!snap || !snap.state) return;
   const s = snap.state;
   const c = s.summary || {};
+  const notionSync = s.notionSync || null;
   const order = ["QUEUED","SENDING_PART1","WAITING_PART2","SENDING_PART2","SENT","REPLIED_WARM","PART1_ONLY_END_TIME","SKIPPED_END_TIME","SKIPPED_MANUAL","FAILED"];
   $("statusChips").innerHTML =
     '<div class="chip">状态 <b>' + s.status + "</b></div>" +
+    (notionSync ? '<div class="chip">Notion <b>' + notionSync.status + "</b></div>" : "") +
     order.filter((k) => c[k]).map((k) => '<div class="chip">' + k + " <b>" + c[k] + "</b></div>").join("");
   const done = (c.SENT||0)+(c.REPLIED_WARM||0)+(c.FAILED||0)+(c.SKIPPED_END_TIME||0)+(c.SKIPPED_MANUAL||0)+(c.PART1_ONLY_END_TIME||0);
   $("progFill").style.width = s.total ? Math.round(done / s.total * 100) + "%" : "0%";

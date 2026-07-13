@@ -1063,6 +1063,7 @@ export class CampaignRunner {
             templateFlow: this.state.templateFlow ?? null,
             templateProject: this.state.templateProject ?? null,
             advanceDone: this.state.advanceDone ?? false,
+            notionSync: this.state.notionSync ?? null,
             assignments: this.state.assignments.map((job) => ({
               id: job.id,
               name: job.lead.name,

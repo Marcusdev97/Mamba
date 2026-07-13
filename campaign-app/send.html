@@ -36,6 +36,36 @@
     background: transparent;
   }
   .frames iframe.hidden { visibility: hidden; pointer-events: none; }
+  .sync-overlay {
+    position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
+    padding: 24px; background: rgba(3, 7, 18, .78); backdrop-filter: blur(8px);
+  }
+  .sync-overlay.hidden { display: none; }
+  .sync-dialog {
+    width: min(440px, calc(100vw - 48px)); padding: 28px;
+    border: 1px solid #334155; border-radius: 8px; background: #111827;
+    color: #e5e7eb; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+  }
+  .sync-head { display: flex; align-items: center; gap: 14px; }
+  .sync-icon {
+    width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 42px;
+    border-radius: 50%; background: #0f2f23; color: #2dd36f; font-size: 21px;
+  }
+  .sync-icon.spinning { border: 3px solid #244235; border-top-color: #2dd36f; background: transparent; animation: spin .8s linear infinite; }
+  .sync-overlay.failed .sync-icon { background: #3a171d; color: #ff5f67; }
+  .sync-overlay.succeeded .sync-icon { background: #123523; color: #2dd36f; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .sync-dialog h2 { margin: 0; font-size: 20px; letter-spacing: 0; }
+  .sync-message { margin: 16px 0 8px; color: #cbd5e1; line-height: 1.55; }
+  .sync-detail { margin: 0; color: #94a3b8; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+  .sync-track { height: 5px; margin-top: 20px; overflow: hidden; border-radius: 3px; background: #263244; }
+  .sync-track span { display: block; width: 38%; height: 100%; background: #2dd36f; animation: loading 1.25s ease-in-out infinite; }
+  @keyframes loading { from { transform: translateX(-105%); } to { transform: translateX(365%); } }
+  .sync-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
+  .sync-actions button {
+    border: 1px solid #475569; border-radius: 7px; padding: 9px 14px;
+    background: #1f2937; color: #e5e7eb; font: inherit; font-weight: 700; cursor: pointer;
+  }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
 </head>
@@ -55,6 +85,20 @@
     <iframe id="frame-flow1" src="/"></iframe>
     <iframe id="frame-next" class="hidden" data-src="/next-flow"></iframe>
   </div>
+  <div class="sync-overlay hidden" id="syncOverlay" role="dialog" aria-modal="true" aria-live="assertive">
+    <div class="sync-dialog">
+      <div class="sync-head">
+        <div class="sync-icon" id="syncIcon">✓</div>
+        <h2 id="syncTitle">正在更新 Notion</h2>
+      </div>
+      <p class="sync-message" id="syncMessage"></p>
+      <p class="sync-detail" id="syncDetail"></p>
+      <div class="sync-track" id="syncTrack"><span></span></div>
+      <div class="sync-actions hidden" id="syncActions">
+        <button type="button" id="syncClose">查看发送详情</button>
+      </div>
+    </div>
+  </div>
 
 <script>
 // 第二个 tab 懒加载 (第一次点才载入), 之后一直活着 — 切 tab 不打断任何进行中的发送。
@@ -70,15 +114,93 @@ function show(which) {
 // 深链接: /send#next 直接开第二个 tab (launcher 用)
 if (location.hash === "#next") show("next");
 
-// 有 campaign 在跑时给对应 tab 一个呼吸灯, 提醒你别关窗口。
+let syncBusy = false;
+let successTimer = null;
+
+function hideSyncOverlay() {
+  document.getElementById("syncOverlay").classList.add("hidden");
+}
+
+function renderNotionSync(sync, runId) {
+  const overlay = document.getElementById("syncOverlay");
+  const icon = document.getElementById("syncIcon");
+  const title = document.getElementById("syncTitle");
+  const message = document.getElementById("syncMessage");
+  const detail = document.getElementById("syncDetail");
+  const track = document.getElementById("syncTrack");
+  const actions = document.getElementById("syncActions");
+  const status = String(sync?.status || "").toUpperCase();
+  syncBusy = status === "RUNNING";
+
+  if (!status) return;
+  overlay.classList.remove("failed", "succeeded");
+  actions.classList.add("hidden");
+
+  if (status === "WAITING") {
+    hideSyncOverlay();
+    return;
+  }
+
+  if (status === "RUNNING") {
+    if (successTimer) clearTimeout(successTimer);
+    overlay.classList.remove("hidden");
+    icon.textContent = "";
+    icon.classList.add("spinning");
+    title.textContent = "正在更新 Notion";
+    message.textContent = sync.message || "正在保存本轮发送结果…";
+    detail.textContent = "请保持 Mamba 开启。即使刷新页面，进度也会从服务器恢复；完成前请勿关闭 Mamba。";
+    track.classList.remove("hidden");
+    return;
+  }
+
+  icon.classList.remove("spinning");
+  track.classList.add("hidden");
+  if (status === "FAILED") {
+    overlay.classList.add("failed");
+    overlay.classList.remove("hidden");
+    icon.textContent = "!";
+    title.textContent = "Notion 更新失败";
+    message.textContent = sync.message || "发送记录仍保留在本机。";
+    detail.textContent = sync.error || "请到发送详情查看错误，再手动补跑 Notion 上传。";
+    actions.classList.remove("hidden");
+    return;
+  }
+
+  if (status === "SUCCEEDED") {
+    const seenKey = "mamba-notion-sync-seen:" + String(runId || sync.finishedAt || "latest");
+    if (sessionStorage.getItem(seenKey)) return;
+    sessionStorage.setItem(seenKey, "1");
+    overlay.classList.add("succeeded");
+    overlay.classList.remove("hidden");
+    icon.textContent = "✓";
+    title.textContent = "Notion 更新完成";
+    message.textContent = sync.message || "本轮发送结果已经安全保存。";
+    detail.textContent = "现在可以刷新、切换页面或关闭 Mamba。";
+    successTimer = setTimeout(hideSyncOverlay, 3500);
+  }
+}
+
+document.getElementById("syncClose").addEventListener("click", () => {
+  hideSyncOverlay();
+  show("flow1");
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (!syncBusy) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+// 有 campaign 在跑时给对应 tab 一个呼吸灯, 并恢复 Notion 收尾状态。
 async function pollRunning() {
   try {
     const r = await fetch("/api/status", { cache: "no-store" });
     const d = await r.json().catch(() => ({}));
     const running = d?.status === "RUNNING" || d?.state?.status === "RUNNING" || d?.running === true;
     document.getElementById("tab-flow1").classList.toggle("running", Boolean(running));
+    renderNotionSync(d?.state?.notionSync, d?.state?.runId);
   } catch { /* console 自己会显示, 这里只是点缀 */ }
-  setTimeout(pollRunning, 15000);
+  setTimeout(pollRunning, 1500);
 }
 pollRunning();
 </script>

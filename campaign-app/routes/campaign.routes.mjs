@@ -99,6 +99,19 @@ function applyManualSkips(runner, skipIds) {
   return count;
 }
 
+function markNotionSyncWaiting(runner) {
+  if (runner?.state?.mode !== "LIVE" || runner.state.flowLabel) return;
+  runner.state.notionSync = {
+    status: "WAITING",
+    stage: "campaign",
+    message: "发送完成后将自动更新 Notion。",
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function writeCampaignLog(runtime, level, event, message, context = {}) {
   if (!runtime.systemLogs) return;
   try {
@@ -211,6 +224,7 @@ export function registerCampaignRoutes(router) {
     } catch (error) {
       throw httpError(400, `模板安全检查失败: ${error.message}`);
     }
+    markNotionSyncWaiting(runner);
     try {
       await runner.saveState();
     } catch (error) {
@@ -238,6 +252,9 @@ export function registerCampaignRoutes(router) {
 
     const remaining = runner.state.assignments.filter((job) => job.status === "QUEUED").length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
+
+    markNotionSyncWaiting(runner);
+    await runner.saveState();
 
     runner.run()
       .then(() => campaign.autoNotionUpload(runner))
@@ -267,6 +284,7 @@ export function registerCampaignRoutes(router) {
       mode: runner.state?.mode ?? null,
       queued,
     });
+    markNotionSyncWaiting(runner);
     await runner.saveState();
 
     const autoAdvance = body.autoAdvance === true && runner.state.mode === "LIVE";

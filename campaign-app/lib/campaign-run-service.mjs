@@ -20,6 +20,7 @@ export function createCampaignRunService({
   klDateTime,
   flowByLabel,
   flowStateAfter,
+  execFileFn = execFile,
 }) {
   async function autoAdvanceFlow(runner) {
     if (!blastDatabaseId || !runner?.state?.assignments) return;
@@ -72,20 +73,80 @@ export function createCampaignRunService({
     }
   }
 
-  function autoNotionUpload(runner) {
+  async function saveNotionSync(runner, patch) {
+    const previous = runner?.state?.notionSync || {};
+    runner.state.notionSync = {
+      ...previous,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
     try {
-      if (!runner?.runPath || runner?.state?.mode !== "LIVE") return;
-      if (runner.state.flowLabel) return;
-      runner.pushLog?.("正在自动上传 blast 名单到 Notion…");
-      execFile(process.execPath, [path.join(appDir, "notion_upload.mjs"), runner.runPath], { cwd: appDir }, (error, stdout, stderr) => {
-        if (error) {
-          runner.pushLog?.(`自动上传 Notion 失败:${(stderr || error.message).trim().slice(0, 200)} —— 可在控制台点「上传 Blast 名单到 Notion(手动补跑)」`);
-        } else {
-          runner.pushLog?.("Blast 名单已自动上传到 Notion ✅");
-        }
-      });
+      await runner.saveState();
     } catch (error) {
-      runner?.pushLog?.(`自动上传 Notion 出错:${error.message}`);
+      runner.pushLog?.(`保存 Notion 更新状态失败:${error.message}`);
+    }
+    return runner.state.notionSync;
+  }
+
+  async function autoNotionUpload(runner) {
+    if (!runner?.runPath || runner?.state?.mode !== "LIVE" || runner.state.flowLabel) {
+      return null;
+    }
+
+    const startedAt = new Date().toISOString();
+    await saveNotionSync(runner, {
+      status: "RUNNING",
+      stage: "blast_leads",
+      message: "正在把本轮发送结果更新到 Notion…",
+      startedAt,
+      finishedAt: null,
+      error: null,
+    });
+    runner.pushLog?.("正在自动上传 blast 名单到 Notion…");
+
+    try {
+      const result = await new Promise((resolve, reject) => {
+        execFileFn(
+          process.execPath,
+          [path.join(appDir, "notion_upload.mjs"), runner.runPath],
+          { cwd: appDir, maxBuffer: 4 * 1024 * 1024 },
+          (error, stdout, stderr) => {
+            if (error) {
+              error.uploadDetail = String(stderr || error.message || "Unknown Notion upload error").trim();
+              reject(error);
+              return;
+            }
+            resolve({ stdout: String(stdout || ""), stderr: String(stderr || "") });
+          },
+        );
+      });
+
+      await saveNotionSync(runner, {
+        status: "SUCCEEDED",
+        message: "Notion 已更新完成，可以安全刷新或关闭页面。",
+        finishedAt: new Date().toISOString(),
+        error: null,
+        output: result.stdout.trim().slice(-500) || null,
+      });
+      runner.pushLog?.("Blast 名单已自动上传到 Notion ✅");
+      await runner.systemLog?.("info", "notion_upload_succeeded", "Campaign results uploaded to Notion.", {
+        finishedAt: runner.state.notionSync.finishedAt,
+      });
+      return runner.state.notionSync;
+    } catch (error) {
+      const detail = String(error.uploadDetail || error.message || "Unknown Notion upload error").trim().slice(0, 500);
+      await saveNotionSync(runner, {
+        status: "FAILED",
+        message: "Notion 更新失败。发送结果仍保留在本机，请查看错误后手动补跑。",
+        finishedAt: new Date().toISOString(),
+        error: detail,
+      });
+      runner.pushLog?.(`自动上传 Notion 失败:${detail} —— 可在控制台点「上传 Blast 名单到 Notion(手动补跑)」`);
+      await runner.systemLog?.("error", "notion_upload_failed", "Campaign results failed to upload to Notion.", {
+        error: detail,
+        finishedAt: runner.state.notionSync.finishedAt,
+      });
+      return runner.state.notionSync;
     }
   }
 
