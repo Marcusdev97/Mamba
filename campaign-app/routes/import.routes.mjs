@@ -154,10 +154,6 @@ export function registerImportRoutes(router) {
 
   router.post("/api/leads/update", async (req, res, runtime) => {
     const imports = requireImport(runtime);
-    const runner = runtime.getRunner?.();
-    if (runner && runner.running) {
-      throw httpError(409, "Campaign 正在运行，请先停止再改名字。");
-    }
     const body = await readJson(req);
     let project;
     try {

@@ -7,6 +7,13 @@ function requireSettings(runtime) {
   return runtime.settings;
 }
 
+function requireTelegramFilters(runtime) {
+  if (!runtime.telegramFilters) {
+    throw httpError(500, "Telegram Filter List 没有载入。请重启 Mamba server。");
+  }
+  return runtime.telegramFilters;
+}
+
 function readableTelegramError(error, action) {
   const message = String(error?.message || "");
   if (message.includes("chat not found")) {
@@ -65,6 +72,26 @@ export function registerSettingsRoutes(router) {
       json(res, 200, { ok: true, identity: await settings.identity() });
     } catch (error) {
       throw httpError(400, `无法确认 Settings 连接状态: ${error.message}`);
+    }
+  });
+
+  router.get("/api/settings/telegram-filters", async (_req, res, runtime) => {
+    const filters = requireTelegramFilters(runtime);
+    json(res, 200, { ok: true, filters: await filters.snapshot({ forceConnected: true }) });
+  });
+
+  router.post("/api/settings/telegram-filters", async (req, res, runtime) => {
+    const filters = requireTelegramFilters(runtime);
+    const body = await readJson(req);
+    try {
+      const saved = await filters.update({
+        text: body.text,
+        entries: body.entries,
+        autoFilterConnectedSenders: body.autoFilterConnectedSenders !== false,
+      });
+      json(res, 200, { ok: true, filters: saved });
+    } catch (error) {
+      throw httpError(500, `保存 Telegram Filter List 失败: ${error.message}`);
     }
   });
 

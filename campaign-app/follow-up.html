@@ -16,7 +16,7 @@
   .stat.active { border-color:var(--green); background:var(--green-bg); }
   .stat span { display:block; color:var(--muted); font-size:12px; }
   .stat b { font-size:22px; }
-  .filters { display:grid; grid-template-columns:1.4fr 180px auto auto; gap:10px; align-items:end; }
+  .filters { display:grid; grid-template-columns:1.4fr 180px auto auto auto; gap:10px; align-items:end; }
   .layout { display:grid; grid-template-columns:minmax(700px, 1.5fr) minmax(330px, .75fr); gap:16px; align-items:start; }
   .layout > * { min-width:0; }
   .tablebox { overflow:auto; max-width:100%; border:1px solid var(--line); border-radius:var(--radius); }
@@ -126,8 +126,10 @@
       <label class="fld"><span>Search</span><input id="q" type="search" placeholder="Name / phone / reply / action" /></label>
       <label class="fld"><span>Project</span><select id="project"><option value="">All</option></select></label>
       <button id="refresh" class="btn primary">刷新</button>
+      <button id="checkReplies" class="btn">Check My Replies</button>
       <button id="syncCache" class="btn">Sync Notion Cache</button>
     </div>
+    <div class="mutedline" id="phoneSync">手机回复每 30 分钟自动核对。</div>
   </section>
 
   <div class="layout">
@@ -399,6 +401,10 @@ async function load() {
     setOptions($("project"), data.projects || []);
     records = data.records || [];
     $("meta").textContent = `${data.count || records.length} active follow-up clients · Today includes overdue and unscheduled work · source: ${data.source} · synced: ${data.syncedAt || "-"}`;
+    const phoneSync = data.outboundSync || {};
+    $("phoneSync").textContent = phoneSync.error
+      ? `手机回复核对警告: ${phoneSync.error}`
+      : `手机回复自动核对: ${phoneSync.intervalMinutes || 30} 分钟一次 · 上次 ${fmt(phoneSync.lastCheckedAt)} · 已移出 Today ${phoneSync.handled || 0} 位 · 下次 ${fmt(phoneSync.nextCheckAt)}`;
     renderRows();
   } catch (error) {
     $("err").textContent = error.message;
@@ -423,6 +429,23 @@ async function syncCache() {
   } finally {
     $("syncCache").disabled = false;
     $("syncCache").textContent = "Sync Notion Cache";
+  }
+}
+
+async function checkReplies() {
+  $("err").textContent = "";
+  $("checkReplies").disabled = true;
+  $("checkReplies").textContent = "Checking...";
+  try {
+    const res = await fetch("/api/follow-up/reconcile-outbound", { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Phone reply check failed");
+    await load();
+  } catch (error) {
+    $("err").textContent = error.message;
+  } finally {
+    $("checkReplies").disabled = false;
+    $("checkReplies").textContent = "Check My Replies";
   }
 }
 
@@ -475,6 +498,7 @@ document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", () => runAction(button.dataset.action));
 });
 $("refresh").addEventListener("click", load);
+$("checkReplies").addEventListener("click", checkReplies);
 $("conversationRefresh").addEventListener("click", () => loadConversation());
 $("saveAppointment").addEventListener("click", () => runAction("save_appointment"));
 $("syncCache").addEventListener("click", syncCache);

@@ -41,6 +41,8 @@ import { loadBrainCacheSync } from "./brain_cache_sync.mjs";
 import { loadProjectContext, resolveProjectLocal, listProjects } from "./knowledge_layer.mjs";
 import { collectMessages, describeMessage, inboundEvent, resolvePhone } from "./reply_intake.mjs";
 import { makeTelegram, parseUpdate } from "./telegram.mjs";
+import { makeHub } from "./telegram_hub.mjs";
+import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import {
   decideAction, logRouteOf, detectLanguage, pickModel, buildPrompt,
   draftCard, draftButtons, parseCallbackData, logActionOf, parseMediaTags,
@@ -70,6 +72,11 @@ const tg = makeTelegram({
   ...env,
   TELEGRAM_BOT_TOKEN: env.TELEGRAM_HUB_BOT_TOKEN || env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID: env.TELEGRAM_INBOX_CHAT_ID || env.TELEGRAM_CHAT_ID,
+});
+const hub = makeHub(env);
+const telegramFilters = createTelegramFilterService({
+  rootDir: paths.rootDir,
+  getConnectedPhones: async () => (await listInstances(api)).map((item) => item.number),
 });
 
 // ---------- tiny persistence ----------
@@ -498,13 +505,25 @@ const sessionStops = new Set();
 
 // ---------- Telegram ----------
 
-async function notifyTelegram(text) {
+async function notifyTelegram(text, project = null, { stop = false, phone = null } = {}) {
+  const filter = phone ? await telegramFilters.match(phone) : { filtered: false };
+  if (filter.filtered) {
+    console.log(`[telegram-filter] brain alert skipped phone=${phone} reason=${filter.reason}`);
+    return { message_id: 0, filtered: true };
+  }
   if (SIMULATE) { console.log(`[simulate] Telegram:\n${text}\n`); return { message_id: 0 }; }
+  if (hub.enabled) return hub.postBrainCard(text, { projectName: project, stop });
   return tg.send(text);
 }
 
-async function pushDraft(card, pendingId) {
+async function pushDraft(card, pendingId, project = null, phone = null) {
+  const filter = phone ? await telegramFilters.match(phone) : { filtered: false };
+  if (filter.filtered) {
+    console.log(`[telegram-filter] brain draft skipped phone=${phone} reason=${filter.reason}`);
+    return { message_id: 0, filtered: true };
+  }
   if (SIMULATE) { console.log(`[simulate] Telegram draft + buttons (pending ${pendingId}):\n${card}\n`); return { message_id: 0 }; }
+  if (hub.enabled) return hub.postBrainCard(card, { projectName: project, buttons: draftButtons(pendingId) });
   return tg.sendWithButtons(card, draftButtons(pendingId));
 }
 
@@ -540,7 +559,7 @@ async function handleEvent(event) {
 
   // 3b) complaint / forced handoff: stay silent, wake the human.
   if (policy.mode === "handoff") {
-    await notifyTelegram(`🚨 <b>投诉/负面情绪 — 已静默,请人工接管</b>\n${lead.name ?? event.pushName ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}`);
+    await notifyTelegram(`🚨 <b>投诉/负面情绪 — 已静默,请人工接管</b>\n${lead.name ?? event.pushName ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}`, project, { stop: true, phone: event.phone });
     await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover", project });
     return;
   }
@@ -574,7 +593,7 @@ async function handleEvent(event) {
     model = "rule-only";
     draftTier = "rules-fallback";
     if (!draft) {
-      await notifyTelegram(`⚠️ <b>AI 起草失败 — 请人工回复</b>\n${lead.name ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}\n(${error.message})`);
+      await notifyTelegram(`⚠️ <b>AI 起草失败 — 请人工回复</b>\n${lead.name ?? "?"} (${event.phone}) · 🏢 ${project}\n💬 ${event.text}\n(${error.message})`, project, { phone: event.phone });
       await logReply({ event, classified, aiDraft: null, finalSent: null, action: "Takeover", project });
       return;
     }
@@ -583,7 +602,11 @@ async function handleEvent(event) {
 
   const mediaMap = projectCtx.sheet?.media ?? {};
   const pendingId = crypto.randomBytes(6).toString("base64url");
-  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier, project, mediaMap }), pendingId);
+  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier, project, mediaMap }), pendingId, project, event.phone);
+  if (message.filtered) {
+    await logReply({ event, classified, aiDraft: draft, finalSent: null, action: "Telegram Filtered", project });
+    return;
+  }
   pending[pendingId] = { event, classified, draft, tier: draftTier, project, mediaMap, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
   await savePending();
 }

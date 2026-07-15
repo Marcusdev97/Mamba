@@ -44,6 +44,11 @@ const cases = [
 
   // --- Soft rejections ---
   ["not interested", "NOT_INTERESTED"],
+  ["No thanks", "NOT_INTERESTED"],
+  ["No thank you 🙏", "NOT_INTERESTED"],
+  ["不要，谢谢", "NOT_INTERESTED"],
+  ["谢谢，不用了", "NOT_INTERESTED"],
+  ["not keen", "NOT_INTERESTED"],
   ["没兴趣", "NOT_INTERESTED"],
   ["tak berminat", "NOT_INTERESTED"],
   ["i am agent also", "AGENT_OR_WRONG_TARGET"],

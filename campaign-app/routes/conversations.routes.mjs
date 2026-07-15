@@ -306,6 +306,12 @@ function shouldScheduleAgentFollowUp(verdict) {
     && !/not interested|do not contact|stop_dnc/.test(terminal);
 }
 
+function shouldClearAgentFollowUp(verdict) {
+  return verdict?.stopFlag
+    || ["NOT_INTERESTED", "COLD_SHORT_REJECT", "SPAM_IGNORE", "AGENT_OR_WRONG_TARGET", "WRONG_PERSON"].includes(verdict?.route)
+    || ["Stopped", "Not Interested"].includes(verdict?.sequenceStatus);
+}
+
 function replyProperties(schema, verdict, event, record) {
   const replyCount = Number(record.replyCount || 0) + 1;
   const props = {
@@ -323,6 +329,8 @@ function replyProperties(schema, verdict, event, record) {
     props["Stop Flag"] = { checkbox: true };
     props["Stop Reason"] = richText(`Auto: ${verdict.route}`);
     if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
+  } else if (shouldClearAgentFollowUp(verdict) && schema?.["Follow Up At"]) {
+    props["Follow Up At"] = { date: null };
   } else if (shouldScheduleAgentFollowUp(verdict) && schema?.["Follow Up At"]) {
     props["Follow Up At"] = dateValue(Date.now());
   }
@@ -342,6 +350,8 @@ function classificationProperties(schema, verdict) {
     props["Stop Flag"] = { checkbox: true };
     props["Stop Reason"] = richText(`Auto: ${verdict.route}`);
     if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
+  } else if (shouldClearAgentFollowUp(verdict) && schema?.["Follow Up At"]) {
+    props["Follow Up At"] = { date: null };
   } else if (shouldScheduleAgentFollowUp(verdict) && schema?.["Follow Up At"]) {
     props["Follow Up At"] = dateValue(Date.now());
   }
@@ -644,6 +654,7 @@ export function registerConversationsRoutes(router) {
 
     const body = await readJson(req);
     const onlyUnclassified = body.onlyUnclassified !== false;
+    const terminalRepairsOnly = body.terminalRepairsOnly === true;
 
     let database;
     try {
@@ -662,6 +673,13 @@ export function registerConversationsRoutes(router) {
 
     const candidates = records.filter((record) => {
       if (!clean(record.lastReplyText)) return false;
+      if (terminalRepairsOnly) {
+        const verdict = conversations.classifyReplyText(record.lastReplyText);
+        const alreadyTerminal = record.stopFlag
+          || ["Stop", "Not Interested"].includes(clean(record.status))
+          || ["Stopped", "Not Interested"].includes(clean(record.sequenceStatus));
+        return shouldClearAgentFollowUp(verdict) && !alreadyTerminal;
+      }
       if (!onlyUnclassified) return true;
       return !clean(record.aiCategory) || !clean(record.nextAction) || !clean(record.aiSummary);
     });
@@ -670,6 +688,7 @@ export function registerConversationsRoutes(router) {
       totalRows: records.length,
       candidates: candidates.length,
       onlyUnclassified,
+      terminalRepairsOnly,
     });
 
     const classified = [];

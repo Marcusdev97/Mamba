@@ -22,7 +22,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { escapeHtml } from "./telegram.mjs";
+import { buildInlineKeyboard, escapeHtml } from "./telegram.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -149,12 +149,21 @@ export function makeHub(env = loadEnvFile()) {
     }
   }
 
-  async function topicForProject(projectName) {
+  function projectTopic(projectName) {
     const projects = readJsonSyncSafe(path.join(rootDir, "campaign-assets", "projects.json"))?.projects ?? [];
     const key = normalizeProjectKey(projectName);
     const known = projects.find((p) => normalizeProjectKey(p.name) === key || normalizeProjectKey(p.id) === key);
-    if (!known) return ensureTopic("unknown", FIXED_TOPICS.unknown.name, FIXED_TOPICS.unknown.icon_color);
-    return ensureTopic(`project:${normalizeProjectKey(known.id)}`, `📥 ${known.name}`);
+    if (!known) {
+      return {
+        threadKey: "unknown",
+        getThreadId: () => ensureTopic("unknown", FIXED_TOPICS.unknown.name, FIXED_TOPICS.unknown.icon_color),
+      };
+    }
+    const threadKey = `project:${normalizeProjectKey(known.id)}`;
+    return {
+      threadKey,
+      getThreadId: () => ensureTopic(threadKey, `📥 ${known.name}`),
+    };
   }
 
   // topic 被手动删掉 -> "message thread not found" -> 重建一次再发。
@@ -197,12 +206,33 @@ export function makeHub(env = loadEnvFile()) {
     if (isRed) lines.push("", "⛔ 已进全局 STOP 名单,系统不会再发给这个号码。");
     const text = lines.join("\n").slice(0, 3900);
 
-    const threadKey = isRed ? "stop" : null;
-    const getThreadId = isRed
-      ? () => ensureTopic("stop", FIXED_TOPICS.stop.name, FIXED_TOPICS.stop.icon_color)
-      : () => topicForProject(projectName);
-    const projKey = projectName ? `project:${normalizeProjectKey(projectName)}` : "unknown";
-    return sendToThread(inboxChatId, threadKey ?? projKey, getThreadId, { text });
+    const route = isRed
+      ? {
+          threadKey: "stop",
+          getThreadId: () => ensureTopic("stop", FIXED_TOPICS.stop.name, FIXED_TOPICS.stop.icon_color),
+        }
+      : projectTopic(projectName);
+    return sendToThread(inboxChatId, route.threadKey, route.getThreadId, { text });
+  }
+
+  // Brain approval/error cards use the same project routing as inbound cards.
+  // Without message_thread_id Telegram puts them in General even when the Hub
+  // correctly routed the original customer reply to a project topic.
+  async function postBrainCard(text, {
+    projectName = null,
+    buttons = null,
+    stop = false,
+  } = {}) {
+    if (!enabled) return { skipped: "hub not configured" };
+    const route = stop
+      ? {
+          threadKey: "stop",
+          getThreadId: () => ensureTopic("stop", FIXED_TOPICS.stop.name, FIXED_TOPICS.stop.icon_color),
+        }
+      : projectTopic(projectName);
+    const payload = { text: String(text ?? "").slice(0, 3800) };
+    if (buttons) payload.reply_markup = buildInlineKeyboard(buttons);
+    return sendToThread(inboxChatId, route.threadKey, route.getThreadId, payload);
   }
 
   // ---------- public: ops ----------
@@ -221,7 +251,7 @@ export function makeHub(env = loadEnvFile()) {
     return { isForum: chat.is_forum === true, title: chat.title };
   }
 
-  return { enabled, hasOps: Boolean(token && opsChatId), postInbound, postOps, ensureTopic, checkForum };
+  return { enabled, hasOps: Boolean(token && opsChatId), postInbound, postBrainCard, postOps, ensureTopic, checkForum };
 }
 
 // ---------- CLI: --test ----------

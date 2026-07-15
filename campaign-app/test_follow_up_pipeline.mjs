@@ -60,13 +60,16 @@ const desk = buildFollowUpDesk([
   { id: "future", status: "Follow Up", lastReplyText: "next week", followUpAt: "2026-07-20T02:00:00.000Z" },
   { id: "stopped", status: "Stop", stopFlag: true, lastReplyText: "stop" },
   { id: "completed", status: "Warm", nextAction: "Done", lastReplyText: "thanks" },
+  { id: "old-wrong-en", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Human Takeover", lastReplyText: "No thanks" },
+  { id: "old-wrong-zh", status: "Replied", sequenceStatus: "Human Takeover", nextAction: "Human Takeover", lastReplyText: "不要，谢谢" },
 ], new Date("2026-07-13T04:00:00.000Z").getTime());
 
 assert.equal(desk.summary.total, 3, "STOP and Done are not active follow-up work");
 assert.equal(desk.summary.today, 2, "Today includes unscheduled and overdue work");
 assert.equal(desk.summary.overdue, 1);
 assert.equal(desk.summary.hot, 1);
-assert.equal(desk.summary.stop, 1);
+assert.equal(desk.summary.stop, 3);
+assert.equal(desk.records.filter((record) => ["old-wrong-en", "old-wrong-zh"].includes(record.id)).every((record) => record.bucket === "stop"), true);
 assert.equal(desk.records.find((record) => record.id === "unscheduled").bucket, "today");
 assert.equal(desk.records.some((record) => record.id === "completed"), false);
 

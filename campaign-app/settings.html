@@ -52,6 +52,24 @@
     font: inherit;
     outline: none;
   }
+  .settings-grid textarea {
+    width: 100%;
+    min-height: 116px;
+    box-sizing: border-box;
+    resize: vertical;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    line-height: 1.55;
+    outline: none;
+  }
+  .settings-grid textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .12); }
+  .filter-panel { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+  .check-row { display: flex; align-items: flex-start; gap: 9px; color: var(--text); font-size: 13px; line-height: 1.5; }
+  .check-row input { width: 16px; min-height: 16px; margin-top: 2px; flex: 0 0 auto; }
   .settings-grid select { appearance: auto; }
   .settings-grid input::placeholder { color: var(--muted); opacity: .75; }
   .settings-grid input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .12); }
@@ -167,6 +185,20 @@
       <div class="status-stack">
         <div class="status-line" id="telegramStatus">读取中...</div>
         <div class="status-line" id="telegramLinked">Linked: 查询中...</div>
+      </div>
+      <div class="filter-panel">
+        <div class="provider-title">Telegram Filter List</div>
+        <div class="provider-sub">这些号码的回复仍会进入 Tracker 和 Notion，只是不送去 Telegram。每行一个，可写「名字, 电话」。</div>
+        <label class="fld">
+          <span>不通知号码</span>
+          <textarea id="telegramFilterText" placeholder="Marcus, 01133698121&#10;Test Phone, 0172064505"></textarea>
+        </label>
+        <label class="check-row">
+          <input id="autoFilterConnectedSenders" type="checkbox" checked />
+          <span>自动忽略已连接的 WhatsApp 发送号码</span>
+        </label>
+        <div class="actions"><button class="btn" id="btnSaveTelegramFilters">保存 Filter List</button></div>
+        <div class="status-line" id="telegramFilterStatus">读取中...</div>
       </div>
     </div>
 
@@ -421,6 +453,25 @@ function render(settings) {
   renderBrainMode();
 }
 
+function renderTelegramFilters(filters) {
+  const f = filters || {};
+  $("telegramFilterText").value = f.text || "";
+  $("autoFilterConnectedSenders").checked = f.autoFilterConnectedSenders !== false;
+  const connected = (f.connectedPhones || []).map((phone) => "+" + phone).join(", ");
+  $("telegramFilterStatus").textContent =
+    (f.count || 0) + " 个手动过滤号码" +
+    (f.autoFilterConnectedSenders ? " · 自动过滤发送号码" + (connected ? ": " + connected : "（目前未读取到）") : " · 自动过滤已关闭");
+}
+
+async function refreshTelegramFilters() {
+  try {
+    const data = await api("/api/settings/telegram-filters");
+    renderTelegramFilters(data.filters);
+  } catch (error) {
+    $("telegramFilterStatus").textContent = "读取失败: " + error.message;
+  }
+}
+
 function renderIdentity(identity) {
   const n = identity?.notion || {};
   $("notionLinked").textContent = n.ok
@@ -624,6 +675,25 @@ $("btnTestTelegram").addEventListener("click", async () => {
   }
 });
 
+$("btnSaveTelegramFilters").addEventListener("click", async () => {
+  const btn = $("btnSaveTelegramFilters");
+  btn.disabled = true;
+  btn.textContent = "保存中...";
+  try {
+    const data = await api("/api/settings/telegram-filters", {
+      text: $("telegramFilterText").value,
+      autoFilterConnectedSenders: $("autoFilterConnectedSenders").checked,
+    });
+    renderTelegramFilters(data.filters);
+    message("Telegram Filter List 已保存。Tracker 与 Brain 不用重启，下一条信息马上生效。", "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存 Filter List";
+  }
+});
+
 $("btnAddNumber").addEventListener("click", async () => {
   message("", "");
   const label = (prompt("Connection Key（留空自动取下一个，如 wa_03）：", "") || "").trim();
@@ -676,6 +746,7 @@ api("/api/settings").then((data) => render(data.settings)).catch((e) => {
 });
 refreshIdentity();
 refreshInstances();
+refreshTelegramFilters();
 setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
 </script>
 </body>

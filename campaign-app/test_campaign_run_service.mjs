@@ -77,6 +77,27 @@ function makeRunner() {
 }
 
 {
+  const service = makeService((_node, _args, _options, callback) => callback(null, "recovered 1 row\n", ""));
+  const runner = makeRunner();
+  runner.state.status = "COMPLETED";
+  runner.state.notionSync = { status: "FAILED" };
+  const result = await service.recoverPendingUpdates(runner);
+  assert.equal(result.recovered, true);
+  assert.equal(result.kind, "flow-1-upload");
+  assert.equal(runner.state.notionSync.status, "SUCCEEDED");
+}
+
+{
+  let called = false;
+  const service = makeService(() => { called = true; });
+  const runner = makeRunner();
+  runner.state.status = "RUNNING";
+  const result = await service.recoverPendingUpdates(runner);
+  assert.equal(result.recovered, false);
+  assert.equal(called, false, "interrupted sending must never auto-resume or auto-upload as completed");
+}
+
+{
   const calls = [];
   const page = {
     id: "page-1",

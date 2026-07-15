@@ -104,6 +104,7 @@
     </table>
     <button class="btn primary" id="btnStartTest">开始测试发送</button>
     <button class="btn live hidden" id="btnStartLive">开始发送（LIVE）</button>
+    <div class="ok" id="queueMsg"></div>
     <div class="err" id="startErr"></div>
   </div>
 
@@ -139,6 +140,8 @@ let PROJECTS = [];
 let templateSource = "";
 let templateFlow = "";
 let selectedExcelFile = null;
+let preparedRunId = null;
+let preparedCanQueue = false;
 
 function applyProjectSenders() {
   document.querySelectorAll(".sender").forEach((c) => {
@@ -380,6 +383,8 @@ $("btnPrepare").addEventListener("click", async () => {
 
 function renderPreview(r) {
   const s = r.snapshot.state;
+  preparedRunId = s.runId;
+  preparedCanQueue = r.queueAvailable === true;
   $("previewCard").classList.remove("hidden");
   const senderChips = s.perSender
     ? Object.entries(s.perSender).filter(([, n]) => n > 0).map(([name, n]) => '<div class="chip">' + name + ' <b>' + n + ' 个</b></div>').join("")
@@ -392,7 +397,8 @@ function renderPreview(r) {
     '<div class="chip">时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>" +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
     senderChips + overflowChip +
-    '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>";
+    '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>" +
+    (preparedCanQueue ? '<div class="chip" style="border-color:#f59e0b;color:#fbbf24">当前 Batch 正在发送 · 本预览可排下一批</div>' : "");
   $("previewBody").innerHTML = s.assignments.map((a) =>
     '<tr><td><label style="display:flex;align-items:center;gap:7px;white-space:nowrap"><input type="checkbox" class="sendToggle" data-id="' + a.id + '" checked> 发</label></td><td>' +
     fmtTime(a.scheduledAt) + "</td><td>" + a.name + "</td><td>" + a.phone + "</td><td>" + a.instanceName +
@@ -403,7 +409,12 @@ function renderPreview(r) {
   $("testNote").classList.toggle("hidden", live);
   $("btnStartTest").classList.toggle("hidden", live);
   $("btnStartLive").classList.toggle("hidden", !live);
+  $("btnStartTest").textContent = preparedCanQueue ? "加入等待队列（TEST）" : "开始测试发送";
+  $("btnStartLive").textContent = preparedCanQueue ? "加入等待队列（LIVE）" : "开始发送（LIVE）";
+  $("btnStartTest").disabled = false;
+  $("btnStartLive").disabled = false;
   $("optIn").checked = false;
+  $("queueMsg").textContent = "";
   $("previewCard").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -419,23 +430,39 @@ function selectedSendCount() {
 }
 async function startCampaign(optIn) {
   $("startErr").textContent = "";
+  $("queueMsg").textContent = "";
   if (selectedSendCount() < 1) { $("startErr").textContent = "请至少保留 1 个收件人。"; return; }
-  const r = await post("/api/start", { optIn, overrides: collectOverrides(), skipIds: collectSkipIds() });
+  const r = await post("/api/start", {
+    optIn,
+    project: currentProject,
+    runId: preparedRunId,
+    overrides: collectOverrides(),
+    skipIds: collectSkipIds(),
+  });
   if (!r.ok) { $("startErr").textContent = r.error; return; }
+  if (r.queued) {
+    $("queueMsg").textContent = "✓ 已加入等待队列，第 " + r.position + " 批。当前 Batch 完成并通过 Notion 收尾检查后会自动开始。";
+    $("btnStartTest").disabled = true;
+    $("btnStartLive").disabled = true;
+    try { window.parent?.refreshCampaignQueue?.(); } catch {}
+    return;
+  }
   $("progressCard").classList.remove("hidden");
   $("progressCard").scrollIntoView({ behavior: "smooth" });
   startPolling();
 }
 $("btnStartTest").addEventListener("click", () => {
   const total = selectedSendCount();
-  if (!confirm("开始测试发送给 " + total + " 个测试收件人？")) return;
+  const action = preparedCanQueue ? "把这批测试发送加入等待队列" : "开始测试发送";
+  if (!confirm(action + "，共 " + total + " 个测试收件人？")) return;
   startCampaign(false);
 });
 $("btnStartLive").addEventListener("click", () => {
   if (!$("optIn").checked) { $("startErr").textContent = "请先勾选 opt-in 确认。"; return; }
   const total = selectedSendCount();
   const skipped = collectSkipIds().length;
-  if (!confirm("⚠️ LIVE：确认向 " + total + " 个真实号码发送？" + (skipped ? " 已手动跳过 " + skipped + " 个。" : "") + " 此操作会真实发出 WhatsApp 消息。")) return;
+  const action = preparedCanQueue ? "加入等待队列；轮到时会自动真实发送" : "立即真实发送";
+  if (!confirm("⚠️ LIVE：确认 " + action + "，共 " + total + " 个真实号码？" + (skipped ? " 已手动跳过 " + skipped + " 个。" : ""))) return;
   startCampaign(true);
 });
 $("btnStop").addEventListener("click", async () => {

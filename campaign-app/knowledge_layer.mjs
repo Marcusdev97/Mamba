@@ -210,7 +210,8 @@ export function listProjects() {
 // 回复进来是哪个盘的? 按可信度排:
 //   1. active-run.json — 正在跑的 blast, assignment 里有这个 phone -> run 的 project
 //   2. tracker/lead_status.json — 上次记录的 campaignId -> campaign 配置里的 project
-//   3. campaign-assets/projects.json — campaignId 前缀猜 project id
+//   3. blast_leads_cache.json — 另一台电脑 blast 后同步回来的 Notion 客户资料
+//   4. campaign-assets/projects.json — campaignId 前缀猜 project id
 // 认不出 -> null (brain_service 再去 Notion 查, 最后 fallback 默认盘)。
 
 function readJsonSyncSafe(p) { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } }
@@ -232,7 +233,7 @@ function projectFromCampaignId(campaignId) {
   return null;
 }
 
-export function resolveProjectLocal(phone) {
+export function resolveProjectLocal(phone, senderInstance = "") {
   const n = normalizePhoneLocal(phone);
   if (!n) return null;
 
@@ -250,6 +251,25 @@ export function resolveProjectLocal(phone) {
   if (entry?.campaignId) {
     const fromCid = projectFromCampaignId(entry.campaignId);
     if (fromCid) return fromCid;
+  }
+
+  // 3) Notion Blast Leads local cache. This is the cross-PC fast path: one
+  // computer may blast while another receives the webhook. Prefer the row
+  // owned by the same sender, then the most recently blasted row.
+  const cache = readJsonSyncSafe(path.join(dataDir, "blast_leads_cache.json"));
+  const rows = (cache?.records ?? []).filter((record) => normalizePhoneLocal(record?.phone) === n);
+  if (rows.length) {
+    const sender = String(senderInstance ?? "").trim().toLowerCase();
+    const matchingSender = sender
+      ? rows.filter((record) => String(record?.senderInstance ?? "").trim().toLowerCase() === sender)
+      : [];
+    const pool = matchingSender.length ? matchingSender : rows;
+    const latest = pool.slice().sort((a, b) => {
+      const aAt = new Date(a?.lastBlastAt || a?.firstBlastAt || 0).getTime() || 0;
+      const bAt = new Date(b?.lastBlastAt || b?.firstBlastAt || 0).getTime() || 0;
+      return bAt - aAt;
+    })[0];
+    if (latest?.project) return latest.project;
   }
 
   return null;

@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { fetchInstanceMessagesDeep, nextFlowBlockReason, replySafetyStatus } from "./routes/next-flow.routes.mjs";
+import {
+  fetchInstanceMessagesDeep,
+  isTransientConnectionError,
+  nextFlowBlockReason,
+  replySafetyStatus,
+  retryTransientConnection,
+} from "./routes/next-flow.routes.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
 
 function choice(name) {
@@ -50,6 +56,17 @@ const deep = await fetchInstanceMessagesDeep(deepRuntime, "wa_01", 150000, { pag
 assert.deepEqual(pagesRequested, [1, 2, 3]);
 assert.equal(deep.messages.length, 3);
 assert.equal(deep.pagesRead, 3);
+
+let transientAttempts = 0;
+const recovered = await retryTransientConnection(async () => {
+  transientAttempts += 1;
+  if (transientAttempts < 3) throw new Error("fetch failed");
+  return "connected";
+}, { delayMs: 0 });
+assert.equal(recovered, "connected");
+assert.equal(transientAttempts, 3);
+assert.equal(isTransientConnectionError(new Error("HTTP 503 unavailable")), true);
+assert.equal(isTransientConnectionError(new Error("HTTP 400 invalid instance")), false);
 
 const safetyNow = Date.parse("2026-07-13T04:00:00.000Z");
 assert.equal(replySafetyStatus({ trackerUpdatedAt: "2026-07-13T03:55:00.000Z", now: safetyNow }).safeToSend, true);

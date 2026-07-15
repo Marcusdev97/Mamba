@@ -30,6 +30,67 @@
   .spacer { flex: 1; }
   .sendbar a { color: var(--muted, #94a3b8); text-decoration: none; font-size: 13px; }
   .sendbar a:hover { color: var(--text, #e2e8f0); }
+  .queuebar {
+    display: flex; align-items: center; gap: 10px; min-width: 0;
+    padding: 7px 12px; border: 1px solid #334155; border-radius: 7px;
+    background: #111827; color: #cbd5e1; font-size: 12.5px;
+  }
+  .queuebar.hidden { display: none; }
+  .queuebar strong { color: #fbbf24; white-space: nowrap; }
+  .queuebar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+  .queuebar.held { border-color: #92400e; background: #291b0d; color: #fcd34d; }
+  .queuebar button {
+    border: 1px solid #475569; border-radius: 6px; padding: 5px 8px;
+    background: #1f2937; color: #e5e7eb; font: inherit; cursor: pointer; white-space: nowrap;
+  }
+  .queuebar button.danger { border-color: #7f1d1d; color: #fca5a5; }
+  .campaign-monitor {
+    display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(300px, 2fr);
+    gap: 18px; padding: 12px 18px; border-bottom: 1px solid var(--line, #1f2a3d);
+    background: #0b1018; color: #e5e7eb;
+  }
+  .monitor-summary { min-width: 0; display: grid; align-content: center; gap: 7px; }
+  .monitor-kicker { color: #94a3b8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+  .monitor-title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .monitor-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 800; }
+  .monitor-percent { margin-left: auto; color: #2dd36f; font-size: 17px; font-weight: 800; }
+  .monitor-track { height: 7px; overflow: hidden; border-radius: 4px; background: #243041; }
+  .monitor-track span {
+    display: block; width: 0; height: 100%; border-radius: inherit;
+    background: #2dd36f; transition: width .45s ease;
+  }
+  .monitor-track.running span {
+    background-image: linear-gradient(90deg, #16a34a 0 35%, #4ade80 50%, #16a34a 65% 100%);
+    background-size: 180px 100%; animation: monitorMove 1.4s linear infinite;
+  }
+  @keyframes monitorMove { to { background-position: 180px 0; } }
+  .monitor-meta { display: flex; gap: 12px; color: #94a3b8; font-size: 11.5px; white-space: nowrap; }
+  .monitor-meta b { color: #dbe4ef; }
+  .flow-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+  .flow-step {
+    position: relative; min-width: 0; padding: 9px 10px; border: 1px solid #283447;
+    border-radius: 7px; background: #121923;
+  }
+  .flow-step::after {
+    content: ""; position: absolute; top: 50%; right: -9px; width: 9px; height: 1px; background: #334155;
+  }
+  .flow-step:last-child::after { display: none; }
+  .flow-step small { display: block; color: #64748b; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+  .flow-step strong { display: block; overflow: hidden; margin-top: 3px; color: #cbd5e1; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+  .flow-step.done { border-color: #14532d; background: #0c2118; }
+  .flow-step.done small, .flow-step.done strong { color: #4ade80; }
+  .flow-step.active { border-color: #16a34a; background: #10291c; box-shadow: inset 3px 0 #2dd36f; }
+  .flow-step.active small { color: #86efac; }
+  .flow-step.active strong { color: #f0fdf4; }
+  .flow-step.held { border-color: #92400e; background: #291b0d; }
+  .flow-step.held small, .flow-step.held strong { color: #fbbf24; }
+  @media (max-width: 760px) {
+    .campaign-monitor { grid-template-columns: 1fr; gap: 10px; padding: 10px 14px; }
+    .flow-steps { gap: 5px; }
+    .flow-step { padding: 7px 6px; }
+    .flow-step strong { font-size: 10.5px; }
+    .monitor-meta { gap: 9px; }
+  }
   .frames { flex: 1; position: relative; }
   .frames iframe {
     position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
@@ -77,10 +138,37 @@
       <button class="tab" id="tab-next" onclick="show('next')"><span class="dot"></span>② Flow 2-10 · 跟进</button>
     </div>
     <div class="spacer"></div>
+    <div class="queuebar hidden" id="queueBar">
+      <strong id="queueCount"></strong>
+      <span id="queueDetail"></span>
+      <button type="button" class="hidden" id="queueRelease">确认后启动</button>
+      <button type="button" class="danger" id="queueCancel">取消下一批</button>
+    </div>
     <a href="/knowledge">🧠 脑编辑器</a>
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
   </div>
+  <section class="campaign-monitor" aria-label="Campaign live progress">
+    <div class="monitor-summary">
+      <div class="monitor-kicker" id="monitorKicker">Campaign Ready</div>
+      <div class="monitor-title-row">
+        <div class="monitor-title" id="monitorTitle">没有正在运行的 Batch</div>
+        <div class="monitor-percent" id="monitorPercent">0%</div>
+      </div>
+      <div class="monitor-track" id="monitorTrack"><span id="monitorFill"></span></div>
+      <div class="monitor-meta">
+        <span>完成 <b id="monitorDone">0</b></span>
+        <span>等待 <b id="monitorWaiting">0</b></span>
+        <span>失败 <b id="monitorFailed">0</b></span>
+      </div>
+    </div>
+    <div class="flow-steps">
+      <div class="flow-step" id="stepPrepared"><small>01 Prepared</small><strong id="stepPreparedText">等待 Batch</strong></div>
+      <div class="flow-step" id="stepSending"><small>02 Sending</small><strong id="stepSendingText">尚未开始</strong></div>
+      <div class="flow-step" id="stepNotion"><small>03 Notion</small><strong id="stepNotionText">等待发送完成</strong></div>
+      <div class="flow-step" id="stepQueue"><small>04 Next Batch</small><strong id="stepQueueText">Queue 空</strong></div>
+    </div>
+  </section>
   <div class="frames">
     <iframe id="frame-flow1" src="/"></iframe>
     <iframe id="frame-next" class="hidden" data-src="/next-flow"></iframe>
@@ -116,6 +204,61 @@ if (location.hash === "#next") show("next");
 
 let syncBusy = false;
 let successTimer = null;
+let firstQueuedRunId = null;
+let latestCampaignStatus = null;
+let latestCampaignQueue = null;
+
+const terminalStatuses = new Set([
+  "SENT", "REPLIED_WARM", "FAILED", "SKIPPED_END_TIME", "SKIPPED_MANUAL",
+  "SKIPPED_SUPPRESSED", "SKIPPED_REPLIED", "PART1_ONLY_END_TIME",
+]);
+
+function setStep(id, state, text) {
+  const element = document.getElementById(id);
+  element.classList.remove("active", "done", "held");
+  if (state) element.classList.add(state);
+  const strong = element.querySelector("strong");
+  if (strong) strong.textContent = text;
+}
+
+function renderCampaignMonitor(status, queue) {
+  const state = status?.state || null;
+  const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
+  const summary = state?.summary || {};
+  const total = Number(state?.total || assignments.length || 0);
+  const done = assignments.length
+    ? assignments.filter((item) => terminalStatuses.has(item.status)).length
+    : Object.entries(summary).reduce((sum, [key, count]) => sum + (terminalStatuses.has(key) ? Number(count || 0) : 0), 0);
+  const failed = Number(summary.FAILED || 0);
+  const waiting = Math.max(0, total - done);
+  const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const running = status?.running === true || state?.status === "RUNNING";
+  const project = typeof state?.project === "string" ? state.project : state?.project?.name;
+  const flow = state?.flowLabel || state?.templateFlow || "Flow 1 - Project Template";
+  const notionStatus = String(state?.advanceStatus || state?.notionSync?.status || "").toUpperCase();
+  const notionBusy = ["WAITING", "RUNNING"].includes(notionStatus);
+  const notionFailed = ["FAILED", "PARTIAL"].includes(notionStatus);
+  const queueFirst = queue?.items?.[0] || null;
+
+  document.getElementById("monitorKicker").textContent = running ? "Campaign Running" : state ? "Latest Campaign" : "Campaign Ready";
+  document.getElementById("monitorTitle").textContent = state
+    ? [project, flow, state.mode].filter(Boolean).join(" · ")
+    : "没有正在运行的 Batch";
+  document.getElementById("monitorPercent").textContent = percent + "%";
+  document.getElementById("monitorFill").style.width = percent + "%";
+  document.getElementById("monitorTrack").classList.toggle("running", running);
+  document.getElementById("monitorDone").textContent = done;
+  document.getElementById("monitorWaiting").textContent = waiting;
+  document.getElementById("monitorFailed").textContent = failed;
+
+  setStep("stepPrepared", state ? "done" : "", state ? `${total} 人 · ${state.mode}` : "等待 Batch");
+  setStep("stepSending", running ? "active" : state?.status === "COMPLETED" ? "done" : state?.status === "STOPPED" ? "held" : "",
+    running ? `${done}/${total} 正在发送` : state?.status === "STOPPED" ? "已停止" : state?.status === "COMPLETED" ? "发送完成" : "尚未开始");
+  setStep("stepNotion", notionFailed ? "held" : notionBusy ? "active" : notionStatus === "SUCCEEDED" ? "done" : "",
+    notionFailed ? `需要检查 · ${notionStatus}` : notionBusy ? `更新中 · ${notionStatus}` : notionStatus === "SUCCEEDED" ? "已同步" : "等待发送完成");
+  setStep("stepQueue", queue?.hold ? "held" : queueFirst ? "active" : "",
+    queue?.hold ? "Queue 已暂停" : queueFirst ? `${queue.count} 批 · ${queueFirst.project || queueFirst.projectId}` : "Queue 空");
+}
 
 function hideSyncOverlay() {
   document.getElementById("syncOverlay").classList.add("hidden");
@@ -196,12 +339,58 @@ async function pollRunning() {
   try {
     const r = await fetch("/api/status", { cache: "no-store" });
     const d = await r.json().catch(() => ({}));
+    latestCampaignStatus = d;
     const running = d?.status === "RUNNING" || d?.state?.status === "RUNNING" || d?.running === true;
     document.getElementById("tab-flow1").classList.toggle("running", Boolean(running));
     renderNotionSync(d?.state?.notionSync, d?.state?.runId);
   } catch { /* console 自己会显示, 这里只是点缀 */ }
+  await refreshCampaignQueue();
+  renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
   setTimeout(pollRunning, 1500);
 }
+
+async function refreshCampaignQueue() {
+  try {
+    const response = await fetch("/api/campaign-queue", { cache: "no-store" });
+    const data = await response.json();
+    const queue = data?.queue;
+    latestCampaignQueue = queue;
+    const bar = document.getElementById("queueBar");
+    if (!queue?.count) {
+      firstQueuedRunId = null;
+      bar.classList.add("hidden");
+      renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+      return;
+    }
+    const first = queue.items[0];
+    firstQueuedRunId = first.runId;
+    bar.classList.remove("hidden");
+    bar.classList.toggle("held", Boolean(queue.hold));
+    document.getElementById("queueCount").textContent = "Queue " + queue.count + " 批";
+    document.getElementById("queueDetail").textContent = queue.hold?.reason ||
+      ("下一批: " + (first.project || first.projectId) + " · " + first.flowLabel + " · " + first.total + " 人");
+    document.getElementById("queueRelease").classList.toggle("hidden", !queue.hold);
+    renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+  } catch { /* Queue 状态不应影响当前发送。 */ }
+}
+
+document.getElementById("queueCancel").addEventListener("click", async () => {
+  if (!firstQueuedRunId || !confirm("取消 Queue 里的下一批？不会停止当前正在发送的 Batch。")) return;
+  const response = await fetch("/api/campaign-queue/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: firstQueuedRunId }),
+  });
+  const data = await response.json();
+  if (!data.ok) alert(data.error || "取消 Queue 失败。");
+  await refreshCampaignQueue();
+});
+
+document.getElementById("queueRelease").addEventListener("click", async () => {
+  if (!confirm("当前收尾检查没有通过。你确认已经人工检查，并仍要启动下一批吗？")) return;
+  const response = await fetch("/api/campaign-queue/release", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const data = await response.json();
+  if (!data.ok) alert(data.error || "启动下一批失败。");
+  await refreshCampaignQueue();
+});
 pollRunning();
 </script>
 </body>

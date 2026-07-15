@@ -10,13 +10,18 @@ import { createApp } from "./app/createApp.mjs";
 import { loadRuntime } from "./app/loadRuntime.mjs";
 import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
+import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
+import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
+import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
+import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
 import { createProjectService } from "./lib/project-service.mjs";
 import { createReplyServiceManager } from "./lib/reply-service-manager.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createTemplateService } from "./lib/template-service.mjs";
+import { makeHub } from "./telegram_hub.mjs";
 import {
   paths,
   loadEnv,
@@ -82,6 +87,7 @@ const configuredBrainDb = (name, fallback) => String(notionConfig?.databases?.[n
 
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
+const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const replyServiceManager = createReplyServiceManager({
   rootDir: paths.rootDir,
   onLog: (message) => console.log(message),
@@ -135,6 +141,7 @@ const campaignRunService = createCampaignRunService({
 const {
   autoAdvanceFlow,
   autoNotionUpload,
+  recoverPendingUpdates,
   incPageNumber,
   creditSentCounts,
   emptySnapshot,
@@ -148,6 +155,77 @@ const projectService = createProjectService({
   normalizePhone: nfNormalizePhone,
 });
 const { getProject, fetchBlastedPhones } = projectService;
+const configuredFollowUpSyncMinutes = Number(process.env.MAMBA_FOLLOW_UP_SYNC_MINUTES || 30);
+const followUpSyncMinutes = Number.isFinite(configuredFollowUpSyncMinutes)
+  ? Math.max(5, configuredFollowUpSyncMinutes)
+  : 30;
+const outboundFollowUpService = createOutboundFollowUpService({
+  blastDatabaseId: blastDsId,
+  api,
+  notion,
+  openInstances: () => openInstances(api),
+  normalizePhone: nfNormalizePhone,
+  collectMessageObjects,
+  describeMessage,
+  resolvePhone,
+  messageTime,
+  queryNotionRows: blastCacheService.queryRows,
+  writeCache: blastCacheService.writeCache,
+  history: conversationHistoryService,
+  systemLogs: systemLogService,
+  intervalMs: followUpSyncMinutes * 60 * 1000,
+});
+
+async function localJson(pathname, options = {}) {
+  const response = await fetch(`http://${HOST}:${PORT}${pathname}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    signal: AbortSignal.timeout(15 * 60 * 1000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `Mamba API HTTP ${response.status}`);
+  return data;
+}
+
+const telegramHub = makeHub(env);
+const telegramFilterService = createTelegramFilterService({
+  rootDir: paths.rootDir,
+  getConnectedPhones: async () => (await listInstances(api)).map((item) => item.number),
+});
+const dailyCampaignService = createDailyCampaignService({
+  rootDir: paths.rootDir,
+  flowSequence: FLOW_SEQUENCE,
+  replyServices: replyServiceManager,
+  openInstances: () => openInstances(api),
+  getRunner: () => runner,
+  queue: campaignQueueService,
+  systemLogs: systemLogService,
+  postOps: telegramHub.hasOps ? (text) => telegramHub.postOps(text) : null,
+  fetchDuePlan: ({ deep = false } = {}) => localJson(`/api/next-flow/list${deep ? "?deep=1" : ""}`),
+  executeTest: async ({ batch, instances, maxLeads }) => {
+    const projects = await loadProjects();
+    const project = projects.find((item) => item.name === batch.project);
+    if (!project) throw new Error(`找不到 Project 配置: ${batch.project}`);
+    const testRecipients = getTestLeads().slice(0, maxLeads)
+      .map((lead) => `${lead.name},${lead.phone},${lead.language || "en"}`)
+      .join("\n");
+    if (!testRecipients) throw new Error("Settings 没有 TEST 收件人，无法安全测试自动任务。");
+    const selectedInstances = instances.slice(0, 1).map((item) => item.name).filter(Boolean);
+    const prepared = await localJson("/api/prepare", {
+      method: "POST",
+      body: JSON.stringify({ project: project.id, mode: "TEST", instances: selectedInstances, testRecipients }),
+    });
+    await localJson("/api/next-flow/apply-templates", {
+      method: "POST",
+      body: JSON.stringify({ projectName: batch.project, flow: batch.flow }),
+    });
+    const started = await localJson("/api/start", {
+      method: "POST",
+      body: JSON.stringify({ optIn: true, overrides: [] }),
+    });
+    return { runId: prepared?.snapshot?.state?.runId || prepared?.snapshot?.runId || null, queued: started.queued === true };
+  },
+});
 
 const handlers = {};
 
@@ -162,7 +240,9 @@ const runtime = await loadRuntime({
   getRunner: () => runner,
   systemLogs: systemLogService,
   settings: settingsService,
+  telegramFilters: telegramFilterService,
   replyServices: replyServiceManager,
+  dailyCampaign: dailyCampaignService,
   projects: {
     alias: notionConfig?.projectAlias || {},
     firstFlowLabel: FIRST_FLOW_LABEL,
@@ -230,6 +310,7 @@ const runtime = await loadRuntime({
     messageTime,
     normalizePhone: nfNormalizePhone,
     history: conversationHistoryService,
+    outboundSync: outboundFollowUpService,
     systemLogs: systemLogService,
     readCache: blastCacheService.read,
     writeCache: blastCacheService.writeCache,
@@ -285,6 +366,15 @@ const runtime = await loadRuntime({
     formatTime,
     getTestLeads,
     createRunner: (config) => new CampaignRunner({ config, env, systemLogs: systemLogService }),
+    restoreRunner: async ({ runId, projectId }) => {
+      if (!/^run_[A-Za-z0-9_.-]+$/.test(String(runId || ""))) throw new Error("Queue runId 不合法。");
+      const { config } = await getProject(projectId);
+      const restored = new CampaignRunner({ config, env, systemLogs: systemLogService });
+      const expectedPath = path.join(paths.runsDir, `${runId}.json`);
+      await restored.restore(expectedPath);
+      return restored;
+    },
+    queue: campaignQueueService,
     applyNotionFlowTemplatesToState,
     firstFlowLabel: FIRST_FLOW_LABEL,
     applyTemplateOverrides,
@@ -292,6 +382,7 @@ const runtime = await loadRuntime({
     autoAdvanceFlow,
     creditSentCounts,
     autoNotionUpload,
+    recoverPendingUpdates,
     emptySnapshot,
     buildCsv,
   },
@@ -326,6 +417,54 @@ const runtime = await loadRuntime({
 });
 const server = http.createServer(createApp(runtime));
 
+async function restoreActiveCampaign() {
+  let saved;
+  try {
+    saved = JSON.parse(await fs.readFile(path.join(paths.dataDir, "active-run.json"), "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") console.log(`Active campaign recovery read failed: ${error.message}`);
+    return null;
+  }
+  if (saved?.mode !== "LIVE" || !saved?.runId) return null;
+  const projectId = saved.projectId || saved.campaignId;
+  if (!projectId) {
+    console.log(`Active campaign ${saved.runId} cannot recover: missing projectId/campaignId.`);
+    return null;
+  }
+  try {
+    const restored = await runtime.campaign.restoreRunner({ runId: saved.runId, projectId });
+    runner = restored;
+    if (saved.status === "RUNNING") {
+      restored.state.status = "INTERRUPTED";
+      restored.pushLog("检测到上次运行期间服务中断。已停止自动发送；请人工检查后再按 Resume。已发送记录不会重发。");
+      await restored.saveState();
+      await systemLogService.write({
+        level: "warn",
+        area: "campaign",
+        event: "campaign_interrupted_recovered",
+        message: "Recovered an interrupted campaign without resuming sends.",
+        context: { runId: saved.runId, project: saved.project || null },
+      }).catch(() => {});
+      return { restored: true, interrupted: true };
+    }
+    const recovery = await runtime.campaign.recoverPendingUpdates(restored);
+    if (recovery?.recovered) {
+      console.log(`Recovered pending Notion update for ${saved.runId}: ${recovery.kind} ${recovery.status || ""}`);
+    }
+    return { restored: true, recovery };
+  } catch (error) {
+    console.log(`Active campaign recovery failed: ${error.message}`);
+    await systemLogService.write({
+      level: "error",
+      area: "campaign",
+      event: "campaign_recovery_failed",
+      message: "Could not restore pending campaign/Notion state after restart.",
+      context: { runId: saved.runId, error: error.message },
+    }).catch(() => {});
+    return null;
+  }
+}
+
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
     console.log("");
@@ -346,6 +485,9 @@ server.listen(PORT, HOST, () => {
   console.log(`Open in your browser: ${openUrl}`);
   console.log("Close this window to stop the console.");
   replyServiceManager.startMonitoring();
+  outboundFollowUpService.start();
+  dailyCampaignService.start();
+  restoreActiveCampaign().catch((error) => console.log(`Campaign recovery failed: ${error.message}`));
   replyServiceManager.ensureStarted()
     .then((status) => console.log(`Reply services: tracker ${status.tracker ? "ONLINE" : "OFFLINE"} · brain ${status.brain ? "ONLINE" : "OFFLINE"}`))
     .catch((error) => console.log(`Reply services could not start: ${error.message}`));
@@ -355,6 +497,8 @@ server.listen(PORT, HOST, () => {
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.once(signal, () => {
     replyServiceManager.stopManaged();
+    outboundFollowUpService.stop();
+    dailyCampaignService.stop();
     server.close(() => process.exit(0));
   });
 }

@@ -19,6 +19,9 @@ import { classifyReplyText } from "./flow_sequence.mjs";
 import { addLocalStop } from "./suppression.mjs";
 import { makeHub } from "./telegram_hub.mjs";
 import { resolveProjectLocal } from "./knowledge_layer.mjs";
+import { resolveInboundProject } from "./lib/inbound-project-resolver.mjs";
+import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
+import { createTrackerReliabilityService } from "./lib/tracker-reliability-service.mjs";
 
 const hub = makeHub();
 
@@ -36,6 +39,10 @@ const csvPath = path.join(trackerDir, "replies.csv");
 
 const env = await loadEnv();
 const api = makeApi(env);
+const telegramFilters = createTelegramFilterService({
+  rootDir: paths.rootDir,
+  getConnectedPhones: async () => (await listInstances(api)).map((item) => item.number),
+});
 const notion = await createNotionSync({
   env,
   onLog: (message) => console.log(message),
@@ -46,8 +53,8 @@ let startedAt = new Date().toISOString();
 let leadIndex = new Map();
 let lastEvents = [];
 const pushedPhones = new Set(); // unknown numbers manually pushed to Notion this session
-const pendingNotionReplies = new Map();
 let retryingNotionReplies = false;
+const reliability = createTrackerReliabilityService({ trackerDir });
 
 // Click-to-WhatsApp ad leads: customers message in with a recognizable opening
 // phrase (configured in campaign-assets/ad_triggers.json). When matched, we
@@ -99,6 +106,11 @@ async function sendKeywordAlert(event, labels) {
   // content into the Ops/System channel and create a duplicate notification.
   if (hub.enabled) return;
   if (!tg.enabled || !tg.hasChatId || !labels.length) return;
+  const filter = await telegramFilters.match(event.phone);
+  if (filter.filtered) {
+    console.log(`[telegram-filter] legacy alert skipped phone=${event.phone} reason=${filter.reason}`);
+    return;
+  }
   const who = event.name && event.name !== "Unknown" ? `${event.name} (${event.phone})` : event.phone;
   const message = [
     `🔔 <b>需要人工跟进</b> · ${escapeHtml(labels.join(" / "))}`,
@@ -247,6 +259,11 @@ async function saveEvent(event) {
   lastEvents.unshift(event);
   lastEvents = lastEvents.slice(0, 80);
   countEvent(event);
+  await reliability.heartbeat({
+    startedAt,
+    lastReplyAt: event.receivedAt,
+    webhookMode: skipWebhookSetup ? "forwarded" : "direct",
+  }).catch((error) => console.log(`Tracker heartbeat write failed: ${error.message}`));
 
   // RED verdict -> block this phone locally RIGHT NOW (all projects, all
   // senders), even if the number isn't in Notion yet (stranger / cross-PC lag).
@@ -262,9 +279,18 @@ async function saveEvent(event) {
 
   // Telegram Hub 统一收件箱: 全量转发 (SPAM 除外), 按盘进 topic。失败只记 log,
   // 绝不拖垮 saveEvent — 本地 jsonl 才是 source of truth。
-  if (hub.enabled) {
-    const project = resolveProjectLocal(event.phone);
-    hub.postInbound(event, project).catch((error) => {
+  const telegramFilter = await telegramFilters.match(event.phone);
+  if (telegramFilter.filtered) {
+    console.log(`[telegram-filter] inbox skipped phone=${event.phone} reason=${telegramFilter.reason}`);
+  } else if (hub.enabled) {
+    resolveInboundProject(event, {
+      resolveLocal: (phone) => resolveProjectLocal(phone, event.instanceName),
+      notion,
+      onLog: (message) => console.log(message),
+    }).then(({ project, source }) => {
+      console.log(`[hub] route phone=${event.phone} project=${project || "Unknown"} source=${source}`);
+      return hub.postInbound(event, project);
+    }).catch((error) => {
       console.log(`[hub] inbox card failed for ${event.phone}: ${error.message}`);
     });
   }
@@ -285,37 +311,45 @@ async function saveEvent(event) {
 }
 
 async function syncBlastReplyToNotion(event, attempts = 0) {
-  if (!notion.enabled) return;
+  if (!notion.enabled) {
+    await reliability.enqueue(event, {
+      attempts: attempts + 1,
+      lastError: "Notion sync disabled or NOTION_API_KEY is unavailable.",
+    });
+    return;
+  }
   try {
     // Never auto-create a Blast Leads row from a webhook. A just-finished blast
     // may still be uploading its official row; another PC may already own it.
     // We wait for that row and update it by phone, preserving its project/run data.
     const result = await notion.upsertLeadReply(event, { createIfMissing: false });
     if (result?.matched) {
-      pendingNotionReplies.delete(event.id);
+      await reliability.remove(event.id);
       pushedPhones.add(event.phone);
       if (!event.leadId) console.log(`Notion matched cross-PC lead ${event.phone}; reply updated.`);
       return;
     }
-    if (attempts < 40) {
-      pendingNotionReplies.set(event.id, { event, attempts: attempts + 1 });
-      if (attempts === 0) console.log(`Notion row not ready for ${event.phone}; reply queued for retry.`);
-    } else {
-      pendingNotionReplies.delete(event.id);
-      console.log(`Notion reply retry expired for ${event.phone}; use Conversations > Refresh Replies to retry.`);
-    }
+    await reliability.enqueue(event, { attempts: attempts + 1, lastError: "Notion Blast Leads row not found yet." });
+    if (attempts === 0) console.log(`Notion row not ready for ${event.phone}; reply queued for retry.`);
   } catch (error) {
-    if (attempts < 40) pendingNotionReplies.set(event.id, { event, attempts: attempts + 1 });
-    else pendingNotionReplies.delete(event.id);
+    await reliability.enqueue(event, { attempts: attempts + 1, lastError: error.message });
     console.log(`Notion sync failed for reply ${event.phone}: ${error.message}`);
   }
 }
 
+function notionRetryDelayMs(attempts) {
+  const retryNumber = Math.max(0, Number(attempts) || 0);
+  return Math.min(60 * 60 * 1000, 15_000 * (2 ** Math.min(retryNumber, 8)));
+}
+
 async function retryPendingNotionReplies() {
-  if (retryingNotionReplies || !pendingNotionReplies.size) return;
+  const pending = reliability.values();
+  if (retryingNotionReplies || !pending.length) return;
   retryingNotionReplies = true;
   try {
-    for (const { event, attempts } of [...pendingNotionReplies.values()]) {
+    for (const { event, attempts, updatedAt } of pending) {
+      const lastAttemptAt = new Date(updatedAt || 0).getTime();
+      if (Number.isFinite(lastAttemptAt) && Date.now() - lastAttemptAt < notionRetryDelayMs(attempts)) continue;
       await syncBlastReplyToNotion(event, attempts);
     }
   } finally {
@@ -648,16 +682,33 @@ await ensureFiles();
 await loadExistingEvents();
 await refreshLeadIndex();
 await loadAdTriggers();
+await reliability.init();
 
 // Recover a reply that arrived just before the tracker/server was restarted.
 // Older unmatched messages remain available through Conversations > Refresh Replies.
 const retryCutoff = Date.now() - 15 * 60 * 1000;
 for (const event of lastEvents) {
   if (!event.adLead && new Date(event.receivedAt || 0).getTime() >= retryCutoff) {
-    pendingNotionReplies.set(event.id, { event, attempts: 0 });
+    const alreadyQueued = reliability.values().some((item) => String(item.event?.id) === String(event.id));
+    if (!alreadyQueued) await reliability.enqueue(event, { attempts: 0 });
   }
 }
-const notionRetryTimer = setInterval(retryPendingNotionReplies, 15_000);
+await reliability.heartbeat({
+  startedAt,
+  lastReplyAt: lastEvents[0]?.receivedAt || null,
+  webhookMode: skipWebhookSetup ? "forwarded" : "direct",
+});
+const heartbeatTimer = setInterval(() => {
+  reliability.heartbeat({
+    startedAt,
+    lastReplyAt: lastEvents[0]?.receivedAt || null,
+    webhookMode: skipWebhookSetup ? "forwarded" : "direct",
+  }).catch((error) => console.log(`Tracker heartbeat write failed: ${error.message}`));
+}, 15_000);
+heartbeatTimer.unref();
+const notionRetryTimer = setInterval(() => {
+  retryPendingNotionReplies().catch((error) => console.log(`Notion retry loop failed: ${error.message}`));
+}, 15_000);
 notionRetryTimer.unref();
 
 const server = http.createServer(async (req, res) => {
@@ -674,7 +725,17 @@ const server = http.createServer(async (req, res) => {
         known: Boolean(event.leadId),
         pushed: pushedPhones.has(event.phone),
       }));
-      json(res, 200, { ok: true, startedAt, stats, leadsIndexed: leadIndex.size, notionSync: notion.enabled, events });
+      const reliabilityState = reliability.snapshot();
+      json(res, 200, {
+        ok: true,
+        startedAt,
+        stats,
+        leadsIndexed: leadIndex.size,
+        notionSync: notion.enabled,
+        notionPending: reliabilityState.pendingCount,
+        heartbeat: reliabilityState.heartbeat,
+        events,
+      });
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/push") {

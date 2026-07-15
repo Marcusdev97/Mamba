@@ -144,6 +144,40 @@ function pageSelectName(page, propertyName) {
   return page?.properties?.[propertyName]?.select?.name ?? page?.properties?.[propertyName]?.status?.name ?? "";
 }
 
+function pageText(page, propertyName) {
+  const property = page?.properties?.[propertyName];
+  return property?.rich_text?.map((item) => item?.plain_text ?? item?.text?.content ?? "").join("").trim()
+    || property?.title?.map((item) => item?.plain_text ?? item?.text?.content ?? "").join("").trim()
+    || pageSelectName(page, propertyName);
+}
+
+function pageDateMs(page, propertyName) {
+  const value = page?.properties?.[propertyName]?.date?.start;
+  const timestamp = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function selectLatestLeadProject(pages, senderInstance = "") {
+  const rows = Array.isArray(pages) ? pages.filter(Boolean) : [];
+  if (!rows.length) return null;
+  const sender = String(senderInstance ?? "").trim().toLowerCase();
+  const senderOf = (page) => [
+    pageText(page, "Sender Instance"),
+    pageText(page, "Last Sender Key"),
+    pageText(page, "Assigned Sender Key"),
+  ].map((value) => String(value).trim().toLowerCase()).filter(Boolean);
+  const matchingSender = sender ? rows.filter((page) => senderOf(page).includes(sender)) : [];
+  const pool = matchingSender.length ? matchingSender : rows;
+  const latestAt = (page) => Math.max(
+    pageDateMs(page, "Last Blast At"),
+    pageDateMs(page, "First Blast At"),
+    pageDateMs(page, "Last Replied"),
+    pageDateMs(page, "Last Reply At"),
+  );
+  const best = pool.slice().sort((a, b) => latestAt(b) - latestAt(a))[0];
+  return pageText(best, "Project") || null;
+}
+
 function languageLabel(language) {
   if (String(language).toLowerCase() === "zh") return "ZH";
   if (String(language).toLowerCase() === "bm") return "BM";
@@ -173,6 +207,12 @@ function shouldScheduleAgentFollowUp(event) {
     && !/not interested|do not contact|stop_dnc/.test(terminal);
 }
 
+function shouldClearAgentFollowUp(event) {
+  return event?.stopFlag
+    || ["NOT_INTERESTED", "COLD_SHORT_REJECT", "SPAM_IGNORE", "AGENT_OR_WRONG_TARGET", "WRONG_PERSON"].includes(event?.route)
+    || ["Stopped", "Not Interested"].includes(event?.sequenceStatus);
+}
+
 export function buildLeadReplyProperties(schema, event, replyCount = 1, checkedAt = new Date().toISOString()) {
   const properties = {
     Status: choice(schema, "Status", leadStatusFromReply(event)),
@@ -191,6 +231,8 @@ export function buildLeadReplyProperties(schema, event, replyCount = 1, checkedA
     properties["Stop Flag"] = checkbox(true);
     properties["Stop Reason"] = richText(`Auto: ${event.route || "STOP"}`);
     if (schema?.["Follow Up At"]) properties["Follow Up At"] = { date: null };
+  } else if (shouldClearAgentFollowUp(event) && schema?.["Follow Up At"]) {
+    properties["Follow Up At"] = { date: null };
   } else if (shouldScheduleAgentFollowUp(event) && schema?.["Follow Up At"]) {
     // Every real inbound reply becomes an agent task immediately. The desk
     // rolls it forward after each human touch until Done or STOP.
@@ -346,6 +388,15 @@ export class NotionSync {
       phone_number: { equals: phone },
     }, 1);
     return result?.results?.[0] ?? null;
+  }
+
+  async findLeadProjectByPhone(phone, senderInstance = "") {
+    if (!this.enabled || !phone) return null;
+    const result = await this.queryDataSource(blastLeadsDatabase(this.config), {
+      property: "Phone",
+      phone_number: { equals: phone },
+    }, 20);
+    return selectLatestLeadProject(result?.results ?? [], senderInstance);
   }
 
   // STOP stops the PERSON, not the project: the same phone can have one Blast

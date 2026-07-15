@@ -113,6 +113,18 @@ export function classifyByBotRules(text) {
   return null;
 }
 
+export function isClearRejectionText(text) {
+  const cleaned = String(text || "").toLowerCase().trim();
+  if (!cleaned) return false;
+  const normalized = cleaned
+    .replace(/[，。！？、,.!?~～🙏👍👌]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const exactReject = /^(?:no|nope|nah|no thanks|no thank you|不要|不要了|不用|不用了|不要 谢谢|不用 谢谢|谢谢 不用|谢谢 不用了|谢谢 不要|谢谢 不要了|tak nak|tak payah)$/i;
+  const strongReject = /(?:not interested|no need|don'?t need|do not need|not keen|not looking|没兴趣|暂时不用|不需要|tak berminat)/i;
+  return exactReject.test(normalized) || strongReject.test(normalized);
+}
+
 // Deterministic, rule-based reply classifier. Rule-based on purpose for the MVP
 // (safer/cheaper than AI). Returns the four values the rest of the system needs.
 // Option names below MUST match the Notion select options exactly:
@@ -164,7 +176,7 @@ export function classifyReplyText(text) {
     return { route: "DETAILS_REQUEST", status: "Warm", sequenceStatus: "Human Takeover", nextAction: "Send Brochure", aiCategory: "Brochure Request", stopFlag: false, signal: "GREEN", suggestedReply: "可以，我 send 资料给你看。你比较想看价格、地点还是户型先？" };
   }
   // 4) NOT_INTERESTED — soft reject, no actionable request found above.
-  if (/(not interested|no need|no thanks|不要了|没兴趣|暂时不用|不需要|tak berminat|tak nak)/i.test(cleaned)) {
+  if (isClearRejectionText(cleaned)) {
     return { route: "NOT_INTERESTED", status: "Not Interested", sequenceStatus: "Not Interested", nextAction: "No Action", aiCategory: "Not Interested", stopFlag: false, signal: "GREY", suggestedReply: "明白的，不打扰你。之后如果有看 KL property 再找我就可以。" };
   }
   // 5) AGENT / WRONG TARGET / ALREADY BOUGHT.

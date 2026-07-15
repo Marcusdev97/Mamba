@@ -47,9 +47,9 @@ export function replySafetyStatus({ trackerUpdatedAt, deepCheckedAt, deepOk = fa
 async function currentReplySafety(runtime) {
   let trackerUpdatedAt = null;
   try {
-    const trackerPath = path.join(runtime.paths.rootDir, "campaign-data", "tracker", "lead_status.json");
+    const trackerPath = path.join(runtime.paths.rootDir, "campaign-data", "tracker", "heartbeat.json");
     const status = JSON.parse(await fs.readFile(trackerPath, "utf8"));
-    trackerUpdatedAt = status?.updatedAt || null;
+    trackerUpdatedAt = status?.heartbeatAt || null;
   } catch {
     // Missing tracker state is handled as stale below.
   }
@@ -71,8 +71,8 @@ async function trackerInbound(runtime, leads) {
   const inbound = new Map();
   let updatedAt = null;
   try {
-    const status = JSON.parse(await fs.readFile(path.join(trackerDir, "lead_status.json"), "utf8"));
-    updatedAt = status?.updatedAt ?? null;
+    const status = JSON.parse(await fs.readFile(path.join(trackerDir, "heartbeat.json"), "utf8"));
+    updatedAt = status?.heartbeatAt ?? null;
   } catch { /* tracker 从没跑过 — 前端会警告 */ }
   const latest = new Map();
   try {
@@ -236,10 +236,29 @@ async function latestInboundReplies(nextFlow, instances, leadsByPhone, sinceForL
 
 async function loadOpenInstances(nextFlow) {
   try {
-    return await nextFlow.openInstances();
+    return await retryTransientConnection(() => nextFlow.openInstances());
   } catch (error) {
     throw httpError(503, `读取 WhatsApp Phone Health 失败: ${error.message}`);
   }
+}
+
+export function isTransientConnectionError(error) {
+  const message = String(error?.message || error || "");
+  return /fetch failed|timeout|timed out|aborted|ECONNRESET|ECONNREFUSED|EPIPE|HTTP (?:408|429|5\d\d)\b/i.test(message);
+}
+
+export async function retryTransientConnection(operation, { attempts = 3, delayMs = 400 } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation(attempt);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isTransientConnectionError(error)) throw error;
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+  throw lastError;
 }
 
 function paginationNumber(value, names) {
@@ -268,10 +287,10 @@ export async function fetchInstanceMessagesDeep(nextFlow, instanceName, sinceMs,
   let truncated = false;
 
   for (let page = 1; page <= maxPages; page += 1) {
-    const response = await nextFlow.api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+    const response = await retryTransientConnection(() => nextFlow.api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
       method: "POST",
       body: JSON.stringify({ where: {}, page, offset: pageSize }),
-    });
+    }), { attempts: Number(options.retryAttempts || 3), delayMs: Number(options.retryDelayMs ?? 400) });
     const pageMessages = nextFlow.collectMessageObjects(response);
     pagesRead += 1;
 

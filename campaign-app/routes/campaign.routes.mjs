@@ -130,13 +130,102 @@ async function writeCampaignLog(runtime, level, event, message, context = {}) {
   }
 }
 
+export function campaignQueueBlockReason(runner) {
+  const state = runner?.state;
+  if (!state) return null;
+  if (runner.running) return "当前 Campaign 仍在发送。";
+  if (state.status === "STOPPED") return "当前 Campaign 已手动停止；请确认后再启动下一批。";
+  if (["READY", "READY_TEST"].includes(state.status)) return "当前还有一个尚未启动的预览。";
+  if (state.mode === "LIVE" && state.flowLabel && ["WAITING", "RUNNING"].includes(state.advanceStatus)) {
+    return `当前 ${state.flowLabel} 仍在更新 Notion（${state.advanceStatus}）；完成后 Queue 会自动继续。`;
+  }
+  if (state.mode === "LIVE" && state.flowLabel && ["FAILED", "PARTIAL"].includes(state.advanceStatus)) {
+    return `当前 ${state.flowLabel} 的 Notion Flow 推进状态是 ${state.advanceStatus}；请先修复，避免下一批与旧状态混在一起。`;
+  }
+  if (state.mode === "LIVE" && !state.flowLabel && ["WAITING", "RUNNING"].includes(state.notionSync?.status)) {
+    return `当前 Flow 1 仍在更新 Notion（${state.notionSync.status}）；完成后 Queue 会自动继续。`;
+  }
+  if (state.mode === "LIVE" && !state.flowLabel && state.notionSync?.status === "FAILED") {
+    return "当前 Flow 1 的 Notion 上传失败；请先补跑或确认后再启动下一批。";
+  }
+  return null;
+}
+
+async function restoreQueuedRunner(campaign, item) {
+  try {
+    return await campaign.restoreRunner({ runId: item.runId, projectId: item.projectId });
+  } catch (error) {
+    throw httpError(500, `恢复排队 Campaign 失败: ${error.message}`);
+  }
+}
+
+function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error") {
+  const campaign = requireCampaign(runtime);
+  campaign.setRunner(runner);
+  (async () => {
+    try {
+      await runner.run();
+      if (autoAdvance) await campaign.autoAdvanceFlow(runner);
+      if (autoAdvance) await campaign.creditSentCounts(runner);
+      await campaign.autoNotionUpload(runner);
+    } catch (error) {
+      runner.pushLog(`运行出错：${error.message}`);
+      await runner.systemLog?.("error", errorEvent, "Campaign background run failed.", { error: error.message });
+    } finally {
+      await startNextQueued(runtime).catch(async (error) => {
+        await campaign.queue.setHold(`启动下一批失败: ${error.message}`, runner.state?.runId).catch(() => {});
+        await writeCampaignLog(runtime, "error", "campaign_queue_start_failed", "Queued campaign failed to start.", {
+          runId: runner.state?.runId ?? null,
+          error: error.message,
+        });
+      });
+    }
+  })();
+}
+
+async function startNextQueued(runtime, { force = false } = {}) {
+  const campaign = requireCampaign(runtime);
+  const current = campaign.getRunner();
+  if (current?.running) return null;
+  const next = await campaign.queue.peek();
+  if (!next) {
+    await campaign.queue.clearHold();
+    return null;
+  }
+
+  const reason = campaignQueueBlockReason(current);
+  if (reason && !force) {
+    await campaign.queue.setHold(reason, current?.state?.runId ?? null);
+    return { held: true, reason };
+  }
+
+  const nextRunner = await restoreQueuedRunner(campaign, next);
+  await campaign.queue.remove(next.runId);
+  await campaign.queue.clearHold();
+  nextRunner.pushLog(`Queue 接力启动: 前一批已结束，现在开始 ${next.project || next.projectId} · ${next.flowLabel}。`);
+  await writeCampaignLog(runtime, "info", "campaign_queue_started", "Queued campaign started.", {
+    runId: next.runId,
+    project: next.project,
+    flowLabel: next.flowLabel,
+    forced: force,
+  });
+  runCampaignInBackground(runtime, nextRunner, next.autoAdvance, "campaign_queued_run_error");
+  return { held: false, started: next };
+}
+
+async function resolveStartRunner(campaign, body) {
+  const current = campaign.getRunner();
+  const requestedRunId = String(body.runId || "").trim();
+  if (!requestedRunId || current?.state?.runId === requestedRunId) return current;
+  if (!body.project) throw httpError(400, "排队预览缺少 project，请重新生成预览。");
+  return campaign.restoreRunner({ runId: requestedRunId, projectId: body.project });
+}
+
 export function registerCampaignRoutes(router) {
   router.post("/api/prepare", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
     const currentRunner = campaign.getRunner();
-    if (currentRunner && currentRunner.running) {
-      throw httpError(409, "已有 campaign 正在运行，请先停止。");
-    }
+    const preparingBehindActiveRun = Boolean(currentRunner?.running);
 
     const body = await readJson(req);
     let project;
@@ -162,9 +251,10 @@ export function registerCampaignRoutes(router) {
     const leads = selectLeads(campaign, project, mode, body);
 
     const runner = campaign.createRunner(config);
-    campaign.setRunner(runner);
+    runner.mirrorActiveState = !preparingBehindActiveRun;
     try {
       await runner.prepare({ mode, startAt, endAt, instances, leads, project: project.name });
+      runner.state.projectId = project.id;
     } catch (error) {
       throw httpError(500, `生成 campaign 预览失败: ${error.message}`);
     }
@@ -183,10 +273,12 @@ export function registerCampaignRoutes(router) {
     } catch (error) {
       throw httpError(500, `保存 campaign 预览失败: ${error.message}`);
     }
+    if (!preparingBehindActiveRun) campaign.setRunner(runner);
 
     json(res, 200, {
       ok: true,
       project: project.id,
+      queueAvailable: preparingBehindActiveRun,
       schedule: { start: campaign.formatTime(startAt), end: campaign.formatTime(endAt) },
       snapshot: runner.snapshot(),
     });
@@ -195,7 +287,8 @@ export function registerCampaignRoutes(router) {
   router.post("/api/start", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
     const body = await readJson(req);
-    const runner = campaign.getRunner();
+    const activeRunner = campaign.getRunner();
+    const runner = await resolveStartRunner(campaign, body);
     ensureRunnableStart(runner, body);
     const skippedCount = applyManualSkips(runner, body.skipIds);
     if (skippedCount) {
@@ -241,16 +334,25 @@ export function registerCampaignRoutes(router) {
       throw httpError(500, `保存 campaign 状态失败: ${error.message}`);
     }
 
-    runner.run()
-      .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
-      .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
-      .then(() => campaign.autoNotionUpload(runner))
-      .catch(async (error) => {
-        runner.pushLog(`运行出错：${error.message}`);
-        await runner.systemLog?.("error", "campaign_run_error", "Campaign background run failed.", { error: error.message });
+    const existingQueue = await campaign.queue.snapshot();
+    if ((activeRunner?.running && activeRunner !== runner) || existingQueue.count > 0) {
+      runner.state.status = "QUEUED_BATCH";
+      await runner.saveState();
+      const queued = await campaign.queue.add(runner, { projectId: runner.state.projectId || body.project, autoAdvance });
+      runner.pushLog(`已加入 Campaign Queue，第 ${queued.position} 位。`);
+      await writeCampaignLog(runtime, "info", "campaign_queued", "Campaign batch added to queue.", {
+        runId: runner.state.runId,
+        project: runner.state.project,
+        flowLabel: runner.state.flowLabel || runner.state.templateFlow,
+        position: queued.position,
       });
+      if (!activeRunner?.running) await startNextQueued(runtime);
+      json(res, 200, { ok: true, queued: true, position: queued.position, queue: await campaign.queue.snapshot(), snapshot: runner.snapshot() });
+      return;
+    }
 
-    json(res, 200, { ok: true, snapshot: runner.snapshot() });
+    runCampaignInBackground(runtime, runner, autoAdvance);
+    json(res, 200, { ok: true, queued: false, snapshot: runner.snapshot() });
   });
 
   router.post("/api/resume", async (_req, res, runtime) => {
@@ -266,14 +368,7 @@ export function registerCampaignRoutes(router) {
     const autoAdvance = markFlowAdvanceWaiting(runner);
     await runner.saveState();
 
-    runner.run()
-      .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
-      .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
-      .then(() => campaign.autoNotionUpload(runner))
-      .catch(async (error) => {
-        runner.pushLog(`运行出错：${error.message}`);
-        await runner.systemLog?.("error", "campaign_resume_error", "Campaign resume failed.", { error: error.message });
-      });
+    runCampaignInBackground(runtime, runner, autoAdvance, "campaign_resume_error");
     json(res, 200, { ok: true, snapshot: runner.snapshot() });
   });
 
@@ -300,14 +395,7 @@ export function registerCampaignRoutes(router) {
     const autoAdvance = markFlowAdvanceWaiting(runner);
     await runner.saveState();
 
-    runner.run()
-      .then(() => (autoAdvance ? campaign.autoAdvanceFlow(runner) : null))
-      .then(() => (autoAdvance ? campaign.creditSentCounts(runner) : null))
-      .then(() => campaign.autoNotionUpload(runner))
-      .catch(async (error) => {
-        runner.pushLog(`运行出错：${error.message}`);
-        await runner.systemLog?.("error", "campaign_retry_failed_error", "Retry failed campaign run failed.", { error: error.message });
-      });
+    runCampaignInBackground(runtime, runner, autoAdvance, "campaign_retry_failed_error");
     json(res, 200, { ok: true, retried: queued, snapshot: runner.snapshot() });
   });
 
@@ -322,6 +410,29 @@ export function registerCampaignRoutes(router) {
     const campaign = requireCampaign(runtime);
     const runner = campaign.getRunner();
     json(res, 200, runner ? runner.snapshot() : campaign.emptySnapshot());
+  });
+
+  router.get("/api/campaign-queue", async (_req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    if (!campaign.getRunner()?.running) await startNextQueued(runtime);
+    json(res, 200, { ok: true, queue: await campaign.queue.snapshot() });
+  });
+
+  router.post("/api/campaign-queue/cancel", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    const runId = String(body.runId || "").trim();
+    if (!runId) throw httpError(400, "缺少要取消的 Queue runId。");
+    const removed = await campaign.queue.remove(runId);
+    if (!removed) throw httpError(404, "Queue 里找不到这批 Campaign。");
+    await writeCampaignLog(runtime, "info", "campaign_queue_cancelled", "Queued campaign cancelled.", { runId });
+    json(res, 200, { ok: true, queue: await campaign.queue.snapshot() });
+  });
+
+  router.post("/api/campaign-queue/release", async (_req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const result = await startNextQueued(runtime, { force: true });
+    json(res, 200, { ok: true, result, queue: await campaign.queue.snapshot() });
   });
 
   router.get("/api/export", async (_req, res, runtime) => {

@@ -4,6 +4,8 @@
 
 ## 日志索引
 
+- [2026-07-15](./2026-07-15.md) - Telegram 项目 Topic 路由与 Next Campaign TEST Scheduler / Launch Gate。
+- [2026-07-14](./2026-07-14.md) - Campaign Batch Queue、Flow 2 到新 Flow 1 自动接力与 Notion 收尾闸门。
 - [2026-07-13](./2026-07-13.md) - Campaign 安全、持续回复服务、Notion 上传进度和滚动式 Today Queue。
 
 ## 每日日志格式

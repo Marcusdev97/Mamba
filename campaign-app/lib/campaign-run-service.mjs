@@ -206,6 +206,22 @@ export function createCampaignRunService({
     }
   }
 
+  async function recoverPendingUpdates(runner) {
+    const state = runner?.state;
+    if (!state || state.mode !== "LIVE" || !["COMPLETED", "STOPPED"].includes(state.status)) {
+      return { recovered: false, reason: "not-a-finished-live-run" };
+    }
+    if (state.flowLabel) {
+      if (state.advanceStatus === "SUCCEEDED") return { recovered: false, reason: "flow-already-synced" };
+      await autoAdvanceFlow(runner);
+      await creditSentCounts(runner);
+      return { recovered: true, kind: "flow-advance", status: runner.state.advanceStatus };
+    }
+    if (state.notionSync?.status === "SUCCEEDED") return { recovered: false, reason: "notion-already-synced" };
+    const result = await autoNotionUpload(runner);
+    return { recovered: true, kind: "flow-1-upload", status: result?.status || null };
+  }
+
   async function incPageNumber(pageIdValue, prop, delta) {
     if (!pageIdValue || !delta) return;
     const id = pageId(pageIdValue);
@@ -277,6 +293,7 @@ export function createCampaignRunService({
   return {
     autoAdvanceFlow,
     autoNotionUpload,
+    recoverPendingUpdates,
     incPageNumber,
     creditSentCounts,
     emptySnapshot,

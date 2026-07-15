@@ -1,4 +1,5 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
+import { isClearRejectionText } from "../flow_sequence.mjs";
 
 function requireFollowUp(runtime) {
   if (!runtime.followUp) {
@@ -118,7 +119,10 @@ function hoursSince(value, now = Date.now()) {
 }
 
 function isStop(record) {
-  return record.stopFlag || ["Stop", "Not Interested", "Do Not Contact"].includes(record.status);
+  return record.stopFlag
+    || ["Stop", "Not Interested", "Do Not Contact"].includes(record.status)
+    || ["Stopped", "Not Interested"].includes(clean(record.sequenceStatus))
+    || isClearRejectionText(record.lastReplyText);
 }
 
 function isCompleted(record) {
@@ -431,10 +435,19 @@ export function registerFollowUpRoutes(router) {
       source,
       syncedAt: cache.syncedAt || null,
       summary: desk.summary,
+      outboundSync: followUp.outboundSync?.snapshot?.() || null,
       projects,
       count: filtered.length,
       records: filtered.slice(0, 500),
     });
+  });
+
+  router.post("/api/follow-up/reconcile-outbound", async (_req, res, runtime) => {
+    const followUp = requireFollowUp(runtime);
+    if (!followUp.outboundSync) throw httpError(500, "手机回复核对服务没有载入。请重启 Mamba server。");
+    const result = await followUp.outboundSync.runOnce({ reason: "manual" });
+    if (result.error) throw httpError(502, result.error);
+    json(res, 200, { ok: true, ...result });
   });
 
   router.get("/api/follow-up/conversation", async (req, res, runtime) => {

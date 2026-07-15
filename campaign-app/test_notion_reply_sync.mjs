@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildLeadReplyProperties, NotionSync } from "./notion_sync.mjs";
+import { buildLeadReplyProperties, NotionSync, selectLatestLeadProject } from "./notion_sync.mjs";
 
 const schema = {
   Status: { type: "select" },
@@ -30,7 +30,7 @@ assert.equal(rejected["Next Action"].select.name, "No Action");
 assert.equal(rejected["Reply Count"].number, 2);
 assert.equal(rejected["Reply Checked At"].date.start, "2026-07-11T02:00:01.000Z");
 assert.equal(rejected["Stop Flag"], undefined);
-assert.equal(rejected["Follow Up At"], undefined);
+assert.equal(rejected["Follow Up At"].date, null);
 
 const stopped = buildLeadReplyProperties(schema, {
   receivedAt: "2026-07-11T02:00:00.000Z",
@@ -113,5 +113,21 @@ const strangerResult = await stranger.upsertLeadReply({
 assert.equal(strangerResult.matched, false);
 assert.equal(strangerResult.action, "not_found");
 assert.equal(strangerCreated, false);
+
+const projectPage = (project, sender, lastBlastAt) => ({
+  properties: {
+    Project: { select: { name: project } },
+    "Sender Instance": { select: { name: sender } },
+    "Last Blast At": { date: { start: lastBlastAt } },
+  },
+});
+const projectRows = [
+  projectPage("Binastra", "wa_01", "2026-07-10T02:00:00.000Z"),
+  projectPage("Enlace", "wa_02", "2026-07-12T02:00:00.000Z"),
+];
+assert.equal(selectLatestLeadProject(projectRows, "wa_01"), "Binastra");
+assert.equal(selectLatestLeadProject(projectRows, "wa_02"), "Enlace");
+assert.equal(selectLatestLeadProject(projectRows, "wa_unknown"), "Enlace");
+assert.equal(selectLatestLeadProject([], "wa_01"), null);
 
 console.log("✅ all Notion reply-sync tests passed");

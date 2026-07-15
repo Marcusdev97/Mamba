@@ -492,7 +492,9 @@ export class CampaignRunner {
   async saveState() {
     this.state.updatedAt = new Date().toISOString();
     await this.atomicWrite(this.runPath, this.state);
-    await this.atomicWrite(path.join(paths.dataDir, "active-run.json"), this.state);
+    if (this.mirrorActiveState !== false) {
+      await this.atomicWrite(path.join(paths.dataDir, "active-run.json"), this.state);
+    }
   }
 
   summary() {
@@ -529,6 +531,20 @@ export class CampaignRunner {
       for (const job of this.state.assignments) job.scheduledAt = startAt.toISOString();
     }
     await this.saveState();
+    return this.state;
+  }
+
+  async restore(runPath) {
+    const restored = JSON.parse(await fs.readFile(runPath, "utf8"));
+    if (!restored?.runId || !Array.isArray(restored?.assignments)) {
+      throw new Error("Queued campaign state 不完整，无法恢复。");
+    }
+    this.runPath = runPath;
+    this.state = restored;
+    this.running = false;
+    this.stopped = false;
+    this.mirrorActiveState = true;
+    this.log = [];
     return this.state;
   }
 
@@ -1050,6 +1066,7 @@ export class CampaignRunner {
       state: this.state
         ? {
             runId: this.state.runId,
+            project: this.state.project ?? null,
             mode: this.state.mode,
             status: this.state.status,
             startAt: this.state.startAt,
