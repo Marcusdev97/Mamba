@@ -115,6 +115,68 @@ export function collectChatOwnershipEvidence(messageSources, {
   return uniqueBy(evidence, (item) => `${item.phone}:${item.senderPhone}`);
 }
 
+export function collectTrustedConnectionEvidence(messageSources, {
+  deviceId,
+  resolvePhone,
+  messageTime,
+} = {}) {
+  const evidence = [];
+  for (const source of messageSources || []) {
+    for (const message of source.messages || []) {
+      if (message?.key?.fromMe !== true) continue;
+      const atMs = typeof messageTime === "function" ? Number(messageTime(message) || 0) : 0;
+      const item = evidenceRecord({
+        phone: typeof resolvePhone === "function" ? resolvePhone(message) : null,
+        senderPhone: source.senderPhone,
+        deviceId,
+        instanceName: source.instanceName,
+        at: atMs ? new Date(atMs).toISOString() : null,
+        source: "authorized_current_whatsapp_connection",
+      });
+      if (item) evidence.push({ ...item, messageId: clean(message?.key?.id) || null });
+    }
+  }
+  return uniqueBy(evidence, (item) => item.messageId || `${item.phone}:${item.connectionKey}:${item.at}`);
+}
+
+export function collectTrustedLegacyRunEvidence(runStates, {
+  deviceId,
+  currentConnections = [],
+} = {}) {
+  const connectionPhones = new Map((currentConnections || []).map((item) => [
+    clean(item?.name),
+    normalizeOwnershipPhone(item?.number || item?.owner || item?.senderPhone),
+  ]));
+  const evidence = [];
+  for (const raw of runStates || []) {
+    const run = raw?.state || raw;
+    if (!run || !Array.isArray(run.assignments)) continue;
+    const runPhones = new Map((run.instances || []).map((item) => [
+      clean(item?.name || item),
+      normalizeOwnershipPhone(item?.number || item?.owner),
+    ]));
+    for (const job of run.assignments) {
+      const sentAt = job?.part2?.sentAt || job?.part1?.sentAt || null;
+      const instanceName = clean(job?.instanceName);
+      const currentPhone = connectionPhones.get(instanceName);
+      const recordedRunPhone = runPhones.get(instanceName);
+      if (!sentAt || !currentPhone || !recordedRunPhone || currentPhone !== recordedRunPhone) continue;
+      const item = evidenceRecord({
+        phone: job?.lead?.phone,
+        senderPhone: currentPhone,
+        deviceId,
+        instanceName,
+        at: sentAt,
+        source: "authorized_local_legacy_run",
+        project: run.project || run.campaignId,
+        runId: run.runId,
+      });
+      if (item) evidence.push(item);
+    }
+  }
+  return uniqueBy(evidence, (item) => `${item.phone}:${item.project}:${item.connectionKey}:${item.at}`);
+}
+
 function existingOwnership(record) {
   const keys = [record?.assignedSenderKey, record?.lastSenderKey].map(clean).filter(Boolean);
   const device = clean(record?.lastSentByDevice);
@@ -237,6 +299,148 @@ export function analyzeDeviceOwnership({
       aiReplies: 0,
       overwritesExistingOwnership: 0,
     },
+    device,
+    source,
+    summary: {
+      totalRows: records.length,
+      confirmedLocal: confirmed.length,
+      alreadyAssigned: alreadyAssigned.length,
+      conflicts: conflicts.length,
+      unresolved: unresolved.length,
+      invalid: invalid.length,
+    },
+    confirmed,
+    conflicts,
+    unresolved,
+    alreadyAssigned,
+    invalid,
+  };
+}
+
+function uniqueBlastTimeEvidence(record, siblingRows, chatItems, toleranceMs = 15 * 60 * 1000) {
+  const blastMs = Math.max(eventTime(record?.lastBlastAt), eventTime(record?.firstBlastAt));
+  if (!blastMs) return null;
+  const candidates = chatItems
+    .map((item) => ({ item, delta: Math.abs(eventTime(item.at) - blastMs) }))
+    .filter((match) => match.delta <= toleranceMs)
+    .sort((a, b) => a.delta - b.delta);
+  const best = candidates[0];
+  if (!best) return null;
+  const eventMs = eventTime(best.item.at);
+  const competing = siblingRows
+    .filter((row) => row !== record)
+    .map((row) => Math.abs(eventMs - Math.max(eventTime(row?.lastBlastAt), eventTime(row?.firstBlastAt))))
+    .filter((delta) => Number.isFinite(delta));
+  if (competing.some((delta) => delta <= best.delta + 60_000)) return null;
+  return best.item;
+}
+
+export function analyzeTrustedConnectionClaim({
+  device,
+  records = [],
+  runEvidence = [],
+  chatEvidence = [],
+  generatedAt = new Date().toISOString(),
+  source = {},
+} = {}) {
+  const deviceId = clean(device?.id);
+  if (!deviceId || device?.configured !== true) {
+    throw new Error("Claim Preview 需要固定 Device ID，不能使用临时电脑名称。");
+  }
+
+  const rowsByPhone = new Map();
+  for (const record of records) {
+    const phone = normalizeOwnershipPhone(record?.phone);
+    if (!phone) continue;
+    if (!rowsByPhone.has(phone)) rowsByPhone.set(phone, []);
+    rowsByPhone.get(phone).push(record);
+  }
+  const runsByPhone = new Map();
+  for (const item of runEvidence) {
+    if (!runsByPhone.has(item.phone)) runsByPhone.set(item.phone, []);
+    runsByPhone.get(item.phone).push(item);
+  }
+  const chatsByPhone = new Map();
+  for (const item of chatEvidence) {
+    if (!chatsByPhone.has(item.phone)) chatsByPhone.set(item.phone, []);
+    chatsByPhone.get(item.phone).push(item);
+  }
+
+  const confirmed = [];
+  const conflicts = [];
+  const unresolved = [];
+  const alreadyAssigned = [];
+  const invalid = [];
+
+  for (const record of records) {
+    const phone = normalizeOwnershipPhone(record?.phone);
+    if (!phone) {
+      invalid.push({ pageId: record?.id || null, reason: "invalid_phone" });
+      continue;
+    }
+    const ownership = existingOwnership(record);
+    if (ownership) {
+      alreadyAssigned.push({ pageId: record.id, phone, project: clean(record.project), ownership });
+      continue;
+    }
+
+    const project = clean(record.project).toLowerCase();
+    const projectRuns = (runsByPhone.get(phone) || []).filter((item) => {
+      const evidenceProject = clean(item.project).toLowerCase();
+      return project && evidenceProject && evidenceProject === project;
+    });
+    const runKeys = uniqueBy(projectRuns, (item) => item.connectionKey);
+    if (runKeys.length === 1) {
+      confirmed.push(proposedOwnership(record, newest(projectRuns), deviceId));
+      continue;
+    }
+    if (runKeys.length > 1) {
+      conflicts.push({ pageId: record.id, phone, project: clean(record.project), reason: "multiple_legacy_run_senders" });
+      continue;
+    }
+
+    const chatItems = chatsByPhone.get(phone) || [];
+    const chatKeys = uniqueBy(chatItems, (item) => item.connectionKey);
+    if (!chatItems.length) {
+      unresolved.push({ pageId: record.id, phone, project: clean(record.project), reason: "not_found_in_current_whatsapp_outbound" });
+      continue;
+    }
+    if (chatKeys.length !== 1) {
+      conflicts.push({
+        pageId: record.id,
+        phone,
+        project: clean(record.project),
+        reason: "multiple_current_whatsapp_senders",
+        candidates: chatKeys.map((item) => item.connectionKey),
+      });
+      continue;
+    }
+
+    const siblingRows = rowsByPhone.get(phone) || [];
+    if (siblingRows.length === 1) {
+      confirmed.push(proposedOwnership(record, newest(chatItems), deviceId));
+      continue;
+    }
+    const timeMatched = uniqueBlastTimeEvidence(record, siblingRows, chatItems);
+    if (timeMatched) {
+      confirmed.push(proposedOwnership(record, { ...timeMatched, source: "authorized_whatsapp_last_blast_time_match" }, deviceId));
+      continue;
+    }
+    conflicts.push({
+      pageId: record.id,
+      phone,
+      project: clean(record.project),
+      reason: "multiple_project_rows_need_run_or_unique_blast_time",
+      candidates: chatKeys.map((item) => item.connectionKey),
+    });
+  }
+
+  return {
+    version: 1,
+    mode: "claim-preview",
+    authorization: "User explicitly claims the currently connected WhatsApp accounts belong to this device.",
+    generatedAt,
+    safety: { notionWrites: 0, whatsappSends: 0, aiReplies: 0, overwritesExistingOwnership: 0 },
     device,
     source,
     summary: {

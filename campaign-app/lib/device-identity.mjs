@@ -1,4 +1,7 @@
 import os from "node:os";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -24,6 +27,42 @@ export function createDeviceIdentity(env = {}, hostname = os.hostname()) {
     hostname: host,
     configured: Boolean(configuredId),
   };
+}
+
+export async function loadDeviceIdentity(env = {}, { dataDir, hostname = os.hostname() } = {}) {
+  const configured = createDeviceIdentity(env, hostname);
+  if (configured.configured || !dataDir) return { ...configured, source: configured.configured ? "env" : "hostname" };
+
+  const filePath = path.join(dataDir, "device-identity.json");
+  try {
+    const saved = JSON.parse(await fs.readFile(filePath, "utf8"));
+    const id = slug(saved?.id);
+    if (id) {
+      return {
+        id,
+        name: clean(saved?.name) || configured.name,
+        hostname: clean(hostname) || configured.hostname,
+        configured: true,
+        source: "local-file",
+      };
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw new Error(`无法读取本机 Device ID：${error.message}`);
+  }
+
+  const identity = {
+    id: `mamba-${crypto.randomUUID()}`,
+    name: configured.name,
+    hostname: configured.hostname,
+    configured: true,
+    source: "local-file",
+    createdAt: new Date().toISOString(),
+  };
+  await fs.mkdir(dataDir, { recursive: true });
+  const temp = `${filePath}.tmp.${process.pid}`;
+  await fs.writeFile(temp, `${JSON.stringify(identity, null, 2)}\n`);
+  await fs.rename(temp, filePath);
+  return identity;
 }
 
 export function normalizeSenderPhone(value) {

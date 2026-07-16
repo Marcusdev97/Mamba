@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { buildSenderKey } from "./lib/device-identity.mjs";
+import { buildSenderKey, loadDeviceIdentity } from "./lib/device-identity.mjs";
 
 import {
   analyzeDeviceOwnership,
+  analyzeTrustedConnectionClaim,
   collectChatOwnershipEvidence,
   collectRunOwnershipEvidence,
+  collectTrustedConnectionEvidence,
+  collectTrustedLegacyRunEvidence,
   normalizeOwnershipPhone,
   ownershipConnectionKey,
 } from "./lib/device-ownership-repair-service.mjs";
@@ -165,4 +171,89 @@ test("legacy run files without an explicit Device ID are ignored", () => {
   }], { deviceId: device.id });
 
   assert.deepEqual(runEvidence, []);
+});
+
+test("a generated local Device ID persists across restarts", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-device-id-"));
+  const first = await loadDeviceIdentity({}, { dataDir, hostname: "Marcus-MacBook.local" });
+  const second = await loadDeviceIdentity({}, { dataDir, hostname: "Renamed-Mac.local" });
+  assert.match(first.id, /^mamba-[0-9a-f-]{36}$/);
+  assert.equal(second.id, first.id);
+  assert.equal(second.configured, true);
+});
+
+test("authorized current WhatsApp evidence can claim a unique legacy row", () => {
+  const evidence = collectTrustedConnectionEvidence([{
+    instanceName: "wa_01",
+    senderPhone: "60168568756",
+    messages: [{ key: { id: "out-1", fromMe: true }, phone: "60133333333", at: 2000 }],
+  }], {
+    deviceId: device.id,
+    resolvePhone: (message) => message.phone,
+    messageTime: (message) => message.at,
+  });
+  const report = analyzeTrustedConnectionClaim({
+    device: { ...device, configured: true },
+    records: [{ id: "page-1", phone: "60133333333", project: "Project A" }],
+    chatEvidence: evidence,
+  });
+  assert.equal(report.summary.confirmedLocal, 1);
+  assert.equal(report.confirmed[0].proposed.lastSenderPhone, "60168568756");
+  assert.equal(report.confirmed[0].proposed.lastSenderKey, `${device.id.toLowerCase()}::60168568756`);
+  assert.equal(report.safety.notionWrites, 0);
+});
+
+test("duplicate project rows require a unique Last Blast time match", () => {
+  const chatEvidence = [
+    { phone: "60133333333", senderPhone: "60168568756", connectionKey: `${device.id.toLowerCase()}::60168568756`, instanceName: "wa_01", at: "2026-07-01T01:00:30.000Z", source: "authorized_current_whatsapp_connection" },
+    { phone: "60133333333", senderPhone: "60168568756", connectionKey: `${device.id.toLowerCase()}::60168568756`, instanceName: "wa_01", at: "2026-07-10T02:00:30.000Z", source: "authorized_current_whatsapp_connection" },
+  ];
+  const report = analyzeTrustedConnectionClaim({
+    device: { ...device, configured: true },
+    records: [
+      { id: "page-a", phone: "60133333333", project: "Project A", lastBlastAt: "2026-07-01T01:00:00.000Z" },
+      { id: "page-b", phone: "60133333333", project: "Project B", lastBlastAt: "2026-07-10T02:00:00.000Z" },
+    ],
+    chatEvidence,
+  });
+  assert.equal(report.summary.confirmedLocal, 2);
+  assert.ok(report.confirmed.every((item) => item.evidence.source === "authorized_whatsapp_last_blast_time_match"));
+});
+
+test("duplicate project rows without unique times remain conflicts", () => {
+  const evidence = [{
+    phone: "60133333333",
+    senderPhone: "60168568756",
+    connectionKey: `${device.id.toLowerCase()}::60168568756`,
+    instanceName: "wa_01",
+    at: "2026-07-01T01:00:30.000Z",
+    source: "authorized_current_whatsapp_connection",
+  }];
+  const report = analyzeTrustedConnectionClaim({
+    device: { ...device, configured: true },
+    records: [
+      { id: "page-a", phone: "60133333333", project: "Project A" },
+      { id: "page-b", phone: "60133333333", project: "Project B" },
+    ],
+    chatEvidence: evidence,
+  });
+  assert.equal(report.summary.confirmedLocal, 0);
+  assert.equal(report.summary.conflicts, 2);
+});
+
+test("trusted legacy run evidence requires the run phone to match the current connection", () => {
+  const baseRun = {
+    runId: "legacy-run",
+    project: "Project A",
+    instances: [{ name: "wa_01", owner: "60168568756" }],
+    assignments: [{ instanceName: "wa_01", lead: { phone: "60133333333" }, part1: { sentAt: "2026-07-01T01:00:00.000Z" } }],
+  };
+  assert.equal(collectTrustedLegacyRunEvidence([baseRun], {
+    deviceId: device.id,
+    currentConnections: [{ name: "wa_01", senderPhone: "60168568756" }],
+  }).length, 1);
+  assert.equal(collectTrustedLegacyRunEvidence([baseRun], {
+    deviceId: device.id,
+    currentConnections: [{ name: "wa_01", senderPhone: "60199999999" }],
+  }).length, 0);
 });

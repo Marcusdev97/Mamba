@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 
-// Read-only Device Ownership repair scanner.
-//
-// This command deliberately does NOT contain an apply path. It reads the local
-// Blast Leads cache, local Campaign Run files, and local Evolution chat history,
-// then writes a report under ignored campaign-data/. It never PATCHes Notion and
-// never calls a WhatsApp send endpoint.
+// Device Ownership repair scanner and explicitly confirmed legacy migration.
+// Preview never writes Notion. Apply accepts only a recent locally generated
+// claim-preview report and never calls a WhatsApp send endpoint.
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadEnv, makeApi, listInstances, paths } from "./campaign_core.mjs";
-import { createDeviceIdentity } from "./lib/device-identity.mjs";
+import { loadDeviceIdentity } from "./lib/device-identity.mjs";
+import { createNotionService } from "./lib/notion-service.mjs";
 import {
   analyzeDeviceOwnership,
+  analyzeTrustedConnectionClaim,
   collectChatOwnershipEvidence,
   collectRunOwnershipEvidence,
+  collectTrustedConnectionEvidence,
+  collectTrustedLegacyRunEvidence,
   maskOwnershipPhone,
   normalizeOwnershipDeviceId,
   normalizeOwnershipPhone,
@@ -29,6 +30,13 @@ function argumentNumber(name, fallback) {
   const value = Number(process.argv[index + 1]);
   if (!Number.isFinite(value) || value < 1) throw new Error(`${name} 必须是大于 0 的数字。`);
   return Math.floor(value);
+}
+
+function argumentValue(name) {
+  const exact = process.argv.find((item) => item.startsWith(`${name}=`));
+  if (exact) return exact.slice(name.length + 1).trim();
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? String(process.argv[index + 1] || "").trim() : "";
 }
 
 function timestampName(date = new Date()) {
@@ -86,7 +94,7 @@ async function atomicWrite(filePath, value) {
   await fs.rename(temp, filePath);
 }
 
-async function scanEvolution(env, { pageSize, maxPages }) {
+async function scanEvolution(env, { pageSize, maxPages, onlyOpen = false }) {
   const api = makeApi(env);
   const errors = [];
   let instances = [];
@@ -97,7 +105,8 @@ async function scanEvolution(env, { pageSize, maxPages }) {
     return { instances: [], messageSources: [], scans: [], errors, notices: [] };
   }
 
-  const usable = instances.filter((item) => normalizeOwnershipPhone(item.number));
+  const usable = instances.filter((item) => normalizeOwnershipPhone(item.number)
+    && (!onlyOpen || String(item.status || "").toUpperCase() === "OPEN"));
   const messageSources = [];
   const scans = [];
   for (const instance of usable) {
@@ -141,35 +150,180 @@ async function scanEvolution(env, { pageSize, maxPages }) {
   return { instances, messageSources, scans, errors, notices: [] };
 }
 
-async function main() {
-  if (!process.argv.includes("--dry-run") || process.argv.includes("--apply")) {
-    throw new Error("安全保护：目前只支持 --dry-run，不支持 --apply。正确命令：node campaign-app/device_ownership_repair.mjs --dry-run");
+function ownershipProperty(schema, name, value) {
+  const type = schema?.[name]?.type;
+  if (!type) throw new Error(`Notion 缺少 ${name} 字段。请先在 Customer Desk 检查 Schema Health。`);
+  if (type === "rich_text") return { rich_text: [{ text: { content: String(value) } }] };
+  if (type === "select") return { select: { name: String(value).slice(0, 100) } };
+  if (type === "status") return { status: { name: String(value).slice(0, 100) } };
+  if (type === "phone_number") return { phone_number: String(value) };
+  throw new Error(`${name} 字段类型不支持：${type}`);
+}
+
+function notionPropertyValue(property) {
+  if (!property) return "";
+  if (property.type === "phone_number") return String(property.phone_number || "").trim();
+  if (property.type === "select") return String(property.select?.name || "").trim();
+  if (property.type === "status") return String(property.status?.name || "").trim();
+  if (property.type === "rich_text") return (property.rich_text || []).map((item) => item.plain_text || item.text?.content || "").join("").trim();
+  return "";
+}
+
+async function applyClaimReport({ env, device, reportPath }) {
+  const ownershipDir = path.resolve(paths.dataDir, "device-ownership");
+  const resolvedReport = path.resolve(reportPath);
+  if (!resolvedReport.startsWith(`${ownershipDir}${path.sep}`)) {
+    throw new Error("安全保护：--report 必须是本机 campaign-data/device-ownership 内的 Preview 报告。");
   }
+  const report = await readJson(resolvedReport, null);
+  if (!report || report.mode !== "claim-preview" || !Array.isArray(report.confirmed)) {
+    throw new Error("这不是有效的 claim-preview 报告，拒绝写入 Notion。");
+  }
+  if (normalizeOwnershipDeviceId(report.device?.id) !== normalizeOwnershipDeviceId(device.id)) {
+    throw new Error(`报告属于另一台 Device（${report.device?.id || "unknown"}），当前是 ${device.id}。`);
+  }
+  const ageMs = Date.now() - new Date(report.generatedAt || 0).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > 24 * 60 * 60 * 1000) {
+    throw new Error("Preview 报告已超过 24 小时，请重新扫描后再 Apply。");
+  }
+  const confirmedDevice = argumentValue("--confirm-device");
+  if (confirmedDevice !== device.id) {
+    throw new Error(`安全保护：请加上 --confirm-device=${device.id}，明确确认当前 Device。`);
+  }
+
+  const notionConfig = await readJson(path.join(paths.dataDir, "notion_config.json"), null);
+  const databaseId = String(notionConfig?.databases?.blastLeads || "").replace(/[^a-fA-F0-9]/g, "");
+  if (!databaseId) throw new Error("notion_config.json 缺少 Blast Leads database ID。");
+  const { notion } = createNotionService({ env });
+  const database = await notion("GET", `/databases/${databaseId}`);
+  const schema = database?.properties || {};
+  const cache = await loadBlastCache();
+  const recordsById = new Map(cache.records.map((record) => [String(record.id || "").replace(/-/g, ""), record]));
+  const applied = [];
+  const failed = [];
+
+  console.log(`准备写入 ${report.confirmed.length} 条确定归属；不会发送 WhatsApp，不会启动 AI。`);
+  for (const item of report.confirmed) {
+    const pageId = String(item.pageId || "").replace(/[^a-fA-F0-9]/g, "");
+    try {
+      if (pageId.length !== 32) throw new Error("Notion page ID 不合法");
+      const proposed = item.proposed || {};
+      const livePage = await notion("GET", `/pages/${pageId}`);
+      const liveOwnership = {
+        lastSentByDevice: notionPropertyValue(livePage?.properties?.["Last Sent By Device"]),
+        lastSenderPhone: normalizeOwnershipPhone(notionPropertyValue(livePage?.properties?.["Last Sender Phone"])) || "",
+        assignedSenderKey: notionPropertyValue(livePage?.properties?.["Assigned Sender Key"]),
+        lastSenderKey: notionPropertyValue(livePage?.properties?.["Last Sender Key"]),
+      };
+      const occupied = Object.values(liveOwnership).some(Boolean);
+      const alreadyMatches = occupied
+        && liveOwnership.lastSentByDevice === proposed.lastSentByDevice
+        && liveOwnership.lastSenderPhone === proposed.lastSenderPhone
+        && liveOwnership.assignedSenderKey === proposed.assignedSenderKey
+        && liveOwnership.lastSenderKey === proposed.lastSenderKey;
+      if (occupied && !alreadyMatches) {
+        const error = new Error("Preview 后 Ownership 已被另一台 Device 或流程修改；已拒绝覆盖。请重新 Preview。");
+        error.code = "OWNERSHIP_CHANGED_AFTER_PREVIEW";
+        throw error;
+      }
+      const properties = {
+        "Last Sent By Device": ownershipProperty(schema, "Last Sent By Device", proposed.lastSentByDevice),
+        "Last Sender Phone": ownershipProperty(schema, "Last Sender Phone", proposed.lastSenderPhone),
+        "Assigned Sender Key": ownershipProperty(schema, "Assigned Sender Key", proposed.assignedSenderKey),
+        "Last Sender Key": ownershipProperty(schema, "Last Sender Key", proposed.lastSenderKey),
+      };
+      if (!alreadyMatches) await notion("PATCH", `/pages/${pageId}`, { properties });
+      const cached = recordsById.get(pageId);
+      if (cached) Object.assign(cached, proposed);
+      applied.push({ pageId: item.pageId, phone: item.phone, project: item.project, proposed, alreadyMatched: alreadyMatches });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } catch (error) {
+      failed.push({
+        pageId: item.pageId,
+        phone: item.phone,
+        project: item.project,
+        errorCode: error.code || (/401|token|unauthorized/i.test(error.message) ? "NOTION_AUTH_FAILED"
+          : /429|rate/i.test(error.message) ? "NOTION_RATE_LIMITED"
+            : /page ID/i.test(error.message) ? "INVALID_PAGE_ID"
+              : "OWNERSHIP_WRITE_FAILED"),
+        error: error.message,
+        solution: "检查 Notion token、Blast Leads sharing 和 Schema Health，然后重新 Preview；已经成功的 rows 不会被覆盖。",
+      });
+    }
+  }
+
+  await atomicWrite(cache.filePath, {
+    syncedAt: new Date().toISOString(),
+    count: cache.records.length,
+    records: cache.records,
+  });
+  const result = {
+    version: 1,
+    mode: "claim-apply-result",
+    generatedAt: new Date().toISOString(),
+    sourceReport: resolvedReport,
+    device,
+    safety: { whatsappSends: 0, aiReplies: 0, overwritesExistingOwnership: 0 },
+    summary: { requested: report.confirmed.length, applied: applied.length, failed: failed.length },
+    applied,
+    failed,
+    sensitive: "This ignored local report contains customer phone numbers and Notion page ids. Do not commit it.",
+  };
+  const resultPath = path.join(ownershipDir, `claim-apply-${timestampName()}.json`);
+  await atomicWrite(resultPath, result);
+  console.log(`\nApply 完成：成功 ${applied.length}，失败 ${failed.length}。`);
+  console.log(`结果报告：${resultPath}`);
+  if (failed.length) {
+    console.log("失败项目已记录 errorCode、原始错误和解决方法；请不要重复全量 Apply。");
+    process.exitCode = 2;
+  }
+}
+
+async function main() {
+  const dryRun = process.argv.includes("--dry-run");
+  const apply = process.argv.includes("--apply");
+  const claimCurrentConnections = process.argv.includes("--claim-current-connections");
+  if (dryRun === apply) throw new Error("请选择其中一个模式：--dry-run 或 --apply。");
   const pageSize = argumentNumber("--page-size", 200);
   const maxPages = argumentNumber("--max-pages", 60);
   const offline = process.argv.includes("--offline");
   const scanChatObservations = process.argv.includes("--scan-chat-observations") && !offline;
   const generatedAt = new Date();
 
-  console.log("Mamba Device Ownership Repair · DRY RUN");
+  const env = await loadEnv();
+  const device = await loadDeviceIdentity(env, { dataDir: paths.dataDir });
+  if (apply) {
+    const reportPath = argumentValue("--report");
+    if (!reportPath) throw new Error("Apply 缺少 --report=/完整路径/claim-preview-....json");
+    await applyClaimReport({ env, device, reportPath });
+    return;
+  }
+
+  console.log(claimCurrentConnections
+    ? "Mamba Device Ownership Repair · AUTHORIZED CLAIM PREVIEW"
+    : "Mamba Device Ownership Repair · DRY RUN");
   console.log("================================================");
   console.log("安全模式：不会发送 WhatsApp，不会修改 Notion，不会启动 AI 回复。\n");
 
-  const env = await loadEnv();
-  const device = createDeviceIdentity(env);
   const cache = await loadBlastCache();
   const runs = await loadRunStates();
-  const evolution = !scanChatObservations
+  const evolution = claimCurrentConnections
+    ? await scanEvolution(env, { pageSize, maxPages, onlyOpen: true })
+    : !scanChatObservations
     ? { instances: [], messageSources: [], scans: [], errors: [], notices: [offline
       ? "使用 --offline，已跳过 Evolution Chat 扫描。"
       : "默认不扫描 WhatsApp Chat：历史 outbound 只能证明 sender phone，不能证明由哪台电脑发送。"] }
     : await scanEvolution(env, { pageSize, maxPages });
 
-  const runEvidence = collectRunOwnershipEvidence(runs.states, { deviceId: device.id });
-  const chatEvidence = collectChatOwnershipEvidence(evolution.messageSources, {
-    resolvePhone,
-    messageTime,
-  });
+  if (claimCurrentConnections && !evolution.messageSources.length) {
+    throw new Error(`没有可用于 Claim 的 OPEN WhatsApp connection。${evolution.errors.join(" | ")}`);
+  }
+  const runEvidence = claimCurrentConnections
+    ? collectTrustedLegacyRunEvidence(runs.states, { deviceId: device.id, currentConnections: evolution.messageSources })
+    : collectRunOwnershipEvidence(runs.states, { deviceId: device.id });
+  const chatEvidence = claimCurrentConnections
+    ? collectTrustedConnectionEvidence(evolution.messageSources, { deviceId: device.id, resolvePhone, messageTime })
+    : collectChatOwnershipEvidence(evolution.messageSources, { resolvePhone, messageTime });
   const normalizedDeviceId = normalizeOwnershipDeviceId(device.id);
   const runSourceSummary = runs.states.reduce((summary, run) => {
     const recorded = normalizeOwnershipDeviceId(run?.deviceId || run?.device?.id);
@@ -178,7 +332,8 @@ async function main() {
     else summary.otherDeviceRuns += 1;
     return summary;
   }, { explicitLocalDeviceRuns: 0, ignoredLegacyWithoutDeviceId: 0, otherDeviceRuns: 0 });
-  const report = analyzeDeviceOwnership({
+  const analyzer = claimCurrentConnections ? analyzeTrustedConnectionClaim : analyzeDeviceOwnership;
+  const report = analyzer({
     device,
     records: cache.records,
     runEvidence,
@@ -202,14 +357,14 @@ async function main() {
   });
   report.sensitive = "This ignored local report contains customer phone numbers and Notion page ids. Do not commit it.";
 
-  const reportPath = path.join(paths.dataDir, "device-ownership", `dry-run-${timestampName(generatedAt)}.json`);
+  const reportPath = path.join(paths.dataDir, "device-ownership", `${claimCurrentConnections ? "claim-preview" : "dry-run"}-${timestampName(generatedAt)}.json`);
   await atomicWrite(reportPath, report);
 
-  console.log("\nDry Run 结果");
+  console.log(claimCurrentConnections ? "\nClaim Preview 结果" : "\nDry Run 结果");
   console.log("================================================");
   console.log(`Device ID          : ${device.id}${device.configured ? " (固定配置)" : " (由电脑名称自动产生，尚未固定)"}`);
   console.log(`Notion cache rows  : ${report.summary.totalRows}`);
-  console.log(`旧 run 无 Device ID: ${runSourceSummary.ignoredLegacyWithoutDeviceId}（已忽略）`);
+  console.log(`旧 run 无 Device ID: ${runSourceSummary.ignoredLegacyWithoutDeviceId}${claimCurrentConnections ? "（仅在号码与当前 connection 相同且有 sentAt 时采用）" : "（已忽略）"}`);
   console.log(`确定属于本机       : ${report.summary.confirmedLocal}`);
   console.log(`已经有 Ownership   : ${report.summary.alreadyAssigned}`);
   console.log(`存在冲突           : ${report.summary.conflicts}`);
@@ -236,10 +391,14 @@ async function main() {
     }
   }
   console.log(`\n报告已保存：${reportPath}`);
-  console.log("这份报告位于 campaign-data（Git 已忽略），不会自动加入 commit。当前版本没有 Apply 功能。\n");
+  if (claimCurrentConnections) {
+    console.log("确认报告数量和冲突后，才可以用 --apply --report=... --confirm-device=... 写入。\n");
+  } else {
+    console.log("这份报告位于 campaign-data（Git 已忽略），不会自动加入 commit。普通 Dry Run 不能 Apply。\n");
+  }
 }
 
 main().catch((error) => {
-  console.error(`\nDry Run 无法完成：${error.message}`);
+  console.error(`\nDevice Ownership 无法完成：${error.message}`);
   process.exitCode = 1;
 });

@@ -14,7 +14,7 @@ import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
-import { createDeviceIdentity } from "./lib/device-identity.mjs";
+import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
@@ -65,7 +65,7 @@ for (const [k, v] of Object.entries(env)) {
 }
 const api = makeApi(env);
 const brainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
-const deviceIdentity = createDeviceIdentity(env);
+const deviceIdentity = await loadDeviceIdentity(env, { dataDir: paths.dataDir });
 const notionService = createNotionService({ env });
 const {
   notionTokenValue,

@@ -3,7 +3,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { FileBlob, SpreadsheetFile } from "./xlsx_compat.mjs";
-import { createDeviceIdentity } from "./lib/device-identity.mjs";
+import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -65,7 +65,7 @@ const env = Object.fromEntries(
 
 const apiBase = "http://127.0.0.1:8080";
 const apiHeaders = { "Content-Type": "application/json", apikey: env.AUTHENTICATION_API_KEY };
-const deviceIdentity = createDeviceIdentity(env);
+const deviceIdentity = await loadDeviceIdentity(env, { dataDir });
 const automatedDryRun = process.argv.includes("--dry-run");
 let rl;
 let stopped = false;
