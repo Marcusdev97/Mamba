@@ -400,7 +400,8 @@ async function load() {
     document.querySelectorAll(".stage").forEach((item) => item.classList.toggle("active", item.dataset.stage === appointmentStage));
     setOptions($("project"), data.projects || []);
     records = data.records || [];
-    $("meta").textContent = `${data.count || records.length} active follow-up clients · Today includes overdue and unscheduled work · source: ${data.source} · synced: ${data.syncedAt || "-"}`;
+    const scope = data.scope || {};
+    $("meta").textContent = `${data.count || records.length} active follow-up clients · Device-only${scope.hiddenRows ? ` · ${scope.hiddenRows} shared rows hidden` : ""} · source: ${data.source} · synced: ${data.syncedAt || "-"}`;
     const phoneSync = data.outboundSync || {};
     $("phoneSync").textContent = phoneSync.error
       ? `手机回复核对警告: ${phoneSync.error}`

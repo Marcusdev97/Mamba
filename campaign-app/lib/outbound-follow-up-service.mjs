@@ -76,6 +76,7 @@ export function createOutboundFollowUpService({
   resolvePhone,
   messageTime,
   queryNotionRows,
+  filterRecords = (records) => records,
   writeCache,
   history,
   systemLogs,
@@ -132,7 +133,22 @@ export function createOutboundFollowUpService({
             ] },
           ],
         });
-        const candidates = records.filter((record) => isOutboundFollowUpCandidate(record));
+        const candidates = filterRecords(records).filter((record) => isOutboundFollowUpCandidate(record));
+        if (!candidates.length) {
+          state = {
+            ...state,
+            running: false,
+            lastCheckedAt: new Date().toISOString(),
+            checkedClients: 0,
+            handled: 0,
+            connections: 0,
+            error: "",
+          };
+          scheduleNext();
+          onLog(`[follow-up-sync] checked 0, phone replies handled 0, reason=${reason}.`);
+          await log("info", "outbound_follow_up_empty_device_scope", "Skipped WhatsApp follow-up scan because this device has no owned customers.", { reason });
+          return snapshot();
+        }
         const instances = (await openInstances()).filter((instance) => instance?.name);
         if (!instances.length) throw new Error("没有 OPEN 的 WhatsApp connection，无法核对手机回复。");
 

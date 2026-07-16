@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { buildSenderKey } from "./device-identity.mjs";
+import { buildSenderKey, senderPhoneForInstance } from "./device-identity.mjs";
 
 function pageId(id) {
   return String(id || "").replace(/[^a-fA-F0-9]/g, "");
@@ -21,7 +21,6 @@ export function createCampaignRunService({
   klDateTime,
   flowByLabel,
   flowStateAfter,
-  deviceIdentity,
   execFileFn = execFile,
 }) {
   async function autoAdvanceFlow(runner) {
@@ -76,17 +75,24 @@ export function createCampaignRunService({
           flowMismatch += 1;
           continue;
         }
+        const senderPhone = senderPhoneForInstance(runner.state.instances, job.instanceName);
+        // An old restored run must not inherit the identity of the computer that
+        // happens to process it. Only an ID persisted in the run is trustworthy.
+        const senderKey = buildSenderKey(runner.state.deviceId, senderPhone);
         const props = {
           "Last Flow Sent": { select: { name: nextState.lastFlowLabel } },
           "Next Flow": { select: { name: nextState.nextFlowLabel } },
           "Cohort Day": { select: { name: nextState.cohortDay } },
           "Last Blast At": { date: { start: job.part2?.sentAt ?? job.part1?.sentAt } },
           "Sender Instance": { select: { name: job.instanceName || "Unknown" } },
-          "Assigned Sender Key": { rich_text: [{ text: { content: buildSenderKey(runner.state.deviceId || deviceIdentity?.id, job.instanceName) } }] },
-          "Last Sender Key": { rich_text: [{ text: { content: buildSenderKey(runner.state.deviceId || deviceIdentity?.id, job.instanceName) } }] },
-          "Last Sent By Device": { rich_text: [{ text: { content: runner.state.deviceId || deviceIdentity?.id || "" } }] },
           "Campaign Run ID": { rich_text: [{ text: { content: runner.state.runId || "" } }] },
         };
+        if (senderKey) {
+          props["Assigned Sender Key"] = { rich_text: [{ text: { content: senderKey } }] };
+          props["Last Sender Key"] = { rich_text: [{ text: { content: senderKey } }] };
+        }
+        if (runner.state.deviceId) props["Last Sent By Device"] = { rich_text: [{ text: { content: runner.state.deviceId } }] };
+        if (senderKey && senderPhone) props["Last Sender Phone"] = { phone_number: senderPhone };
         if (nextState.nextFlowLabel === "Completed") {
           props["Sequence Status"] = { select: { name: "Completed" } };
           props["Flow Completed At"] = { date: { start: new Date().toISOString() } };

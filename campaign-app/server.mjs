@@ -15,6 +15,7 @@ import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createDeviceIdentity } from "./lib/device-identity.mjs";
+import { filterRecordsForDevice } from "./lib/device-scope.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
@@ -192,6 +193,7 @@ const outboundFollowUpService = createOutboundFollowUpService({
   resolvePhone,
   messageTime,
   queryNotionRows: blastCacheService.queryRows,
+  filterRecords: (records) => filterRecordsForDevice(records, { device: deviceIdentity }).records,
   writeCache: blastCacheService.writeCache,
   history: conversationHistoryService,
   systemLogs: systemLogService,
@@ -304,6 +306,7 @@ const runtime = await loadRuntime({
     queryNotionRows: blastCacheService.queryRows,
   },
   conversations: {
+    device: deviceIdentity,
     hasBlastDatabase: Boolean(blastDsId),
     blastDatabaseId: blastDsId,
     api,
@@ -320,10 +323,12 @@ const runtime = await loadRuntime({
     systemLogs: systemLogService,
     history: conversationHistoryService,
     readCache: blastCacheService.read,
+    syncCache: blastCacheService.sync,
     writeCache: blastCacheService.writeCache,
     queryNotionRows: blastCacheService.queryRows,
   },
   followUp: {
+    device: deviceIdentity,
     hasBlastDatabase: Boolean(blastDsId),
     blastDatabaseId: blastDsId,
     api,

@@ -8,7 +8,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { loadEnv } from "./campaign_core.mjs";
-import { buildSenderKey, createDeviceIdentity } from "./lib/device-identity.mjs";
+import { buildSenderKey } from "./lib/device-identity.mjs";
 import { getFlow, flowStateAfter } from "./flow_sequence.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,6 @@ const runsDir = path.join(rootDir, "campaign-data", "runs");
 const VERSION = "2022-06-28";
 
 const env = await loadEnv();
-const fallbackDevice = createDeviceIdentity(env);
 const token = env.NOTION_API_KEY || env.NOTION_TOKEN;
 if (!token) {
   console.log("No NOTION_API_KEY in .env — open Mamba Settings and add the Notion token first.");
@@ -204,9 +203,12 @@ function buildProperties(job, phone, projectName, schema, runPageId, run) {
   const state = flowStateAfter("flow_1"); // { lastFlowLabel, nextFlowLabel, cohortDay, dueDays }
   const firstSentAt = job.part1?.sentAt ?? lastSentAt(job);
   const followUpDue = addDaysKL(firstSentAt, state.dueDays); // First blast + 2 days
-  const deviceId = run?.deviceId || fallbackDevice.id;
-  const senderKey = buildSenderKey(deviceId, job.instanceName);
+  // Never attribute a legacy run to whichever computer happens to upload it.
+  // Ownership is written only when the run itself recorded an explicit Device ID.
+  const deviceId = run?.deviceId || "";
   const instance = (run?.instances || []).find((item) => (item?.name || item) === job.instanceName);
+  const senderPhone = normalizePhone(instance?.number || instance?.owner);
+  const senderKey = buildSenderKey(deviceId, senderPhone);
 
   const titleProp = Object.keys(schema).find((k) => schema[k]?.type === "title") || "Name";
   const candidates = {
@@ -221,9 +223,9 @@ function buildProperties(job, phone, projectName, schema, runPageId, run) {
     "Sender Instance": choiceValue(schema, "Sender Instance", job.instanceName || "Unknown"),
     "Assigned Sender Key": textValue(schema, "Assigned Sender Key", senderKey),
     "Last Sender Key": textValue(schema, "Last Sender Key", senderKey),
-    "Last Sender Phone": schema["Last Sender Phone"]?.type === "phone_number" && instance?.number
-      ? { phone_number: normalizePhone(instance.number) }
-      : textValue(schema, "Last Sender Phone", normalizePhone(instance?.number)),
+    "Last Sender Phone": schema["Last Sender Phone"]?.type === "phone_number" && senderPhone
+      ? { phone_number: senderPhone }
+      : textValue(schema, "Last Sender Phone", senderPhone),
     "Last Sent By Device": textValue(schema, "Last Sent By Device", deviceId),
     "Campaign Run ID": textValue(schema, "Campaign Run ID", run?.runId),
     "Last Blast At": schema["Last Blast At"]?.type === "date" ? { date: { start: lastSentAt(job) } } : null,

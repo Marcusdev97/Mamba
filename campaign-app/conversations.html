@@ -567,8 +567,11 @@ async function load() {
     setOptions($("project"), data.facets?.projects || []);
     setOptions($("status"), data.facets?.statuses || []);
     setOptions($("sequenceStatus"), data.facets?.sequenceStatuses || []);
-    $("meta").textContent = `${data.filteredCount ?? records.length} customers · source: ${data.source}`;
-    $("warning").textContent = data.warning || "";
+    const scope = data.scope || {};
+    $("meta").textContent = `${data.filteredCount ?? records.length} customers · Device-only${scope.hiddenRows ? ` · ${scope.hiddenRows} shared rows hidden` : ""} · source: ${data.source}`;
+    $("warning").textContent = data.warning || (scope.hiddenRows
+      ? `这里只显示属于当前 Device + WhatsApp sender 的客户；${scope.hiddenRows} 条未归属或其他 Device 资料已隐藏。`
+      : "");
     if (!records.some((item) => item.id === selectedId)) selectedId = "";
     renderRows();
   } catch (error) {

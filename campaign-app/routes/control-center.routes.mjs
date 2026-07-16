@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { json } from "../lib/http.mjs";
 import { listProjects } from "../knowledge_layer.mjs";
-import { senderKeyBelongsToDevice } from "../lib/device-identity.mjs";
+import { filterRecordsForDevice, recordDeviceScope } from "../lib/device-scope.mjs";
+
+export { filterRecordsForDevice, recordDeviceScope } from "../lib/device-scope.mjs";
 
 const LEARNING_HEALTH_TTL_MS = 120_000;
 let learningHealthCache = { checkedAt: 0, key: "", value: null, promise: null };
@@ -45,35 +47,6 @@ export function summarizeRecords(records, today) {
   const appointments = records.filter((record) => !isStopped(record) && activeAppointments.has(appointmentStage(record))).length;
   const followUps = records.filter((record) => !isStopped(record) && (hasReply(record) || !isDoneAction(record.nextAction) || record.followUpAt)).length;
   return { totalCustomers: records.length, todaySent, todayReplies, overdue, dueToday, appointments, followUps };
-}
-
-function sameDevice(value, device) {
-  const wanted = new Set([device?.id, device?.name, device?.hostname]
-    .map((item) => String(item || "").trim().toLowerCase())
-    .filter(Boolean));
-  return wanted.has(String(value || "").trim().toLowerCase());
-}
-
-export function recordDeviceScope(record, { device = {}, senderNames = [] } = {}) {
-  const connected = new Set(senderNames.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean));
-  const explicitDevice = String(record.lastSentByDevice || "").trim();
-  const senderKeys = [record.assignedSenderKey, record.lastSenderKey].filter(Boolean);
-  if (explicitDevice) return sameDevice(explicitDevice, device) ? "local" : "remote";
-  if (senderKeys.some((key) => senderKeyBelongsToDevice(key, device.id))) return "local";
-  if (senderKeys.some((key) => String(key).includes("::"))) return "remote";
-  if (record.senderInstance && connected.has(String(record.senderInstance).trim().toLowerCase())) return "legacy";
-  return "unassigned";
-}
-
-export function filterRecordsForDevice(records, scope) {
-  const counts = { local: 0, legacy: 0, remote: 0, unassigned: 0 };
-  const filtered = [];
-  for (const record of records || []) {
-    const owner = recordDeviceScope(record, scope);
-    counts[owner] += 1;
-    if (owner === "local" || owner === "legacy") filtered.push(record);
-  }
-  return { records: filtered, counts };
 }
 
 export function recentActivity(records, limit = 8) {
@@ -201,7 +174,6 @@ export function registerControlCenterRoutes(router) {
     const device = runtime.device || { id: "this-device", name: "This device", hostname: "" };
     const localScope = filterRecordsForDevice(allRecords, {
       device,
-      senderNames: (whatsapp.instances || []).map((item) => item.name),
     });
     const records = localScope.records;
     const metrics = summarizeRecords(records, today);

@@ -20,10 +20,13 @@ function makeService(execFileFn, overrides = {}) {
 function makeFlowRunner() {
   const runner = makeRunner();
   runner.state = {
+    runId: "run-flow-2",
+    deviceId: "upstairs-mac",
     mode: "LIVE",
     project: "Binastra",
     flowLabel: "Flow 2 - Layout",
-    assignments: [{ lead: { name: "Test Lead", phone: "60123456789" }, part1: { sentAt: "2026-07-13T04:00:00.000Z" } }],
+    instances: [{ name: "wa_01", owner: "60111111111" }],
+    assignments: [{ instanceName: "wa_01", lead: { name: "Test Lead", phone: "60123456789" }, part1: { sentAt: "2026-07-13T04:00:00.000Z" } }],
   };
   return runner;
 }
@@ -130,6 +133,38 @@ function makeRunner() {
   assert.equal(runner.state.advanceSummary.advanced, 1);
   assert.equal(calls[0].body.filter.and[1].property, "Project");
   assert.equal(calls[1].body.properties["Next Flow"].select.name, "Flow 3 - Location");
+  assert.equal(calls[1].body.properties["Assigned Sender Key"].rich_text[0].text.content, "upstairs-mac::60111111111");
+  assert.equal(calls[1].body.properties["Last Sender Phone"].phone_number, "60111111111");
+}
+
+{
+  const calls = [];
+  const page = {
+    id: "page-legacy",
+    properties: {
+      "Stop Flag": { checkbox: false },
+      "Sequence Status": { select: { name: "Running" } },
+      "Next Flow": { select: { name: "Flow 2 - Layout" } },
+    },
+  };
+  const service = makeService(() => {}, {
+    notion: async (method, pathname, body) => {
+      calls.push({ method, pathname, body });
+      return method === "POST" ? { results: [page] } : {};
+    },
+    nfSelect: (item, name) => item?.properties?.[name]?.select?.name || "",
+    nfAddDaysKL: () => "2026-07-15",
+    flowByLabel: () => ({ key: "flow_2" }),
+    flowStateAfter: () => ({ lastFlowLabel: "Flow 2 - Layout", nextFlowLabel: "Flow 3 - Location", cohortDay: "Day 2", dueDays: 2 }),
+  });
+  const runner = makeFlowRunner();
+  delete runner.state.deviceId;
+  await service.autoAdvanceFlow(runner);
+  const properties = calls[1].body.properties;
+  assert.equal(properties["Assigned Sender Key"], undefined);
+  assert.equal(properties["Last Sender Key"], undefined);
+  assert.equal(properties["Last Sender Phone"], undefined);
+  assert.equal(properties["Last Sent By Device"], undefined);
 }
 
 {

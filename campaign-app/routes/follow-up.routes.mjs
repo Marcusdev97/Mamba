@@ -1,11 +1,16 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
 import { isClearRejectionText } from "../flow_sequence.mjs";
+import { filterRecordsForDevice, requireLocalRecord } from "../lib/device-scope.mjs";
 
 function requireFollowUp(runtime) {
   if (!runtime.followUp) {
     throw httpError(500, "Follow-Up service 没有载入。请重启 Mamba server。");
   }
   return runtime.followUp;
+}
+
+function deviceScope(followUp, records) {
+  return filterRecordsForDevice(records, { device: followUp.device });
 }
 
 function clean(value) {
@@ -426,7 +431,9 @@ export function registerFollowUpRoutes(router) {
     }
 
     const now = Date.now();
-    const desk = buildFollowUpDesk(cache.records, now);
+    const allRecords = cache.records;
+    const scoped = deviceScope(followUp, allRecords);
+    const desk = buildFollowUpDesk(scoped.records, now);
     const decorated = desk.records;
     const filtered = applyFilters(decorated, filters);
     const projects = [...new Set(decorated.map((record) => record.project).filter(Boolean))].sort();
@@ -434,6 +441,14 @@ export function registerFollowUpRoutes(router) {
       ok: true,
       source,
       syncedAt: cache.syncedAt || null,
+      scope: {
+        mode: "strict-device",
+        device: followUp.device,
+        sharedRows: allRecords.length,
+        localRows: scoped.records.length,
+        hiddenRows: allRecords.length - scoped.records.length,
+        counts: scoped.counts,
+      },
       summary: desk.summary,
       outboundSync: followUp.outboundSync?.snapshot?.() || null,
       projects,
@@ -456,6 +471,9 @@ export function registerFollowUpRoutes(router) {
     const phone = followUp.normalizePhone(url.searchParams.get("phone"));
     const sender = clean(url.searchParams.get("sender"));
     if (!phone) throw httpError(400, "缺少有效客户电话号码。");
+    const cache = await followUp.readCache();
+    const isLocal = deviceScope(followUp, cache.records).records.some((record) => followUp.normalizePhone(record.phone) === phone);
+    if (!isLocal) throw httpError(403, "这个客户不属于当前 Device + WhatsApp sender，不能读取对话。");
     const result = await completeConversation(followUp, phone, sender);
     json(res, 200, { ok: true, phone, ...result });
   });
@@ -468,6 +486,15 @@ export function registerFollowUpRoutes(router) {
     const action = clean(body.action);
     if (!id) throw httpError(400, "缺少客户 Notion page id。");
     if (!action) throw httpError(400, "缺少 follow-up action。");
+    let ownershipRows;
+    try {
+      ownershipRows = await followUp.queryNotionRows(undefined);
+    } catch {
+      ownershipRows = (await followUp.readCache()).records;
+    }
+    if (!requireLocalRecord(ownershipRows, id, { device: followUp.device })) {
+      throw httpError(403, "这个客户不属于当前 Device + WhatsApp sender，不能修改 Follow-Up。");
+    }
 
     let database = await followUp.notion("GET", `/databases/${followUp.blastDatabaseId}`);
     if (["book_appointment", "save_appointment", "follow_up"].includes(action)) {

@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { FileBlob, SpreadsheetFile } from "./xlsx_compat.mjs";
+import { createDeviceIdentity } from "./lib/device-identity.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -64,6 +65,7 @@ const env = Object.fromEntries(
 
 const apiBase = "http://127.0.0.1:8080";
 const apiHeaders = { "Content-Type": "application/json", apikey: env.AUTHENTICATION_API_KEY };
+const deviceIdentity = createDeviceIdentity(env);
 const automatedDryRun = process.argv.includes("--dry-run");
 let rl;
 let stopped = false;
@@ -384,6 +386,8 @@ runPath = path.join(runsDir, `${runId}.json`);
 await fs.mkdir(runsDir, { recursive: true });
 state = {
   runId,
+  deviceId: deviceIdentity.id,
+  deviceName: deviceIdentity.name,
   campaignId: config.campaignId,
   mode,
   status: mode === "LIVE" ? "READY" : mode === "TEST" ? "READY_TEST" : "DRY_RUN_COMPLETE",

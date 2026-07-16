@@ -1,10 +1,26 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
+import { filterRecordsForDevice, requireLocalRecord } from "../lib/device-scope.mjs";
 
 function requireConversations(runtime) {
   if (!runtime.conversations) {
     throw httpError(500, "Conversations service 没有载入。请重启 Mamba server。");
   }
   return runtime.conversations;
+}
+
+function deviceScope(conversations, records) {
+  return filterRecordsForDevice(records, { device: conversations.device });
+}
+
+function scopeResponse(conversations, allRecords, scoped) {
+  return {
+    mode: "strict-device",
+    device: conversations.device,
+    sharedRows: allRecords.length,
+    localRows: scoped.records.length,
+    hiddenRows: allRecords.length - scoped.records.length,
+    counts: scoped.counts,
+  };
 }
 
 async function writeConversationLog(conversations, level, event, message, context = {}) {
@@ -382,6 +398,9 @@ export function registerConversationsRoutes(router) {
     const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
     const phone = conversations.normalizePhone(url.searchParams.get("phone"));
     if (!phone) throw httpError(400, "缺少有效 phone。");
+    const cache = await conversations.readCache();
+    const localPhone = deviceScope(conversations, cache.records).records.some((record) => conversations.normalizePhone(record.phone) === phone);
+    if (!localPhone) throw httpError(403, "这个客户不属于当前 Device + WhatsApp sender，不能读取对话历史。");
     const entries = await conversations.history.read(phone, { limit: url.searchParams.get("limit") || 100 });
     json(res, 200, { ok: true, phone, entries });
   });
@@ -489,6 +508,29 @@ export function registerConversationsRoutes(router) {
       throw httpError(500, "Conversations refresh service 没有载入。请重启 Mamba server。");
     }
 
+    const cached = await conversations.readCache();
+    if (cached.records.length && !deviceScope(conversations, cached.records).records.length) {
+      await writeConversationLog(conversations, "info", "refresh_replies_empty_device_scope", "Skipped WhatsApp reply scan because this device has no owned customers.", {
+        deviceId: conversations.device?.id || "",
+        sharedRows: cached.records.length,
+      });
+      json(res, 200, {
+        ok: true,
+        scannedPhones: 0,
+        scannedInstances: [],
+        found: 0,
+        updated: 0,
+        failed: [],
+        instanceErrors: [],
+        duplicateRows: 0,
+        senderOffline: 0,
+        historyAdded: 0,
+        historySkipped: 0,
+        updates: [],
+      });
+      return;
+    }
+
     let database;
     try {
       database = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
@@ -498,11 +540,32 @@ export function registerConversationsRoutes(router) {
     const schema = database?.properties || {};
     let records;
     try {
-      records = await conversations.queryNotionRows(undefined);
+      const allRecords = await conversations.queryNotionRows(undefined);
+      records = deviceScope(conversations, allRecords).records;
     } catch (error) {
       throw httpError(502, `读取 Notion Blast Leads 客户失败：${error.message}`);
     }
     const { byPhone, duplicateRows } = pickLatestRecordByPhone(records, conversations.normalizePhone);
+    if (!records.length) {
+      await writeConversationLog(conversations, "info", "refresh_replies_empty_device_scope", "Skipped WhatsApp reply scan because this device has no owned customers.", {
+        deviceId: conversations.device?.id || "",
+      });
+      json(res, 200, {
+        ok: true,
+        scannedPhones: 0,
+        scannedInstances: [],
+        found: 0,
+        updated: 0,
+        failed: [],
+        instanceErrors: [],
+        duplicateRows,
+        senderOffline: 0,
+        historyAdded: 0,
+        historySkipped: 0,
+        updates: [],
+      });
+      return;
+    }
     let instances;
     try {
       instances = await conversations.openInstances();
@@ -656,6 +719,20 @@ export function registerConversationsRoutes(router) {
     const onlyUnclassified = body.onlyUnclassified !== false;
     const terminalRepairsOnly = body.terminalRepairsOnly === true;
 
+    const cached = await conversations.readCache();
+    if (cached.records.length && !deviceScope(conversations, cached.records).records.length) {
+      json(res, 200, {
+        ok: true,
+        totalRows: 0,
+        candidates: 0,
+        classified: 0,
+        failed: [],
+        routeCounts: {},
+        updates: [],
+      });
+      return;
+    }
+
     let database;
     try {
       database = await conversations.notion("GET", `/databases/${conversations.blastDatabaseId}`);
@@ -666,7 +743,8 @@ export function registerConversationsRoutes(router) {
 
     let records;
     try {
-      records = await conversations.queryNotionRows(undefined);
+      const allRecords = await conversations.queryNotionRows(undefined);
+      records = deviceScope(conversations, allRecords).records;
     } catch (error) {
       throw httpError(502, `读取 Notion Blast Leads 客户失败：${error.message}`);
     }
@@ -755,6 +833,15 @@ export function registerConversationsRoutes(router) {
     const body = await readJson(req);
     const id = pageId(body.id);
     if (!id) throw httpError(400, "缺少客户 Notion page id。请重新选择客户。");
+    let ownershipRows;
+    try {
+      ownershipRows = await conversations.queryNotionRows(undefined);
+    } catch {
+      ownershipRows = (await conversations.readCache()).records;
+    }
+    if (!requireLocalRecord(ownershipRows, id, { device: conversations.device })) {
+      throw httpError(403, "这个客户不属于当前 Device + WhatsApp sender，不能修改。");
+    }
 
     let database;
     try {
@@ -841,8 +928,11 @@ export function registerConversationsRoutes(router) {
     let source = "notion";
     let warning = "";
     try {
-      records = await conversations.queryNotionRows(undefined);
-      await conversations.writeCache(records).catch(() => {});
+      const synced = conversations.syncCache
+        ? await conversations.syncCache({ force: false })
+        : { records: await conversations.queryNotionRows(undefined), reused: false };
+      records = synced.records;
+      source = synced.reused ? "cache" : "notion";
     } catch (error) {
       const cache = await conversations.readCache();
       records = cache.records;
@@ -853,12 +943,16 @@ export function registerConversationsRoutes(router) {
       }
     }
 
+    const allRecords = records;
+    const scoped = deviceScope(conversations, allRecords);
+    records = scoped.records;
     const allFacets = facets(records);
     const filtered = sortRecords(applyFilters(records, filters));
     json(res, 200, {
       ok: true,
       source,
       warning,
+      scope: scopeResponse(conversations, allRecords, scoped),
       summary: summarize(records),
       filteredCount: filtered.length,
       records: filtered.slice(0, limit),

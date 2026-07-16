@@ -88,4 +88,26 @@ assert.equal(notionCalls.filter((call) => call.method === "PATCH").length, 1);
 assert.ok(notionCalls.find((call) => call.method === "PATCH").body.properties["Follow Up At"].date.start);
 assert.equal(cacheWrites, 1);
 
+let blockedApiCalls = 0;
+const blockedService = createOutboundFollowUpService({
+  blastDatabaseId: "database123",
+  api: async () => { blockedApiCalls += 1; return {}; },
+  notion: async (method) => method === "GET" ? { properties: { "Follow Up At": { type: "date" } } } : {},
+  openInstances: async () => [{ name: "wa_01" }],
+  normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+  collectMessageObjects: () => [],
+  describeMessage: () => "",
+  resolvePhone: () => "",
+  messageTime: () => 0,
+  queryNotionRows: async () => [liveCandidate],
+  filterRecords: () => [],
+  writeCache: async () => {},
+  systemLogs: { write: async () => {} },
+  onLog: () => {},
+});
+const blockedResult = await blockedService.runOnce({ reason: "device-scope-test" });
+assert.equal(blockedResult.checkedClients, 0);
+assert.equal(blockedResult.connections, 0);
+assert.equal(blockedApiCalls, 0, "an empty device scope must not scan WhatsApp history");
+
 console.log("✅ all outbound follow-up tests passed");
