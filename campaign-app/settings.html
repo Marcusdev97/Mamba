@@ -16,9 +16,10 @@
   .settings-grid > .card { margin: 0; min-width: 0; }
   .phone-card { order: 1; grid-column: 1 / -1; }
   .notion-card { order: 2; grid-column: span 6; }
-  .telegram-card { order: 3; grid-column: span 6; }
-  .ai-card { order: 4; grid-column: 1 / -1; }
-  .save-card { order: 5; grid-column: 1 / -1; display: flex; flex-direction: column; }
+  .database-card { order: 3; grid-column: span 6; }
+  .telegram-card { order: 4; grid-column: 1 / -1; }
+  .ai-card { order: 5; grid-column: 1 / -1; }
+  .save-card { order: 6; grid-column: 1 / -1; display: flex; flex-direction: column; }
   .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
   .card-head h2 { margin: 0; }
   .card-kicker { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.5; }
@@ -106,6 +107,11 @@
   .health-state.warn { background: var(--amber-bg); color: var(--amber); }
   .health-state.bad { background: var(--red-bg); color: var(--red); }
   .health-text { color: var(--text); font-size: 13px; }
+  .database-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 14px 0; }
+  .database-stat { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 10px 12px; }
+  .database-stat span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  .database-stat b { display: block; font-size: 15px; overflow-wrap: anywhere; }
+  .database-note { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
   .save-card .save-copy { color: var(--muted); font-size: 13px; line-height: 1.6; }
   .save-card .actions { margin-top: auto; padding-top: 22px; }
   .save-card .primary { width: 100%; justify-content: center; }
@@ -120,7 +126,7 @@
   .model-grid, .model-grid.three { display: grid; grid-template-columns: 1fr; gap: 0; }
   .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
   @media (max-width: 1050px) {
-    .notion-card, .telegram-card, .ai-card, .save-card { grid-column: 1 / -1; }
+    .notion-card, .database-card, .telegram-card, .ai-card, .save-card { grid-column: 1 / -1; }
     .phone-overview { grid-template-columns: 1fr; }
     .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
     .ai-provider + .ai-provider { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; }
@@ -134,6 +140,7 @@
     .phone-card table { display: block; overflow-x: auto; }
     .phone-card th, .phone-card td { padding-left: 10px; padding-right: 10px; font-size: 12px; }
     .model-grid, .model-grid.three { grid-template-columns: 1fr; }
+    .database-stats { grid-template-columns: 1fr; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
@@ -143,7 +150,7 @@
   <header class="top">
     <div>
       <h1>Settings</h1>
-      <div class="sub">Phone Setup · Notion · Telegram · 自动回复安全开关 · 保存到 evolution-pilot/.env</div>
+      <div class="sub">Phone Setup · Notion · Local SQLite · Telegram · 自动回复安全开关</div>
     </div>
     <a href="/control-center">返回 Control Center</a>
   </header>
@@ -164,9 +171,35 @@
       </div>
     </div>
 
+    <div class="card database-card">
+      <div class="card-head"><div>
+        <h2 class="step-title"><span class="step-no">3</span> Local Database</h2>
+        <div class="card-kicker">SQLite · 每台 Mac 独立 · 今天只建立数据库壳</div>
+      </div></div>
+      <div class="health" id="databaseHealth">
+        <div class="chip">SQLite <b>查询中...</b></div>
+      </div>
+      <div class="database-stats">
+        <div class="database-stat"><span>Schema</span><b id="databaseSchema">—</b></div>
+        <div class="database-stat"><span>Customers</span><b id="databaseCustomers">0</b></div>
+        <div class="database-stat"><span>Pending Sync</span><b id="databasePending">0</b></div>
+      </div>
+      <div class="status-line" id="databaseStatus">读取本机数据库状态...</div>
+      <div class="status-line" id="databaseBinding">Device / Sender: 查询中...</div>
+      <div class="status-line" id="databasePath">Path: 查询中...</div>
+      <div class="actions">
+        <button class="btn primary" id="btnInitDatabase">初始化 SQLite 数据库壳</button>
+        <button class="btn" id="btnRefreshDatabase">刷新状态</button>
+        <button class="btn" id="btnImportNotion" disabled>Notion → SQLite（明天启用）</button>
+      </div>
+      <div class="database-note" style="margin-top:14px">
+        初始化只会在 <b>campaign-data/mamba.sqlite</b> 建立空表、Device 和 Sender 约束；不会读取 Notion 客户、不会发送 WhatsApp，也不会改变当前 Customer Desk。
+      </div>
+    </div>
+
     <div class="card telegram-card">
       <div class="card-head"><div>
-        <h2 class="step-title"><span class="step-no">3</span> Telegram</h2>
+        <h2 class="step-title"><span class="step-no">4</span> Telegram</h2>
         <div class="card-kicker">Bot and approval chat</div>
       </div></div>
       <label class="fld">
@@ -204,7 +237,7 @@
 
     <div class="card ai-card">
       <div class="card-head"><div>
-        <h2 class="step-title"><span class="step-no">4</span> Sales Brain / 自动回复</h2>
+        <h2 class="step-title"><span class="step-no">5</span> Sales Brain / 自动回复</h2>
         <div class="card-kicker">默认关闭。关闭时 Tracker 仍会记录回复，但 Mamba 不会自动回复客户。</div>
       </div></div>
 
@@ -366,7 +399,7 @@
 
     <div class="card save-card">
       <div class="card-head"><div>
-        <h2 class="step-title"><span class="step-no">5</span> Save</h2>
+        <h2 class="step-title"><span class="step-no">6</span> Save</h2>
         <div class="card-kicker">Apply local configuration</div>
       </div></div>
       <div class="save-copy">保存以上 Notion、Telegram 和 AI 设置。Brain service 下次起草时会读取所选 Provider；独立运行中的 Brain 建议重启一次。</div>
@@ -460,6 +493,55 @@ function render(settings) {
     $("geminiComplexModel").value = s.brain.geminiComplexModel || "gemini-3.1-pro-preview";
   }
   renderBrainMode();
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "0 KB";
+  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderLocalDatabase(database) {
+  const db = database || {};
+  let state = "NOT INITIALIZED";
+  let stateClass = "warn";
+  if (!db.driverAvailable) { state = "DRIVER MISSING"; stateClass = "bad"; }
+  else if (db.health === "ready") { state = "READY"; stateClass = "ok"; }
+  else if (db.health === "error") { state = "ERROR"; stateClass = "bad"; }
+  $("databaseHealth").innerHTML =
+    '<span class="health-state ' + stateClass + '">' + state + '</span>' +
+    '<div class="chip">Engine <b>' + (db.engine || "SQLite") + '</b></div>' +
+    '<div class="chip">Mode <b>' + (db.storageMode || "shadow") + '</b></div>' +
+    '<div class="chip">Size <b>' + formatBytes(db.sizeBytes) + '</b></div>';
+  $("databaseSchema").textContent = db.schemaVersion ? "v" + db.schemaVersion : "Not created";
+  $("databaseCustomers").textContent = String(db.counts?.customers || 0);
+  $("databasePending").textContent = String(db.counts?.pendingSyncJobs || 0);
+  $("databaseStatus").textContent = db.health === "ready"
+    ? "数据库壳已准备好。Notion 导入保持关闭，当前 Customer Desk 仍使用原来的资料来源。"
+    : db.health === "error"
+      ? "数据库健康检查失败 [" + (db.errorCode || "SQLITE_ERROR") + "]: " + (db.error || "请查看 System Logs")
+      : db.driverAvailable
+        ? "尚未初始化。可以安全建立空的 SQLite 数据库壳。"
+        : "找不到 sqlite3 driver；请确认 macOS /usr/bin/sqlite3 存在。";
+  $("databaseBinding").textContent = "Device: " + (db.deviceId || "未建立") + " · Sender: " + (db.expectedSenderPhone || "尚未绑定");
+  $("databasePath").textContent = "Path: " + (db.databasePath || "campaign-data/mamba.sqlite");
+  $("btnInitDatabase").textContent = db.initialized ? "检查并更新数据库壳" : "初始化 SQLite 数据库壳";
+}
+
+async function refreshLocalDatabase() {
+  const btn = $("btnRefreshDatabase");
+  btn.disabled = true;
+  btn.textContent = "查询中...";
+  try {
+    const data = await api("/api/settings/local-database");
+    renderLocalDatabase(data.database);
+  } catch (error) {
+    $("databaseStatus").textContent = "读取失败: " + error.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "刷新状态";
+  }
 }
 
 function renderTelegramFilters(filters) {
@@ -707,6 +789,24 @@ $("btnSaveTelegramFilters").addEventListener("click", async () => {
   }
 });
 
+$("btnInitDatabase").addEventListener("click", async () => {
+  if (!confirm("只建立本机 SQLite 空数据库和安全约束；今天不会导入或修改 Notion。继续吗？")) return;
+  const btn = $("btnInitDatabase");
+  btn.disabled = true;
+  btn.textContent = "初始化中...";
+  try {
+    const data = await api("/api/settings/local-database/initialize", {});
+    renderLocalDatabase(data.database);
+    message(data.message || "SQLite 数据库壳已准备好。", "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("btnRefreshDatabase").addEventListener("click", refreshLocalDatabase);
+
 $("btnAddNumber").addEventListener("click", async () => {
   message("", "");
   const label = (prompt("Connection Key（留空自动取下一个，如 wa_03）：", "") || "").trim();
@@ -760,6 +860,7 @@ api("/api/settings").then((data) => render(data.settings)).catch((e) => {
 refreshIdentity();
 refreshInstances();
 refreshTelegramFilters();
+refreshLocalDatabase();
 setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
 </script>
 </body>

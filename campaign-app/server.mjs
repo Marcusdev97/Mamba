@@ -14,6 +14,7 @@ import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
+import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
@@ -101,6 +102,11 @@ const blastDsId = String(notionConfig?.databases?.blastLeads ?? "").replace(/[^a
 const configuredBrainDb = (name, fallback) => String(notionConfig?.databases?.[name] || fallback).replace(/[^a-fA-F0-9]/g, "");
 
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
+const localDatabaseService = createLocalDatabaseService({
+  dataDir: paths.dataDir,
+  device: deviceIdentity,
+  senderPolicy: deviceSenderPolicy,
+});
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
@@ -273,6 +279,7 @@ const runtime = await loadRuntime({
   getRunner: () => campaignRunnerRegistry.list().find((item) => item?.running) || runner,
   systemLogs: systemLogService,
   settings: settingsService,
+  localDatabase: localDatabaseService,
   device: deviceIdentity,
   telegramHub,
   telegramFilters: telegramFilterService,

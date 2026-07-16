@@ -14,6 +14,13 @@ function requireTelegramFilters(runtime) {
   return runtime.telegramFilters;
 }
 
+function requireLocalDatabase(runtime) {
+  if (!runtime.localDatabase) {
+    throw httpError(500, "Local Database service 没有载入。请重启 Mamba server。");
+  }
+  return runtime.localDatabase;
+}
+
 function readableTelegramError(error, action) {
   const message = String(error?.message || "");
   if (message.includes("chat not found")) {
@@ -75,6 +82,25 @@ export function registerSettingsRoutes(router) {
       json(res, 200, { ok: true, identity: await settings.identity() });
     } catch (error) {
       throw httpError(400, `无法确认 Settings 连接状态: ${error.message}`);
+    }
+  });
+
+  router.get("/api/settings/local-database", async (_req, res, runtime) => {
+    const localDatabase = requireLocalDatabase(runtime);
+    json(res, 200, { ok: true, database: await localDatabase.snapshot() });
+  });
+
+  router.post("/api/settings/local-database/initialize", async (_req, res, runtime) => {
+    const localDatabase = requireLocalDatabase(runtime);
+    try {
+      const database = await localDatabase.initialize();
+      json(res, 200, {
+        ok: true,
+        database,
+        message: "SQLite 数据库壳已初始化。Notion 导入仍保持关闭。",
+      });
+    } catch (error) {
+      throw httpError(500, `初始化 SQLite 失败 [${error.code || "SQLITE_INITIALIZE_FAILED"}]：${error.message}`);
     }
   });
 
