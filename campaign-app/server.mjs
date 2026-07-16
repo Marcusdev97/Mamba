@@ -1,5 +1,5 @@
 // Local web console for the WhatsApp campaign blaster (multi-project).
-// Start with: node campaign-app/server.mjs   (or double-click "Campaign Console.command")
+// Start with: node campaign-app/server.mjs   (or open Mamba.app)
 
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -63,6 +63,7 @@ for (const [k, v] of Object.entries(env)) {
   if (v !== "" && process.env[k] === undefined) process.env[k] = v;
 }
 const api = makeApi(env);
+const brainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
 const deviceIdentity = createDeviceIdentity(env);
 const notionService = createNotionService({ env });
 const {
@@ -109,6 +110,8 @@ function getCampaignRunner(runId = null) {
 const replyServiceManager = createReplyServiceManager({
   rootDir: paths.rootDir,
   onLog: (message) => console.log(message),
+  systemLogs: systemLogService,
+  brainEnabled,
 });
 const conversationHistoryService = createConversationHistoryService({ rootDir: paths.rootDir });
 const blastCacheService = createBlastCacheService({
@@ -529,7 +532,7 @@ server.on("error", (error) => {
 
 server.listen(PORT, HOST, () => {
   const address = `http://${HOST}:${PORT}`;
-  const openPath = process.env.MAMBA_OPEN_PATH || "/";
+  const openPath = process.env.MAMBA_OPEN_PATH || "/control-center";
   const openUrl = new URL(openPath, address).toString();
   console.log("Campaign Console (multi-project)");
   console.log("================================");
@@ -540,7 +543,11 @@ server.listen(PORT, HOST, () => {
   dailyCampaignService.start();
   restoreActiveCampaign().catch((error) => console.log(`Campaign recovery failed: ${error.message}`));
   replyServiceManager.ensureStarted()
-    .then((status) => console.log(`Reply services: tracker ${status.tracker ? "ONLINE" : "OFFLINE"} · brain ${status.brain ? "ONLINE" : "OFFLINE"}`))
+    .then((status) => console.log(
+      status.brainEnabled
+        ? `Reply services: tracker ${status.tracker ? "ONLINE" : "OFFLINE"} · brain ${status.brain ? "ONLINE" : "OFFLINE"}`
+        : `Reply services: tracker ${status.tracker ? "ONLINE" : "OFFLINE"} · Sales Brain DISABLED (tracker-only, no automatic customer replies)`,
+    ))
     .catch((error) => console.log(`Reply services could not start: ${error.message}`));
   if (process.env.MAMBA_AUTO_OPEN !== "0") exec(`open "${openUrl}"`);
 });

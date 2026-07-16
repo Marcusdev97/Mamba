@@ -11,7 +11,7 @@
       { code: "CS", label: "Customer Search", href: "/lookup", paths: ["/lookup"] },
     ] },
     { title: "Campaigns", links: [
-      { code: "CP", label: "Campaign Center", href: "/send", paths: ["/", "/send", "/next-flow"] },
+      { code: "CP", label: "Campaign Center", href: "/send", paths: ["/send", "/flow-1", "/next-flow"] },
       { code: "TF", label: "Templates & Flows", href: "/templates", paths: ["/templates"] },
       { code: "NC", label: "Next Campaign · TODO", href: "/campaign-todo", paths: ["/campaign-todo"] },
     ] },

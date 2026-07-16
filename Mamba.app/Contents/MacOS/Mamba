@@ -1,39 +1,19 @@
 #!/bin/zsh
 
+# macOS app wrapper for the one canonical launcher.
+
 APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 ROOT_DIR="$(cd "$APP_DIR/.." && pwd)"
-NODE="$(command -v node 2>/dev/null)"
-if [[ ! -x "$NODE" ]]; then
-  for _c in /opt/homebrew/bin/node /usr/local/bin/node "$HOME/.volta/bin/node" "$HOME"/.nvm/versions/node/*/bin/node(N) "$HOME"/.local/state/fnm_multishells/*/bin/node(N); do
-    [[ -x "$_c" ]] && { NODE="$_c"; break; }
-  done
-fi
+LAUNCHER="$ROOT_DIR/launchers/Mamba Control Center.command"
 
-PORT="${CONTROL_PORT:-8810}"
-URL="http://127.0.0.1:${PORT}/"
-
-cd "$HOME" 2>/dev/null || cd /
-
-if [[ ! -x "$NODE" ]]; then
-  osascript -e 'display dialog "Mamba cannot find Node.js." buttons {"OK"} default button "OK"'
+if [[ ! -f "$LAUNCHER" ]]; then
+  osascript -e 'display dialog "Mamba launcher is missing." buttons {"OK"} default button "OK"'
   exit 1
 fi
 
-# Was the Control Center ALREADY running before we touched anything?
-WAS_UP=0
-# 控制台无状态 —— 点图标永远重启,保证界面是最新代码
-OLD_PID="$(lsof -ti tcp:$PORT 2>/dev/null)"
-[[ -n "$OLD_PID" ]] && { kill $OLD_PID 2>/dev/null; sleep 1; }
-WAS_UP=0
-
-if [[ $WAS_UP -eq 0 ]]; then
-  # Not running yet — start it. The Control Center opens the dashboard tab itself
-  # when it boots, so this app must NOT open a second tab here (that double-open
-  # was the "opens twice" bug).
-  LAUNCHER="$ROOT_DIR/launchers/Mamba Control Center.command"
-  open -a "/System/Applications/Utilities/Terminal.app" "$LAUNCHER" \
-    || open -b com.apple.Terminal "$LAUNCHER" \
-    || osascript - "$LAUNCHER" <<'APPLESCRIPT'
+open -a "/System/Applications/Utilities/Terminal.app" "$LAUNCHER" \
+  || open -b com.apple.Terminal "$LAUNCHER" \
+  || osascript - "$LAUNCHER" <<'APPLESCRIPT'
 on run argv
   tell application "Terminal"
     activate
@@ -41,18 +21,3 @@ on run argv
   end tell
 end run
 APPLESCRIPT
-  for i in {1..12}; do
-    curl -s -o /dev/null --max-time 1 "$URL" && break
-    sleep 1
-  done
-  # Safety net only: if the Control Center didn't manage to open a tab, show the URL.
-  if ! curl -s -o /dev/null --max-time 2 "$URL"; then
-    osascript -e "display dialog \"Mamba could not start yet. Please keep the Terminal window open, then reload:\\n$URL\" buttons {\"OK\"} default button \"OK\""
-  fi
-else
-  # Already running (nothing auto-opens) — open exactly one tab now.
-  open "$URL" \
-    || open -a "Google Chrome" "$URL" \
-    || open -a Safari "$URL" \
-    || osascript -e "display dialog \"Mamba is running. Open this URL in your browser:\\n$URL\" buttons {\"OK\"} default button \"OK\""
-fi

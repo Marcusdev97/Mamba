@@ -90,7 +90,9 @@ export function registerLookupRoutes(router) {
   router.post("/api/lookup/sync", async (_req, res, runtime) => {
     const lookup = requireLookup(runtime);
     try {
-      const payload = await lookup.syncCache();
+      // A user-clicked sync may bypass the normal 10-minute cache window, while
+      // the cache service still collapses accidental duplicate clicks for 30s.
+      const payload = await lookup.syncCache({ force: true });
       json(res, 200, { ok: true, syncedAt: payload.syncedAt, count: payload.count });
     } catch (error) {
       throw httpError(500, readableLookupError(error, "同步 Blast Leads cache"));

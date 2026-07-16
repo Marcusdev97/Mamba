@@ -14,7 +14,7 @@ const imagesDir = path.join(assetsDir, "images");
 
 const env = await loadEnv();
 const token = env.NOTION_API_KEY || env.NOTION_TOKEN;
-if (!token) { console.log("No NOTION_API_KEY in .env — run 'Set Notion Token.command' first."); process.exit(1); }
+if (!token) { console.log("No NOTION_API_KEY in .env — open Mamba Settings and add the Notion token first."); process.exit(1); }
 
 const config = JSON.parse(await fs.readFile(path.join(rootDir, "campaign-data", "notion_config.json"), "utf8"));
 const dbId = String(config.databases.templates).replace(/[^a-fA-F0-9]/g, "");

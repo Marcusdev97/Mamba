@@ -6,9 +6,8 @@
 # 卸载:
 #   bash install_launchd.sh --uninstall
 #
-# 装 4 个常驻服务 (全部 KeepAlive / 定时,合上盖子/重启都会自己活):
-#   com.mamba.brain        brain_service.mjs        — 唯一回复出口 (缺口 3/4)
-#   com.mamba.tracker      blaster_tracker.mjs      — 面板+统计 (--no-webhook, brain 会转发)
+# 装 3 个后台维护任务。Reply Tracker / Sales Brain 由 Mamba Server 按
+# Settings 的安全开关统一管理，避免多个 launchd/command 抢同一个 webhook。
 #   com.mamba.braincache   brain_cache_sync --watch — 每 30 分钟 Notion -> 本地知识缓存
 #   com.mamba.suppression  suppression.mjs          — 每 30 分钟同步全局 STOP 名单
 #   com.mamba.scorecard    daily_scorecard.mjs      — 每晚 22:00 成绩单 -> Mamba 系统台
@@ -22,16 +21,24 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node || true)"
 AGENTS="$HOME/Library/LaunchAgents"
 LOGS="$REPO/launchd/logs"
-LABELS=(com.mamba.brain com.mamba.tracker com.mamba.braincache com.mamba.suppression com.mamba.scorecard)
+LABELS=(com.mamba.braincache com.mamba.suppression com.mamba.scorecard)
+LEGACY_LABELS=(com.mamba.brain com.mamba.tracker)
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-  for label in "${LABELS[@]}"; do
+  for label in "${LABELS[@]}" "${LEGACY_LABELS[@]}"; do
     launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
     rm -f "$AGENTS/$label.plist"
     echo "removed $label"
   done
   exit 0
 fi
+
+# Remove reply services created by older versions. The unified Mamba Server now
+# owns these processes and their webhook lifecycle.
+for label in "${LEGACY_LABELS[@]}"; do
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  rm -f "$AGENTS/$label.plist"
+done
 
 [[ -z "$NODE" ]] && { echo "找不到 node — 先装 Node.js (brew install node)"; exit 1; }
 mkdir -p "$AGENTS" "$LOGS"
@@ -66,13 +73,6 @@ KEEPALIVE='  <key>RunAtLoad</key><true/>
   <key>ThrottleInterval</key><integer>15</integer>'
 EVERY30='  <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>1800</integer>'
-
-write_plist com.mamba.brain "    <string>$NODE</string>
-    <string>$REPO/campaign-app/brain_service.mjs</string>" "$KEEPALIVE"
-
-write_plist com.mamba.tracker "    <string>$NODE</string>
-    <string>$REPO/campaign-app/blaster_tracker.mjs</string>
-    <string>--no-webhook</string>" "$KEEPALIVE"
 
 write_plist com.mamba.braincache "    <string>$NODE</string>
     <string>$REPO/campaign-app/brain_cache_sync.mjs</string>

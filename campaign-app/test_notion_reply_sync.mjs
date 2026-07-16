@@ -98,6 +98,23 @@ const crossPcResult = await crossPc.upsertLeadReply({
 assert.equal(crossPcResult.matched, true);
 assert.equal(crossPcResult.action, "updated");
 assert.equal(updatedProperties["Sequence Status"].select.name, "Not Interested");
+assert.equal(crossPcResult.existingLead.properties["Reply Count"].number, 1);
+
+crossPc.findLeadByPhone = async () => { throw new Error("prefetched lead should avoid a second phone lookup"); };
+const secondCrossPcResult = await crossPc.upsertLeadReply({
+  id: "msg-cross-pc-2",
+  phone: "60123456789",
+  receivedAt: "2026-07-11T02:01:00.000Z",
+  text: "Can I view tomorrow?",
+  status: "Appointment",
+  sequenceStatus: "Human Takeover",
+  nextAction: "Ask Viewing",
+  aiCategory: "Viewing Request",
+  route: "VIEWING_REQUEST",
+  signal: "GREEN",
+}, { createIfMissing: false, existingLead: crossPcResult.existingLead });
+assert.equal(secondCrossPcResult.matched, true);
+assert.equal(updatedProperties["Reply Count"].number, 2, "shared lookup must still count every distinct reply");
 
 const stranger = new NotionSync({ token: "test", config: { databases: {}, dataSources: {} } });
 stranger.state = { leadPages: {}, syncedReplyIds: {}, creditedResponses: {} };

@@ -307,16 +307,23 @@ export class NotionSync {
     const started = Date.now();
     const retryTag = attempt ? ` retry=${attempt}` : "";
     console.log(`[notion-sync] ${method} ${pathname}${retryTag}`);
-    const response = await fetch(`https://api.notion.com/v1${pathname}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-        "Notion-Version": NOTION_VERSION,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(20000),
-    });
+    let response;
+    try {
+      response = await fetch(`https://api.notion.com/v1${pathname}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": "application/json",
+          "Notion-Version": NOTION_VERSION,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (error) {
+      const elapsed = Date.now() - started;
+      console.log(`[notion-sync:error] code=NOTION_NETWORK_FAILED method=${method} path=${pathname} elapsed=${elapsed}ms details=${JSON.stringify(error?.message || String(error))}`);
+      throw new Error(`Notion ${method} ${pathname} network failed after ${elapsed}ms: ${error?.message || error}`);
+    }
     // Auto-retry on rate limit / transient errors.
     if ((response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) && attempt < 5) {
       const retryAfter = Number(response.headers.get("retry-after")) || (attempt + 1);
@@ -388,6 +395,11 @@ export class NotionSync {
       phone_number: { equals: phone },
     }, 1);
     return result?.results?.[0] ?? null;
+  }
+
+  async findLeadForReply(phone) {
+    if (!this.enabled || !phone) return null;
+    return this.findLeadByPhone(phone);
   }
 
   async findLeadProjectByPhone(phone, senderInstance = "") {
@@ -583,13 +595,16 @@ export class NotionSync {
     await this.updatePage(pageId, { [propertyName]: numberValue(next) });
   }
 
-  async upsertLeadReply(event, { createIfMissing = true } = {}) {
+  async upsertLeadReply(event, options = {}) {
+    const { createIfMissing = true } = options;
     if (!this.enabled || !event?.phone || !event?.id) return { action: "skipped", matched: false };
     if (!event.force && this.state.syncedReplyIds[event.id]) return { action: "deduped", matched: true };
     console.log(`[notion-sync] upload reply phone=${event.phone} route=${event.route || "-"} force=${event.force === true}`);
 
     const schema = await this.getBlastSchema();
-    const existing = await this.findLeadByPhone(event.phone);
+    const existing = Object.prototype.hasOwnProperty.call(options, "existingLead")
+      ? options.existingLead
+      : await this.findLeadByPhone(event.phone);
     // RED / STOP verdict -> flag every project row for this phone first, so a
     // multi-盘 customer is stopped everywhere, not just the row found below.
     if (event.stopFlag) await this.stopAllRowsForPhone(event.phone, event.route || "STOP");
@@ -639,7 +654,17 @@ export class NotionSync {
     this.state.syncedReplyIds[event.id] = true;
     await this.saveState();
     console.log(`[notion-sync] reply ${existing ? "updated" : "created"} phone=${event.phone} status=${leadStatusFromReply(event)}`);
-    return { action: existing ? "updated" : "created", matched: true, pageId: cleanId(page.id) };
+    const existingLead = {
+      ...(existing || {}),
+      ...(page || {}),
+      id: page?.id || existing?.id,
+      properties: {
+        ...(existing?.properties || {}),
+        ...replyProps,
+        ...(page?.properties || {}),
+      },
+    };
+    return { action: existing ? "updated" : "created", matched: true, pageId: cleanId(page.id), existingLead };
   }
 
   templateByPageId(pageId) {

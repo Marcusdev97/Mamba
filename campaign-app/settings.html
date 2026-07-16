@@ -143,9 +143,9 @@
   <header class="top">
     <div>
       <h1>Settings</h1>
-      <div class="sub">Phone Setup · Notion · Telegram · AI 大脑 · 保存到 evolution-pilot/.env</div>
+      <div class="sub">Phone Setup · Notion · Telegram · 自动回复安全开关 · 保存到 evolution-pilot/.env</div>
     </div>
-    <a href="/">返回 Campaign Console</a>
+    <a href="/control-center">返回 Control Center</a>
   </header>
 
   <div class="settings-grid">
@@ -204,9 +204,14 @@
 
     <div class="card ai-card">
       <div class="card-head"><div>
-        <h2 class="step-title"><span class="step-no">4</span> AI 大脑</h2>
-        <div class="card-kicker">Provider、model 与 reasoning mode</div>
+        <h2 class="step-title"><span class="step-no">4</span> Sales Brain / 自动回复</h2>
+        <div class="card-kicker">默认关闭。关闭时 Tracker 仍会记录回复，但 Mamba 不会自动回复客户。</div>
       </div></div>
+
+      <label class="check-row" style="padding:14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel-2);margin-bottom:18px">
+        <input id="brainEnabled" type="checkbox" />
+        <span><b>启用 Sales Brain 自动回复服务</b><br><span class="muted">测试完成前请保持关闭。更改后重新启动 Mamba 才会完全生效。</span></span>
+      </label>
 
       <div class="ai-mode-row">
         <label class="fld" style="margin-bottom:0">
@@ -399,6 +404,7 @@ function values() {
     anthropicApiKey: $("anthropicApiKey").value.trim(),
     openaiApiKey: $("openaiApiKey").value.trim(),
     geminiApiKey: $("geminiApiKey").value.trim(),
+    brainEnabled: $("brainEnabled").checked,
     brainProvider: $("brainProvider").value,
     anthropicSimpleModel: $("anthropicSimpleModel").value,
     anthropicComplexModel: $("anthropicComplexModel").value,
@@ -419,7 +425,9 @@ function renderBrainMode() {
     gemini: "所有 AI 草稿使用 Google Gemini；没有有效 Key 时自动回到 Rule Only。",
     auto: "依次尝试 OpenAI、Gemini、Anthropic，最后使用规则草稿；发送前仍需人工批准。",
   };
-  $("brainModeNote").textContent = notes[mode] || notes.rules;
+  $("brainModeNote").textContent = $("brainEnabled").checked
+    ? (notes[mode] || notes.rules)
+    : "自动回复目前已关闭。Tracker 只记录客户回复，不会发送 WhatsApp 回复或 AI 草稿。";
 }
 
 function render(settings) {
@@ -441,6 +449,7 @@ function render(settings) {
     ? "已设置: " + s.gemini.masked
     : "未设置 Gemini Key";
   if (s.brain) {
+    $("brainEnabled").checked = s.brain.enabled === true;
     $("brainProvider").value = s.brain.provider || "rules";
     $("anthropicSimpleModel").value = s.brain.anthropicSimpleModel || "claude-haiku-4-5";
     $("anthropicComplexModel").value = s.brain.anthropicComplexModel || "claude-sonnet-4-5";
@@ -590,7 +599,7 @@ $("btnSave").addEventListener("click", async () => {
     $("openaiApiKey").value = "";
     $("geminiApiKey").value = "";
     refreshIdentity();
-    message("已保存。当前 Mamba server 会马上使用新的设置。", "");
+    message("已保存。自动回复开关需要重新启动 Mamba 才会完全生效。", "");
   } catch (e) {
     message("", e.message);
   }
@@ -661,6 +670,7 @@ $("btnTestGemini").addEventListener("click", async () => {
 });
 
 $("brainProvider").addEventListener("change", renderBrainMode);
+$("brainEnabled").addEventListener("change", renderBrainMode);
 
 $("btnTestTelegram").addEventListener("click", async () => {
   message("", "");

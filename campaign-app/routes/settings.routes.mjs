@@ -43,6 +43,9 @@ function brainSettingsFromBody(body) {
   const provider = String(body.brainProvider || "").trim().toLowerCase();
   const effort = String(body.openaiReasoningEffort || "").trim().toLowerCase();
   const values = {};
+  if (Object.hasOwn(body, "brainEnabled")) {
+    values.MAMBA_BRAIN_ENABLED = body.brainEnabled === true ? "1" : "0";
+  }
   if (provider) {
     if (!BRAIN_PROVIDERS.has(provider)) throw httpError(400, "AI Provider 只支持 Rule Only、Anthropic、OpenAI、Gemini 或 Auto。");
     values.BRAIN_AI_PROVIDER = provider;

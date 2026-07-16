@@ -21,6 +21,7 @@
 //   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID  (run Setup Telegram)
 //   OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY  optional
 //   BRAIN_AI_PROVIDER       rules | openai | gemini | anthropic | auto
+//   MAMBA_BRAIN_ENABLED     1 to allow live replies (default: disabled)
 //
 // Run:  node campaign-app/brain_service.mjs            # live service
 //       node campaign-app/brain_service.mjs --simulate "这个多少钱?"
@@ -65,6 +66,12 @@ const brainLogPath = path.join(brainDir, "reply_log.jsonl");
 const stopRequestsPath = path.join(brainDir, "stop_requests.jsonl");
 
 const env = await loadEnv();
+const liveBrainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
+if (!SIMULATE && !liveBrainEnabled) {
+  console.log("Sales Brain is disabled by Settings (MAMBA_BRAIN_ENABLED=0).");
+  console.log("Tracker-only mode remains safe: replies can be recorded, but Mamba will not reply to customers.");
+  process.exit(0);
+}
 const api = makeApi(env);
 // Customer alerts and approval drafts belong in the Telegram Inbox. Keep the
 // legacy chat as a fallback for older single-chat installations only.

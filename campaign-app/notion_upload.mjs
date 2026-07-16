@@ -20,7 +20,7 @@ const env = await loadEnv();
 const fallbackDevice = createDeviceIdentity(env);
 const token = env.NOTION_API_KEY || env.NOTION_TOKEN;
 if (!token) {
-  console.log("No NOTION_API_KEY in .env — run 'Set Notion Token.command' first.");
+  console.log("No NOTION_API_KEY in .env — open Mamba Settings and add the Notion token first.");
   process.exit(1);
 }
 
@@ -166,7 +166,7 @@ async function getSchema() {
     db = await notion("GET", `/databases/${dbId}`);
   } catch (error) {
     if (/HTTP 401/.test(error.message)) {
-      throw new Error("Notion 拒绝了你的 token (401)。请用 'Set Notion Token.command' 重新设置 NOTION_API_KEY。");
+      throw new Error("Notion 拒绝了你的 token (401)。请到 Mamba Settings 重新设置 NOTION_API_KEY。");
     }
     if (/HTTP 404/.test(error.message)) {
       throw new Error("找不到 Blast Leads 数据库 (404)。在 Notion 打开该数据库 → 右上角 ··· → Connections → 加上你的 integration,然后再试。");

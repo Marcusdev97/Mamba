@@ -219,8 +219,13 @@ export function registerControlCenterRoutes(router) {
     const warningsToday = logs.filter((entry) => entry.level === "warn").length;
     const cacheAgeMinutes = cache.syncedAt ? Math.max(0, Math.round((Date.now() - dateMs(cache.syncedAt)) / 60000)) : null;
     const activeBrain = listProjects();
-    const replyServices = await runtime.replyServices?.status?.().catch(() => ({ tracker: false, brain: false }))
-      || { tracker: false, brain: false };
+    const replyServices = await runtime.replyServices?.status?.().catch(() => ({ tracker: false, brain: false, brainEnabled: settings.brain?.enabled === true }))
+      || { tracker: false, brain: false, brainEnabled: settings.brain?.enabled === true };
+    const trackerDetails = replyServices.tracker
+      ? await runtime.replyServices?.trackerDetails?.().catch(() => null)
+      : null;
+    const notionReplyQueue = trackerDetails?.notionQueue || { pendingMessages: 0, manualReviewMessages: 0, pendingPhones: 0 };
+    const brainEnabled = settings.brain?.enabled === true;
     const learning = await learningQueueHealth(runtime, Boolean(settings.notion?.configured));
     const scheduler = await runtime.dailyCampaign?.snapshot?.().catch((error) => ({ error: error.message })) || null;
     const watchdog = await readJson(path.join(root, "campaign-data", "watchdog", "status.json"), null);
@@ -235,6 +240,17 @@ export function registerControlCenterRoutes(router) {
       { id: "brain", label: "AI replies awaiting approval", count: aiPending, tone: "purple", href: "/brain-learning" },
       { id: "appointments", label: "Active appointments", count: metrics.appointments, tone: "blue", href: "/follow-up?bucket=appointment" },
     ];
+    if (notionReplyQueue.pendingMessages) {
+      queue.splice(2, 0, {
+        id: "notion-replies",
+        label: notionReplyQueue.manualReviewMessages
+          ? "Notion replies need manual review"
+          : "Notion replies waiting to sync",
+        count: notionReplyQueue.manualReviewMessages || notionReplyQueue.pendingMessages,
+        tone: notionReplyQueue.manualReviewMessages ? "red" : "amber",
+        href: "/logs",
+      });
+    }
     if (campaign) {
       queue.splice(2, 0, {
         id: "campaign",
@@ -265,7 +281,7 @@ export function registerControlCenterRoutes(router) {
       campaign,
       queue,
       recent: recentActivity(records),
-      brain: { activeProjects: activeBrain.length, provider: settings.brain?.provider || "rules" },
+      brain: { enabled: brainEnabled, activeProjects: activeBrain.length, provider: settings.brain?.provider || "rules" },
       health: [
         healthItem("server", "Mamba Server", "online", `Online · port ${runtime.port}`),
         healthItem("whatsapp", "WhatsApp (Evolution)", whatsapp.ok ? "online" : "offline", whatsapp.label, "/settings"),
@@ -283,8 +299,27 @@ export function registerControlCenterRoutes(router) {
           runtime.telegramHub?.enabled ? "Shared inbox receives alerts from every Mamba device" : settings.telegram?.botConfigured && settings.telegram?.chatConfigured ? "Legacy Telegram is configured; shared inbox Hub is incomplete" : "Telegram Hub token or inbox destination is missing",
           "/settings",
         ),
-        healthItem("tracker", "Reply Tracker", replyServices.tracker ? "online" : "offline", replyServices.tracker ? "Listening for inbound replies" : "Replies will not reach Notion or Telegram"),
-        healthItem("brain", "Sales Brain", replyServices.brain ? "online" : "offline", replyServices.brain ? `${settings.brain?.provider || "rules"} · classification and alerts online` : "Classification and Telegram alerts are unavailable"),
+        healthItem(
+          "tracker",
+          "Reply Tracker",
+          !replyServices.tracker ? "offline" : notionReplyQueue.manualReviewMessages ? "warning" : "online",
+          !replyServices.tracker
+            ? "Replies will not reach Notion or Telegram"
+            : notionReplyQueue.manualReviewMessages
+              ? `${notionReplyQueue.manualReviewMessages} replies need manual review · open System Logs for the cause and solution`
+              : notionReplyQueue.pendingMessages
+                ? `Listening · ${notionReplyQueue.pendingMessages} replies across ${notionReplyQueue.pendingPhones} phones are waiting for Notion retry`
+                : "Listening for inbound replies · Notion queue clear",
+          notionReplyQueue.pendingMessages ? "/logs" : undefined,
+        ),
+        healthItem(
+          "brain",
+          brainEnabled ? "Sales Brain" : "Sales Brain (Manual Off)",
+          brainEnabled ? (replyServices.brain ? "online" : "offline") : "online",
+          brainEnabled
+            ? (replyServices.brain ? `${settings.brain?.provider || "rules"} · classification and alerts online` : "Classification and Telegram alerts are unavailable")
+            : "Tracker-only mode · replies are recorded, but Mamba will not reply to customers",
+        ),
         learning,
         healthItem(
           "scheduler",

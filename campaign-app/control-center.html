@@ -204,7 +204,9 @@ async function loadDashboard() {
     $("sentNote").textContent = `${data.metrics.totalCustomers} customers in cache`;
     $("replyNote").textContent = data.metrics.appointments ? `${data.metrics.appointments} active appointments` : "No active appointments";
     $("followNote").textContent = `${data.metrics.overdue} overdue · ${data.metrics.dueToday} today`;
-    $("brainNote").textContent = `${data.brain.provider} · ${data.brain.activeProjects} active projects`;
+    $("brainNote").textContent = data.brain.enabled
+      ? `${data.brain.provider} · ${data.brain.activeProjects} active projects`
+      : "自动回复已关闭 · Tracker-only";
     renderScope(data.scope || {});
     $("cacheLine").textContent = data.cache.syncedAt ? `Customer cache synced ${relative(data.cache.syncedAt)}${data.cache.stale ? " · refresh recommended" : ""}` : "Customer cache has not been synced.";
     renderQueue(data.queue || []);

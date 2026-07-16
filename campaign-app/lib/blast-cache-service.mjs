@@ -1,8 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSelect, nfTitle, nfText }) {
+export function createBlastCacheService({
+  rootDir,
+  blastDatabaseId,
+  notion,
+  nfSelect,
+  nfTitle,
+  nfText,
+  minFreshMs = 10 * 60 * 1000,
+  clock = () => new Date(),
+}) {
   const cachePath = () => path.join(rootDir, "campaign-data", "blast_leads_cache.json");
+  let activeFullQuery = null;
+  let activeSync = null;
 
   function rowToRecord(page) {
     const props = page.properties || {};
@@ -45,7 +56,7 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
     };
   }
 
-  async function queryRows(filter) {
+  async function retrieveRows(filter) {
     if (!blastDatabaseId) throw new Error("没有 Notion 配置。");
     console.log(`[blast-cache] retrieve Notion Blast Leads filter=${filter ? "yes" : "no"}`);
     const rows = [];
@@ -53,11 +64,18 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
     let pageNo = 0;
     do {
       pageNo += 1;
-      const data = await notion("POST", `/databases/${blastDatabaseId}/query`, {
-        filter,
-        page_size: 100,
-        ...(cursor ? { start_cursor: cursor } : {}),
-      });
+      let data;
+      try {
+        data = await notion("POST", `/databases/${blastDatabaseId}/query`, {
+          filter,
+          page_size: 100,
+          ...(cursor ? { start_cursor: cursor } : {}),
+        });
+      } catch (error) {
+        const message = `[BLAST_CACHE_PAGE_FAILED] 无法读取 Blast Leads 第 ${pageNo} 页；已读取 ${rows.length} 条但不会写入不完整缓存。请检查 Notion token、database sharing 和网络。原始错误：${error?.message || error}`;
+        console.log(`[blast-cache:error] ${message}`);
+        throw new Error(message);
+      }
       console.log(`[blast-cache] retrieved page=${pageNo} rows=${data?.results?.length ?? 0}`);
       for (const page of data?.results ?? []) rows.push(rowToRecord(page));
       cursor = data?.has_more ? data?.next_cursor : null;
@@ -66,10 +84,34 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
     return rows;
   }
 
-  async function sync() {
-    console.log("[blast-cache] sync start");
-    const records = await queryRows(undefined);
-    return writeCache(records);
+  function queryRows(filter) {
+    if (filter) return retrieveRows(filter);
+    if (activeFullQuery) {
+      console.log("[blast-cache] full retrieve joined existing request");
+      return activeFullQuery;
+    }
+    activeFullQuery = retrieveRows(undefined).finally(() => { activeFullQuery = null; });
+    return activeFullQuery;
+  }
+
+  async function sync({ force = false } = {}) {
+    if (activeSync) {
+      console.log("[blast-cache] sync joined existing request");
+      return activeSync;
+    }
+    activeSync = (async () => {
+      const cached = await read();
+      const ageMs = cached.syncedAt ? clock().getTime() - new Date(cached.syncedAt).getTime() : Infinity;
+      const reuseWindowMs = force ? Math.min(minFreshMs, 30_000) : minFreshMs;
+      if (cached.records.length && Number.isFinite(ageMs) && ageMs >= 0 && ageMs < reuseWindowMs) {
+        console.log(`[blast-cache] sync reused fresh cache count=${cached.records.length} age=${Math.round(ageMs / 1000)}s`);
+        return { syncedAt: cached.syncedAt, count: cached.records.length, records: cached.records, reused: true };
+      }
+      console.log("[blast-cache] sync start");
+      const records = await queryRows(undefined);
+      return writeCache(records);
+    })().finally(() => { activeSync = null; });
+    return activeSync;
   }
 
   async function read() {
@@ -83,9 +125,11 @@ export function createBlastCacheService({ rootDir, blastDatabaseId, notion, nfSe
 
   async function writeCache(records) {
     const safeRecords = Array.isArray(records) ? records : [];
-    const payload = { syncedAt: new Date().toISOString(), count: safeRecords.length, records: safeRecords };
+    const payload = { syncedAt: clock().toISOString(), count: safeRecords.length, records: safeRecords };
     await fs.mkdir(path.dirname(cachePath()), { recursive: true });
-    await fs.writeFile(cachePath(), JSON.stringify(payload));
+    const tempPath = `${cachePath()}.tmp.${process.pid}.${Date.now()}`;
+    await fs.writeFile(tempPath, JSON.stringify(payload));
+    await fs.rename(tempPath, cachePath());
     console.log(`[blast-cache] cache written count=${payload.count} path=${cachePath()}`);
     return payload;
   }

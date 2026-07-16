@@ -109,6 +109,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
     const openaiKey = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
     const geminiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
     const configuredProvider = String(env.BRAIN_AI_PROVIDER || process.env.BRAIN_AI_PROVIDER || "").trim().toLowerCase();
+    const brainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
     const provider = ["rules", "anthropic", "openai", "gemini", "auto"].includes(configuredProvider)
       ? configuredProvider
       : (anthropicKey ? "anthropic" : (openaiKey ? "openai" : (geminiKey ? "gemini" : "rules")));
@@ -132,6 +133,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
         masked: maskSecret(geminiKey),
       },
       brain: {
+        enabled: brainEnabled,
         provider,
         anthropicSimpleModel: env.BRAIN_ANTHROPIC_MODEL_SIMPLE || process.env.BRAIN_ANTHROPIC_MODEL_SIMPLE || "claude-haiku-4-5",
         anthropicComplexModel: env.BRAIN_ANTHROPIC_MODEL_COMPLEX || process.env.BRAIN_ANTHROPIC_MODEL_COMPLEX || "claude-sonnet-4-5",

@@ -1,7 +1,6 @@
 #!/bin/zsh
 
-# Mamba Control Center — open ONE dashboard with a button for every tool, so you
-# never have to find files. Keep this window open while you use the panel.
+# Canonical Mamba entry point. One server (8787), one Control Center UI.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -15,26 +14,27 @@ fi
 cd "$HOME" 2>/dev/null || cd /
 
 if [[ ! -x "$NODE" ]]; then
-  echo "The bundled Node.js runtime was not found."
+  echo "找不到 Node.js。请先安装 Node.js，再重新打开 Mamba。"
   read "?Press Enter to close..."
   exit 1
 fi
 
-# 控制台无状态 —— 每次启动都先换掉旧进程,保证按钮/emoji 永远是最新代码
-PORT="${CONTROL_PORT:-8810}"
-OLD_PID="$(lsof -ti tcp:$PORT 2>/dev/null)"
-if [[ -n "$OLD_PID" ]]; then
-  echo "换掉旧的 Control Center(pid $OLD_PID)…"
-  kill $OLD_PID 2>/dev/null
-  sleep 1
+PORT="${CONSOLE_PORT:-8787}"
+URL="http://127.0.0.1:${PORT}/control-center"
+
+if curl -s -o /dev/null --max-time 2 "$URL"; then
+  echo "Mamba 已经在运行，正在打开统一 Control Center。"
+  open "$URL"
+  exit 0
 fi
 
-echo "Starting Mamba Control Center..."
-echo "A dashboard will open in your browser. Click any button to run a tool."
-echo "Keep this window open while you use the panel."
+echo "Starting Mamba..."
+echo "Control Center: $URL"
+echo "Sales Brain 默认关闭；Reply Tracker 只记录回复，不会自动回复客户。"
+echo "保持这个窗口开启。关闭窗口会停止本次 Mamba 服务。"
 echo ""
 
-"$NODE" "$ROOT_DIR/campaign-app/control_center.mjs"
+MAMBA_OPEN_PATH="/control-center" "$NODE" "$ROOT_DIR/campaign-app/server.mjs"
 
 echo ""
-read "?Control Center stopped. Press Enter to close..."
+read "?Mamba stopped. Press Enter to close..."

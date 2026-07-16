@@ -158,7 +158,15 @@ export function createDailyCampaignService({
     gates.push(gate("runner", !runner?.running, "Campaign 空闲", runner?.running ? "当前仍有 Campaign 在发送。" : "没有进行中的发送。"));
     gates.push(gate("queue", Number(queueState.count || 0) === 0 && !queueState.hold, "Queue 空闲", queueState.hold?.reason || `${queueState.count || 0} 个排队任务。`));
     gates.push(gate("tracker_service", services.tracker === true, "Tracker 在线", services.tracker ? "回复监听服务在线。" : "Tracker 离线。"));
-    gates.push(gate("brain_service", services.brain === true, "Brain 在线", services.brain ? "分类与通知服务在线。" : "Brain 离线。"));
+    const brainRequired = services.brainEnabled !== false;
+    gates.push(gate(
+      "brain_service",
+      !brainRequired || services.brain === true,
+      brainRequired ? "Brain 在线" : "Brain 已关闭",
+      brainRequired
+        ? (services.brain ? "分类与通知服务在线。" : "Brain 离线。")
+        : "目前是 Tracker-only：会记录回复，但不会自动回复客户。",
+    ));
     gates.push(gate("phone", instances.length > 0, "WhatsApp OPEN", instanceError || `${instances.length} 个发送号码在线。`));
     const lastReplyDetail = tracker.lastReplyAt
       ? `最后客户回复 ${tracker.lastReplyAgeMinutes} 分钟前`

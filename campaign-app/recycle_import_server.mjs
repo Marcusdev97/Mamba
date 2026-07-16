@@ -404,7 +404,7 @@ const handlers = {
 
     const env = await loadEnv();
     const sync = await createNotionSync({ env });
-    if (!sync.enabled) throw new Error("Notion sync is OFF. 请先运行 Set Notion Token.command。");
+    if (!sync.enabled) throw new Error("Notion sync is OFF. 请先到 Mamba Settings 设置 Notion Token。");
 
     const result = { created: 0, updated: 0, protectedDoNotCall: 0, failed: 0, errors: [] };
     for (const record of preview.records) {

@@ -9,7 +9,7 @@ console.log("======================");
 
 if (!sync.enabled) {
   console.log("Notion sync: OFF");
-  console.log("Run 'Set Notion Token.command' first.");
+  console.log("Open Mamba Settings and add the Notion token first.");
   process.exit(1);
 }
 

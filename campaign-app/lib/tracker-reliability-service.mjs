@@ -7,6 +7,11 @@ function cleanPending(value) {
     event: item.event,
     attempts: Math.max(0, Number(item.attempts) || 0),
     lastError: String(item.lastError || ""),
+    errorCode: String(item.errorCode || ""),
+    status: item.status === "manual_review" ? "manual_review" : "pending",
+    nextRetryAt: item.nextRetryAt || null,
+    lastAttemptAt: item.lastAttemptAt || null,
+    help: String(item.help || ""),
     queuedAt: item.queuedAt || new Date().toISOString(),
     updatedAt: item.updatedAt || item.queuedAt || new Date().toISOString(),
   }));
@@ -64,25 +69,56 @@ export function createTrackerReliabilityService({
     return payload;
   }
 
-  async function enqueue(event, { attempts = 0, lastError = "" } = {}) {
+  function setPendingItem(event, options = {}) {
     if (!event?.id) return null;
     const id = String(event.id);
     const previous = pending.get(id);
     const now = clock().toISOString();
     const item = {
       event,
-      attempts: Math.max(0, Number(attempts) || 0),
-      lastError: String(lastError || ""),
+      attempts: Math.max(0, Number(options.attempts ?? previous?.attempts) || 0),
+      lastError: String(options.lastError ?? previous?.lastError ?? ""),
+      errorCode: String(options.errorCode ?? previous?.errorCode ?? ""),
+      status: (options.status ?? previous?.status) === "manual_review" ? "manual_review" : "pending",
+      nextRetryAt: options.nextRetryAt === undefined ? previous?.nextRetryAt || null : options.nextRetryAt,
+      lastAttemptAt: options.lastAttemptAt === undefined ? previous?.lastAttemptAt || null : options.lastAttemptAt,
+      help: String(options.help ?? previous?.help ?? ""),
       queuedAt: previous?.queuedAt || now,
       updatedAt: now,
     };
     pending.set(id, item);
-    await persistPending();
     return item;
+  }
+
+  async function enqueue(event, options = {}) {
+    const item = setPendingItem(event, options);
+    if (item) await persistPending();
+    return item;
+  }
+
+  async function updateMany(updates = []) {
+    const changed = [];
+    for (const update of updates) {
+      const event = update?.event;
+      const options = update?.options || update || {};
+      const item = setPendingItem(event, options);
+      if (item) changed.push(item);
+    }
+    if (changed.length) await persistPending();
+    return changed;
   }
 
   async function remove(id) {
     const removed = pending.delete(String(id || ""));
+    if (removed) await persistPending();
+    return removed;
+  }
+
+  async function removeMany(ids = []) {
+    let removed = 0;
+    for (const id of ids) {
+      if (pending.delete(String(id || ""))) removed += 1;
+    }
     if (removed) await persistPending();
     return removed;
   }
@@ -97,6 +133,7 @@ export function createTrackerReliabilityService({
       lastReplyAt: lastReplyAt || null,
       webhookMode,
       pendingNotionReplies: pending.size,
+      manualReviewNotionReplies: [...pending.values()].filter((item) => item.status === "manual_review").length,
     };
     await serializeWrite(() => atomicWrite(heartbeatPath, lastHeartbeat));
     return lastHeartbeat;
@@ -106,12 +143,13 @@ export function createTrackerReliabilityService({
     return {
       heartbeat: lastHeartbeat,
       pendingCount: pending.size,
+      manualReviewCount: [...pending.values()].filter((item) => item.status === "manual_review").length,
       pending: [...pending.values()],
       paths: { heartbeatPath, pendingPath },
     };
   }
 
-  return { init, enqueue, remove, heartbeat, snapshot, values: () => [...pending.values()] };
+  return { init, enqueue, updateMany, remove, removeMany, heartbeat, snapshot, values: () => [...pending.values()] };
 }
 
 export function trackerHeartbeatStatus(heartbeat, { now = new Date(), maxAgeMs = 120_000 } = {}) {
@@ -125,6 +163,7 @@ export function trackerHeartbeatStatus(heartbeat, { now = new Date(), maxAgeMs =
     lastReplyAt: heartbeat?.lastReplyAt || null,
     lastReplyAgeMinutes: lastReplyAgeMs === null ? null : Math.round(lastReplyAgeMs / 60000),
     pendingNotionReplies: Math.max(0, Number(heartbeat?.pendingNotionReplies) || 0),
+    manualReviewNotionReplies: Math.max(0, Number(heartbeat?.manualReviewNotionReplies) || 0),
     fresh: ageMs !== null && ageMs <= maxAgeMs,
   };
 }

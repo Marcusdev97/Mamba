@@ -3,7 +3,7 @@ import path from "node:path";
 import { json, text } from "../lib/http.mjs";
 
 const HTML_ROUTES = {
-  "/": "console.html",
+  "/flow-1": "console.html",
   "/control-center": "control-center.html",
   "/next-flow": "next-flow.html",
   "/templates": "templates.html",
@@ -71,6 +71,12 @@ export function registerStaticRoutes(router) {
   router.use(async (req, res, runtime) => {
     const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
     if (req.method !== "GET") return false;
+
+    if (url.pathname === "/") {
+      res.writeHead(302, { Location: "/control-center" });
+      res.end();
+      return true;
+    }
 
     if (url.pathname === "/numbers") {
       res.writeHead(302, { Location: "/settings" });

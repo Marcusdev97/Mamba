@@ -33,7 +33,7 @@ const VERSION = "2022-06-28";
 const env = await loadEnv();
 const token = env.NOTION_API_KEY || env.NOTION_TOKEN;
 if (!token) {
-  console.log("No NOTION_API_KEY in .env — run 'Set Notion Token.command' first.");
+  console.log("No NOTION_API_KEY in .env — open Mamba Settings and add the Notion token first.");
   process.exit(1);
 }
 
