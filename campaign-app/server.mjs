@@ -16,6 +16,7 @@ import { createConversationHistoryService } from "./lib/conversation-history-ser
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
+import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
@@ -35,7 +36,6 @@ import {
   importLeads,
   listInstances,
   openInstances,
-  nextInstanceName,
   createInstance,
   instanceQr,
   deleteInstance,
@@ -66,6 +66,15 @@ for (const [k, v] of Object.entries(env)) {
 const api = makeApi(env);
 const brainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
 const deviceIdentity = await loadDeviceIdentity(env, { dataDir: paths.dataDir });
+const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
+deviceIdentity.senderPhones = deviceSenderPolicy.configured ? [deviceSenderPolicy.expectedSenderPhone] : [];
+deviceIdentity.senderPolicyConfigured = deviceSenderPolicy.configured;
+const deviceOpenInstances = async () => filterInstancesForDevice(await openInstances(api), deviceSenderPolicy);
+const deviceListInstances = async () => (await listInstances(api)).map((item) => ({
+  ...item,
+  allowedOnThisDevice: !deviceSenderPolicy.configured
+    || filterInstancesForDevice([item], deviceSenderPolicy).length === 1,
+}));
 const notionService = createNotionService({ env });
 const {
   notionTokenValue,
@@ -186,7 +195,7 @@ const outboundFollowUpService = createOutboundFollowUpService({
   blastDatabaseId: blastDsId,
   api,
   notion,
-  openInstances: () => openInstances(api),
+  openInstances: deviceOpenInstances,
   normalizePhone: nfNormalizePhone,
   collectMessageObjects,
   describeMessage,
@@ -214,13 +223,13 @@ async function localJson(pathname, options = {}) {
 const telegramHub = makeHub(env);
 const telegramFilterService = createTelegramFilterService({
   rootDir: paths.rootDir,
-  getConnectedPhones: async () => (await listInstances(api)).map((item) => item.number),
+  getConnectedPhones: async () => filterInstancesForDevice(await listInstances(api), deviceSenderPolicy).map((item) => item.number),
 });
 const dailyCampaignService = createDailyCampaignService({
   rootDir: paths.rootDir,
   flowSequence: FLOW_SEQUENCE,
   replyServices: replyServiceManager,
-  openInstances: () => openInstances(api),
+  openInstances: deviceOpenInstances,
   getRunner: () => campaignRunnerRegistry.list().find((item) => item?.running) || runner,
   queue: campaignQueueService,
   systemLogs: systemLogService,
@@ -280,11 +289,11 @@ const runtime = await loadRuntime({
     getLeadsCache: () => leadsCache,
   },
   whatsapp: {
-    listInstances: () => listInstances(api),
+    listInstances: deviceListInstances,
     createInstance: (name) => createInstance(api, name),
     instanceQr: (name) => instanceQr(api, name),
     deleteInstance: (name) => deleteInstance(api, name),
-    nextInstanceName,
+    nextInstanceName: (items) => nextDeviceInstanceName(items, deviceIdentity),
   },
   imports: {
     rootDir: paths.rootDir,
@@ -311,7 +320,7 @@ const runtime = await loadRuntime({
     blastDatabaseId: blastDsId,
     api,
     notion,
-    openInstances: () => openInstances(api),
+    openInstances: deviceOpenInstances,
     normalizePhone: nfNormalizePhone,
     collectMessageObjects,
     extractText,
@@ -333,7 +342,7 @@ const runtime = await loadRuntime({
     blastDatabaseId: blastDsId,
     api,
     notion,
-    openInstances: () => openInstances(api),
+    openInstances: deviceOpenInstances,
     collectMessageObjects,
     describeMessage,
     resolvePhone,
@@ -349,7 +358,7 @@ const runtime = await loadRuntime({
   brainLearning: {
     notion,
     api,
-    openInstances: () => openInstances(api),
+    openInstances: deviceOpenInstances,
     collectMessageObjects,
     describeMessage,
     resolvePhone,
@@ -380,7 +389,7 @@ const runtime = await loadRuntime({
     flowSequence: FLOW_SEQUENCE,
     personalize,
     shortPause,
-    openInstances: () => openInstances(api),
+    openInstances: deviceOpenInstances,
     createPreviewRunner: () => new CampaignRunner({ env, systemLogs: systemLogService }),
     addProjectOption,
     setImageAlias,
@@ -394,7 +403,7 @@ const runtime = await loadRuntime({
     persistRunners: () => campaignRunnerRegistry.persist(),
     getLeadsCache: () => leadsCache,
     getProject,
-    openInstances: () => openInstances(api),
+    openInstances: deviceOpenInstances,
     resolveTime,
     formatTime,
     getTestLeads,
@@ -429,7 +438,7 @@ const runtime = await loadRuntime({
     nfTitle,
     nfText,
     klTodayKL,
-    openInstances: () => openInstances(api),
+    openInstances: deviceOpenInstances,
     collectMessageObjects,
     extractText,
     describeMessage,

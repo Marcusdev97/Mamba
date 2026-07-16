@@ -17,17 +17,22 @@ function validPhoneFromSenderKey(value) {
   return normalizeSenderPhone(parts[1]);
 }
 
-export function recordDeviceScope(record, { device = {} } = {}) {
+export function recordDeviceScope(record, { device = {}, senderPhones = device?.senderPhones || [] } = {}) {
   const explicitDevice = clean(record?.lastSentByDevice);
   const explicitPhone = normalizeSenderPhone(record?.lastSenderPhone);
   const senderKeys = [record?.assignedSenderKey, record?.lastSenderKey].map(clean).filter(Boolean);
+  const allowedPhones = new Set((senderPhones || []).map(normalizeSenderPhone).filter(Boolean));
+  const phoneAllowed = (phone) => !allowedPhones.size || allowedPhones.has(phone);
 
   // A valid key contains both the stable Device ID and the real sender phone.
   // Legacy values such as device::wa_01 are deliberately not accepted.
-  if (senderKeys.some((key) => senderKeyBelongsToDevice(key, device.id) && validPhoneFromSenderKey(key))) {
+  if (senderKeys.some((key) => {
+    const phone = validPhoneFromSenderKey(key);
+    return senderKeyBelongsToDevice(key, device.id) && phone && phoneAllowed(phone);
+  })) {
     return "local";
   }
-  if (explicitDevice && explicitPhone && sameDevice(explicitDevice, device)) return "local";
+  if (explicitDevice && explicitPhone && sameDevice(explicitDevice, device) && phoneAllowed(explicitPhone)) return "local";
 
   const hasCompleteRemoteKey = senderKeys.some((key) => validPhoneFromSenderKey(key));
   if ((explicitDevice && explicitPhone) || hasCompleteRemoteKey) return "remote";

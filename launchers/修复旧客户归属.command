@@ -24,8 +24,18 @@ echo "=============================================="
 echo "第一步只做 Preview：读取当前 OPEN WhatsApp 的 outbound history，"
 echo "不会修改 Notion、不会发送 WhatsApp、不会启动 AI 回复。"
 echo ""
+read "EXPECTED?请输入这台 Mac 唯一允许的完整 WhatsApp 号码（例如 60168568756）: "
+EXPECTED="${EXPECTED//[^0-9]/}"
+if [[ ${#EXPECTED} -lt 8 || ${#EXPECTED} -gt 15 ]]; then
+  echo "电话号码格式不正确，已取消。"
+  read "?按 Enter 关闭..."
+  exit 1
+fi
+echo "本机将只允许 sender phone: $EXPECTED"
+echo "如果 Evolution 的 OPEN connection 不是这个号码，Preview 会停止。"
+echo ""
 
-"$NODE" campaign-app/device_ownership_repair.mjs --dry-run --claim-current-connections
+"$NODE" campaign-app/device_ownership_repair.mjs --dry-run --claim-current-connections "--expected-sender=$EXPECTED"
 if [[ $? -ne 0 ]]; then
   echo ""
   echo "Preview 失败。请按上面的错误说明处理后再试。"

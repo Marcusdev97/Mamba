@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildSenderKey, loadDeviceIdentity } from "./lib/device-identity.mjs";
+import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName, saveDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 
 import {
   analyzeDeviceOwnership,
@@ -180,6 +181,19 @@ test("a generated local Device ID persists across restarts", async () => {
   assert.match(first.id, /^mamba-[0-9a-f-]{36}$/);
   assert.equal(second.id, first.id);
   assert.equal(second.configured, true);
+});
+
+test("a device sender policy persists and blocks every other phone", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-sender-policy-"));
+  await saveDeviceSenderPolicy({ dataDir, deviceId: "marcus-device", expectedSenderPhone: "+60 16-856 8756" });
+  const policy = await loadDeviceSenderPolicy({ dataDir, env: {} });
+  assert.equal(policy.expectedSenderPhone, "60168568756");
+  const filtered = filterInstancesForDevice([
+    { name: "wa_01", number: "+60173447825" },
+    { name: "marcus_wa_01", number: "+60168568756" },
+  ], policy);
+  assert.deepEqual(filtered.map((item) => item.name), ["marcus_wa_01"]);
+  assert.equal(nextDeviceInstanceName([], { name: "Marcus MacBook Local" }), "marcus-macbook-local_wa_01");
 });
 
 test("authorized current WhatsApp evidence can claim a unique legacy row", () => {

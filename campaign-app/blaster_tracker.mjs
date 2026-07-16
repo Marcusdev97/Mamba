@@ -23,7 +23,8 @@ import { resolveInboundProject } from "./lib/inbound-project-resolver.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createTrackerReliabilityService } from "./lib/tracker-reliability-service.mjs";
 import { createNotionReplyQueueService } from "./lib/notion-reply-queue-service.mjs";
-import { createDeviceIdentity } from "./lib/device-identity.mjs";
+import { loadDeviceIdentity } from "./lib/device-identity.mjs";
+import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 
 const hub = makeHub();
@@ -41,11 +42,12 @@ const statusPath = path.join(trackerDir, "lead_status.json");
 const csvPath = path.join(trackerDir, "replies.csv");
 
 const env = await loadEnv();
-const deviceIdentity = createDeviceIdentity(env);
+const deviceIdentity = await loadDeviceIdentity(env, { dataDir: paths.dataDir });
+const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
 const api = makeApi(env);
 const telegramFilters = createTelegramFilterService({
   rootDir: paths.rootDir,
-  getConnectedPhones: async () => (await listInstances(api)).map((item) => item.number),
+  getConnectedPhones: async () => filterInstancesForDevice(await listInstances(api), deviceSenderPolicy).map((item) => item.number),
 });
 const notion = await createNotionSync({
   env,
@@ -56,6 +58,7 @@ const tg = makeTelegram(env);
 let startedAt = new Date().toISOString();
 let leadIndex = new Map();
 let lastEvents = [];
+let allowedInstanceNames = new Set();
 const pushedPhones = new Set(); // unknown numbers manually pushed to Notion this session
 const reliability = createTrackerReliabilityService({ trackerDir });
 const trackerSystemLogs = createSystemLogService({ rootDir: paths.rootDir });
@@ -381,6 +384,11 @@ function eventFromMessage(payload, message) {
 }
 
 async function processWebhook(payload) {
+  const payloadInstance = senderFromPayload(payload);
+  if (deviceSenderPolicy.configured && (!payloadInstance || !allowedInstanceNames.has(payloadInstance))) {
+    console.log(`[DEVICE_SENDER_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; expected phone ${deviceSenderPolicy.expectedSenderPhone}.`);
+    return [];
+  }
   await refreshLeadIndex();
   const alertCfg = await loadAlertConfig(); // re-read each batch so edits apply live
   const messages = collectMessages(payload);
@@ -424,7 +432,8 @@ async function setInstanceWebhook(instanceName) {
 
 async function configureWebhookForOpenInstances() {
   const instances = await listInstances(api);
-  const open = instances.filter((item) => item.status === "OPEN");
+  const open = filterInstancesForDevice(instances.filter((item) => item.status === "OPEN"), deviceSenderPolicy);
+  allowedInstanceNames = new Set(open.map((item) => item.name));
   for (const item of open) {
     await setInstanceWebhook(item.name);
   }
@@ -824,7 +833,11 @@ server.listen(PORT, HOST, async () => {
 
   try {
     if (skipWebhookSetup) {
+      const instances = await listInstances(api);
+      const open = filterInstancesForDevice(instances.filter((item) => item.status === "OPEN"), deviceSenderPolicy);
+      allowedInstanceNames = new Set(open.map((item) => item.name));
       console.log("Webhook auto-setup skipped for this run.");
+      if (deviceSenderPolicy.configured) console.log(`Device sender lock: ${deviceSenderPolicy.expectedSenderPhone} (${open.map((item) => item.name).join(", ") || "not OPEN"})`);
       console.log("\nWaiting for customer replies. Press Control+C to stop.");
       return;
     }

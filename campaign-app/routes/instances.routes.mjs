@@ -23,8 +23,8 @@ function readableEvolutionError(error, action) {
 
 function assertInstanceName(name) {
   if (!name) return;
-  if (!/^wa_\d{2}$/.test(name)) {
-    throw httpError(400, "标签格式应为 wa_NN，例如 wa_03。");
+  if (!/^[a-z0-9][a-z0-9_-]{1,63}$/i.test(name)) {
+    throw httpError(400, "号码标签只能使用英文字母、数字、- 和 _，长度 2–64。建议使用 Device 前缀，例如 marcus-macbook_wa_01。");
   }
 }
 
@@ -77,7 +77,7 @@ export function registerInstancesRoutes(router) {
     const whatsapp = requireWhatsapp(runtime);
     const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
     const name = String(url.searchParams.get("name") ?? "").trim();
-    if (!name) throw httpError(400, "缺少号码标签 name，例如 wa_01。");
+    if (!name) throw httpError(400, "缺少号码标签 name。");
     assertInstanceName(name);
 
     let qr;
@@ -100,7 +100,7 @@ export function registerInstancesRoutes(router) {
     }
     const body = await readJson(req);
     const name = String(body.name ?? "").trim();
-    if (!name) throw httpError(400, "缺少号码标签 name，例如 wa_01。");
+    if (!name) throw httpError(400, "缺少号码标签 name。");
     assertInstanceName(name);
 
     try {

@@ -113,13 +113,15 @@ async function whatsappHealth(runtime) {
   if (!runtime.whatsapp?.listInstances) return { ok: false, label: "Service unavailable", open: 0, total: 0 };
   try {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2500));
-    const instances = await Promise.race([runtime.whatsapp.listInstances(), timeout]);
+    const allInstances = await Promise.race([runtime.whatsapp.listInstances(), timeout]);
+    const instances = allInstances.filter((item) => item.allowedOnThisDevice !== false);
     const open = instances.filter((item) => String(item.status || "").toUpperCase() === "OPEN").length;
     return {
       ok: open > 0,
       label: `${open}/${instances.length} connected`,
       open,
       total: instances.length,
+      blocked: allInstances.length - instances.length,
       instances: instances.map((item) => ({
         name: String(item.name || ""),
         number: String(item.number || ""),

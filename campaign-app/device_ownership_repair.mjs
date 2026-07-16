@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { loadEnv, makeApi, listInstances, paths } from "./campaign_core.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
+import { loadDeviceSenderPolicy, saveDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import {
   analyzeDeviceOwnership,
@@ -94,7 +95,7 @@ async function atomicWrite(filePath, value) {
   await fs.rename(temp, filePath);
 }
 
-async function scanEvolution(env, { pageSize, maxPages, onlyOpen = false }) {
+async function scanEvolution(env, { pageSize, maxPages, onlyOpen = false, expectedSenderPhone = "" }) {
   const api = makeApi(env);
   const errors = [];
   let instances = [];
@@ -106,7 +107,8 @@ async function scanEvolution(env, { pageSize, maxPages, onlyOpen = false }) {
   }
 
   const usable = instances.filter((item) => normalizeOwnershipPhone(item.number)
-    && (!onlyOpen || String(item.status || "").toUpperCase() === "OPEN"));
+    && (!onlyOpen || String(item.status || "").toUpperCase() === "OPEN")
+    && (!expectedSenderPhone || normalizeOwnershipPhone(item.number) === expectedSenderPhone));
   const messageSources = [];
   const scans = [];
   for (const instance of usable) {
@@ -169,6 +171,24 @@ function notionPropertyValue(property) {
   return "";
 }
 
+function emptyOwnershipProperty(schema, name) {
+  const type = schema?.[name]?.type;
+  if (type === "rich_text") return { rich_text: [] };
+  if (type === "select") return { select: null };
+  if (type === "status") return { status: null };
+  if (type === "phone_number") return { phone_number: null };
+  throw new Error(`${name} 字段缺少或类型不支持：${type || "missing"}`);
+}
+
+function liveOwnershipFromPage(page) {
+  return {
+    lastSentByDevice: notionPropertyValue(page?.properties?.["Last Sent By Device"]),
+    lastSenderPhone: normalizeOwnershipPhone(notionPropertyValue(page?.properties?.["Last Sender Phone"])) || "",
+    assignedSenderKey: notionPropertyValue(page?.properties?.["Assigned Sender Key"]),
+    lastSenderKey: notionPropertyValue(page?.properties?.["Last Sender Key"]),
+  };
+}
+
 async function applyClaimReport({ env, device, reportPath }) {
   const ownershipDir = path.resolve(paths.dataDir, "device-ownership");
   const resolvedReport = path.resolve(reportPath);
@@ -190,6 +210,12 @@ async function applyClaimReport({ env, device, reportPath }) {
   if (confirmedDevice !== device.id) {
     throw new Error(`安全保护：请加上 --confirm-device=${device.id}，明确确认当前 Device。`);
   }
+  const senderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
+  if (!senderPolicy.configured) throw new Error("当前 Device 尚未绑定 Expected Sender Phone，拒绝 Apply。");
+  const reportPhones = new Set(report.confirmed.map((item) => normalizeOwnershipPhone(item?.proposed?.lastSenderPhone)).filter(Boolean));
+  if (reportPhones.size !== 1 || !reportPhones.has(senderPolicy.expectedSenderPhone)) {
+    throw new Error(`报告 sender phone 与本机绑定不一致；本机只允许 ${senderPolicy.expectedSenderPhone}。`);
+  }
 
   const notionConfig = await readJson(path.join(paths.dataDir, "notion_config.json"), null);
   const databaseId = String(notionConfig?.databases?.blastLeads || "").replace(/[^a-fA-F0-9]/g, "");
@@ -209,12 +235,7 @@ async function applyClaimReport({ env, device, reportPath }) {
       if (pageId.length !== 32) throw new Error("Notion page ID 不合法");
       const proposed = item.proposed || {};
       const livePage = await notion("GET", `/pages/${pageId}`);
-      const liveOwnership = {
-        lastSentByDevice: notionPropertyValue(livePage?.properties?.["Last Sent By Device"]),
-        lastSenderPhone: normalizeOwnershipPhone(notionPropertyValue(livePage?.properties?.["Last Sender Phone"])) || "",
-        assignedSenderKey: notionPropertyValue(livePage?.properties?.["Assigned Sender Key"]),
-        lastSenderKey: notionPropertyValue(livePage?.properties?.["Last Sender Key"]),
-      };
+      const liveOwnership = liveOwnershipFromPage(livePage);
       const occupied = Object.values(liveOwnership).some(Boolean);
       const alreadyMatches = occupied
         && liveOwnership.lastSentByDevice === proposed.lastSentByDevice
@@ -279,11 +300,135 @@ async function applyClaimReport({ env, device, reportPath }) {
   }
 }
 
+async function rollbackClaimReport({ env, device, reportPath }) {
+  const ownershipDir = path.resolve(paths.dataDir, "device-ownership");
+  const resolvedReport = path.resolve(reportPath);
+  if (!resolvedReport.startsWith(`${ownershipDir}${path.sep}`)) {
+    throw new Error("安全保护：--report 必须位于本机 campaign-data/device-ownership。 ");
+  }
+  const report = await readJson(resolvedReport, null);
+  if (!report || report.mode !== "claim-apply-result" || !Array.isArray(report.applied)) {
+    throw new Error("这不是有效的 claim-apply-result 报告，拒绝 Rollback。");
+  }
+  if (normalizeOwnershipDeviceId(report.device?.id) !== normalizeOwnershipDeviceId(device.id)) {
+    throw new Error(`Rollback 报告属于另一台 Device（${report.device?.id || "unknown"}），当前是 ${device.id}。`);
+  }
+  if (argumentValue("--confirm-device") !== device.id) {
+    throw new Error(`安全保护：请加上 --confirm-device=${device.id}。`);
+  }
+
+  const notionConfig = await readJson(path.join(paths.dataDir, "notion_config.json"), null);
+  const databaseId = String(notionConfig?.databases?.blastLeads || "").replace(/[^a-fA-F0-9]/g, "");
+  if (!databaseId) throw new Error("notion_config.json 缺少 Blast Leads database ID。");
+  const { notion } = createNotionService({ env });
+  const database = await notion("GET", `/databases/${databaseId}`);
+  const schema = database?.properties || {};
+  const cache = await loadBlastCache();
+  const recordsById = new Map(cache.records.map((record) => [String(record.id || "").replace(/-/g, ""), record]));
+  const rolledBack = [];
+  const alreadyClear = [];
+  const skippedPreexisting = [];
+  const skippedChanged = [];
+  const failed = [];
+
+  console.log(`准备检查并撤销 ${report.applied.length} 条 Ownership；客户和其他 Notion 字段不会删除。`);
+  for (const item of report.applied) {
+    const pageId = String(item.pageId || "").replace(/[^a-fA-F0-9]/g, "");
+    try {
+      if (pageId.length !== 32) throw new Error("Notion page ID 不合法");
+      if (item.alreadyMatched === true) {
+        skippedPreexisting.push({
+          pageId: item.pageId,
+          phone: item.phone,
+          project: item.project,
+          reason: "这条 Ownership 在 Apply 前已经相同；那次 Apply 没有写入，因此 Rollback 不清除。",
+        });
+        continue;
+      }
+      const livePage = await notion("GET", `/pages/${pageId}`);
+      const live = liveOwnershipFromPage(livePage);
+      const proposed = item.proposed || {};
+      const clear = !Object.values(live).some(Boolean);
+      if (clear) {
+        alreadyClear.push({ pageId: item.pageId, phone: item.phone, project: item.project });
+        continue;
+      }
+      const exactApplyValue = live.lastSentByDevice === proposed.lastSentByDevice
+        && live.lastSenderPhone === proposed.lastSenderPhone
+        && live.assignedSenderKey === proposed.assignedSenderKey
+        && live.lastSenderKey === proposed.lastSenderKey;
+      if (!exactApplyValue) {
+        skippedChanged.push({
+          pageId: item.pageId,
+          phone: item.phone,
+          project: item.project,
+          errorCode: "OWNERSHIP_CHANGED_AFTER_APPLY",
+          reason: "当前 Ownership 已不同于这次 Apply 写入值，为避免破坏后续修改而跳过。",
+        });
+        continue;
+      }
+      await notion("PATCH", `/pages/${pageId}`, {
+        properties: {
+          "Last Sent By Device": emptyOwnershipProperty(schema, "Last Sent By Device"),
+          "Last Sender Phone": emptyOwnershipProperty(schema, "Last Sender Phone"),
+          "Assigned Sender Key": emptyOwnershipProperty(schema, "Assigned Sender Key"),
+          "Last Sender Key": emptyOwnershipProperty(schema, "Last Sender Key"),
+        },
+      });
+      const cached = recordsById.get(pageId);
+      if (cached) Object.assign(cached, { lastSentByDevice: "", lastSenderPhone: "", assignedSenderKey: "", lastSenderKey: "" });
+      rolledBack.push({ pageId: item.pageId, phone: item.phone, project: item.project });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } catch (error) {
+      failed.push({
+        pageId: item.pageId,
+        phone: item.phone,
+        project: item.project,
+        errorCode: /401|token|unauthorized/i.test(error.message) ? "NOTION_AUTH_FAILED"
+          : /429|rate/i.test(error.message) ? "NOTION_RATE_LIMITED"
+            : "OWNERSHIP_ROLLBACK_FAILED",
+        error: error.message,
+        solution: "检查 Notion token、database sharing 和网络后重新运行同一个 Rollback；已经清除的 rows 会安全跳过。",
+      });
+    }
+  }
+
+  await atomicWrite(cache.filePath, { syncedAt: new Date().toISOString(), count: cache.records.length, records: cache.records });
+  const result = {
+    version: 1,
+    mode: "claim-rollback-result",
+    generatedAt: new Date().toISOString(),
+    sourceReport: resolvedReport,
+    device,
+    safety: { deletedCustomers: 0, whatsappSends: 0, aiReplies: 0 },
+    summary: {
+      requested: report.applied.length,
+      rolledBack: rolledBack.length,
+      alreadyClear: alreadyClear.length,
+      skippedPreexisting: skippedPreexisting.length,
+      skippedChanged: skippedChanged.length,
+      failed: failed.length,
+    },
+    rolledBack,
+    alreadyClear,
+    skippedPreexisting,
+    skippedChanged,
+    failed,
+    sensitive: "This ignored local report contains customer phone numbers and Notion page ids. Do not commit it.",
+  };
+  const resultPath = path.join(ownershipDir, `claim-rollback-${timestampName()}.json`);
+  await atomicWrite(resultPath, result);
+  console.log(`\nRollback 完成：清除 ${rolledBack.length}，原本已空 ${alreadyClear.length}，Apply 前已存在而保留 ${skippedPreexisting.length}，因后续变更跳过 ${skippedChanged.length}，失败 ${failed.length}。`);
+  console.log(`结果报告：${resultPath}`);
+  if (skippedChanged.length || failed.length) process.exitCode = 2;
+}
+
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
   const apply = process.argv.includes("--apply");
+  const rollback = process.argv.includes("--rollback");
   const claimCurrentConnections = process.argv.includes("--claim-current-connections");
-  if (dryRun === apply) throw new Error("请选择其中一个模式：--dry-run 或 --apply。");
+  if ([dryRun, apply, rollback].filter(Boolean).length !== 1) throw new Error("请选择一个模式：--dry-run、--apply 或 --rollback。");
   const pageSize = argumentNumber("--page-size", 200);
   const maxPages = argumentNumber("--max-pages", 60);
   const offline = process.argv.includes("--offline");
@@ -292,10 +437,11 @@ async function main() {
 
   const env = await loadEnv();
   const device = await loadDeviceIdentity(env, { dataDir: paths.dataDir });
-  if (apply) {
+  if (apply || rollback) {
     const reportPath = argumentValue("--report");
-    if (!reportPath) throw new Error("Apply 缺少 --report=/完整路径/claim-preview-....json");
-    await applyClaimReport({ env, device, reportPath });
+    if (!reportPath) throw new Error(`${apply ? "Apply" : "Rollback"} 缺少 --report=/完整路径/报告.json`);
+    if (apply) await applyClaimReport({ env, device, reportPath });
+    else await rollbackClaimReport({ env, device, reportPath });
     return;
   }
 
@@ -307,8 +453,14 @@ async function main() {
 
   const cache = await loadBlastCache();
   const runs = await loadRunStates();
+  const savedSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
+  const requestedSenderPhone = normalizeOwnershipPhone(argumentValue("--expected-sender"))
+    || savedSenderPolicy.expectedSenderPhone;
+  if (claimCurrentConnections && !requestedSenderPhone) {
+    throw new Error("Claim Preview 必须提供 --expected-sender=完整WhatsApp号码，不能再依赖 wa_01。");
+  }
   const evolution = claimCurrentConnections
-    ? await scanEvolution(env, { pageSize, maxPages, onlyOpen: true })
+    ? await scanEvolution(env, { pageSize, maxPages, onlyOpen: true, expectedSenderPhone: requestedSenderPhone })
     : !scanChatObservations
     ? { instances: [], messageSources: [], scans: [], errors: [], notices: [offline
       ? "使用 --offline，已跳过 Evolution Chat 扫描。"
@@ -316,7 +468,17 @@ async function main() {
     : await scanEvolution(env, { pageSize, maxPages });
 
   if (claimCurrentConnections && !evolution.messageSources.length) {
-    throw new Error(`没有可用于 Claim 的 OPEN WhatsApp connection。${evolution.errors.join(" | ")}`);
+    const openPhones = evolution.instances
+      .filter((item) => String(item.status || "").toUpperCase() === "OPEN")
+      .map((item) => normalizeOwnershipPhone(item.number))
+      .filter(Boolean);
+    throw new Error(`找不到绑定号码 ${requestedSenderPhone} 的 OPEN connection。当前 OPEN：${openPhones.join(", ") || "none"}。请建立 Device 专属 connection，不能复用另一台电脑的 wa_01。`);
+  }
+  if (claimCurrentConnections && evolution.messageSources.length !== 1) {
+    throw new Error(`绑定号码 ${requestedSenderPhone} 出现 ${evolution.messageSources.length} 个 OPEN connection；请只保留一个 Device 专属 connection。`);
+  }
+  if (claimCurrentConnections) {
+    await saveDeviceSenderPolicy({ dataDir: paths.dataDir, deviceId: device.id, expectedSenderPhone: requestedSenderPhone });
   }
   const runEvidence = claimCurrentConnections
     ? collectTrustedLegacyRunEvidence(runs.states, { deviceId: device.id, currentConnections: evolution.messageSources })
@@ -343,6 +505,7 @@ async function main() {
       blastCache: { path: cache.filePath, syncedAt: cache.syncedAt, rows: cache.records.length },
       campaignRuns: { filesRead: runs.filesRead, ...runSourceSummary, evidence: runEvidence.length },
       evolution: {
+        expectedSenderPhone: claimCurrentConnections ? requestedSenderPhone : null,
         instances: evolution.instances.map((item) => ({
           name: item.name,
           status: item.status,

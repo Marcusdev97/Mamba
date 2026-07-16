@@ -76,6 +76,9 @@ assert.equal(recordDeviceScope({ lastSenderKey: "upstairs-mac::wa_02" }, scope),
 assert.equal(recordDeviceScope({ lastSenderKey: "downstairs-mac::60122222222" }, scope), "remote");
 assert.equal(recordDeviceScope({ senderInstance: "wa_01" }, scope), "legacy");
 assert.equal(recordDeviceScope({}, scope), "unassigned");
+const phoneBoundScope = { ...scope, senderPhones: ["60111111111"] };
+assert.equal(recordDeviceScope({ lastSenderKey: "upstairs-mac::60111111111" }, phoneBoundScope), "local");
+assert.equal(recordDeviceScope({ lastSenderKey: "upstairs-mac::60199999999" }, phoneBoundScope), "remote");
 
 const scoped = filterRecordsForDevice([
   { id: "local", lastSentByDevice: "upstairs-mac", lastSenderPhone: "60111111111" },

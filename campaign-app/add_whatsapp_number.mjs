@@ -3,10 +3,17 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { loadDeviceIdentity } from "./lib/device-identity.mjs";
+import { nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
 const envText = await fs.readFile(path.join(rootDir, "evolution-pilot", ".env"), "utf8");
+const env = Object.fromEntries(envText.split(/\r?\n/).filter((line) => line && !line.startsWith("#") && line.includes("=")).map((line) => {
+  const separator = line.indexOf("=");
+  return [line.slice(0, separator), line.slice(separator + 1)];
+}));
+const device = await loadDeviceIdentity(env, { dataDir: path.join(rootDir, "campaign-data") });
 const apiKey = envText.split(/\r?\n/).find((line) => line.startsWith("AUTHENTICATION_API_KEY="))?.split("=").slice(1).join("=");
 const headers = { "Content-Type": "application/json", apikey: apiKey };
 const apiBase = "http://127.0.0.1:8080";
@@ -21,15 +28,6 @@ async function api(pathname, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`${pathname}: HTTP ${response.status} ${JSON.stringify(body)}`);
   return body;
-}
-
-function nextInstanceName(instances) {
-  const names = new Set(instances.map((item) => item.name ?? item?.instance?.instanceName));
-  for (let number = 1; number <= 99; number += 1) {
-    const candidate = `wa_${String(number).padStart(2, "0")}`;
-    if (!names.has(candidate)) return candidate;
-  }
-  throw new Error("No available instance name was found.");
 }
 
 function maskedOwner(item) {
@@ -49,7 +47,7 @@ if (existing.length) {
   }
 }
 
-const suggestion = nextInstanceName(existing);
+const suggestion = nextDeviceInstanceName(existing, device);
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 console.log(`Press Enter to create ${suggestion}. A WhatsApp QR code will open next.`);
 console.log("Do not enter a phone number here; the phone is identified automatically after scanning the QR.");
@@ -57,8 +55,8 @@ let instanceName;
 while (!instanceName) {
   const answer = (await rl.question(`Instance label [${suggestion}, press Enter]: `)).trim();
   const candidate = answer || suggestion;
-  if (!/^wa_\d{2}$/.test(candidate)) {
-    console.log(`Please press Enter for ${suggestion}, or enter a label such as wa_03.`);
+  if (!/^[a-z0-9][a-z0-9_-]{1,63}$/i.test(candidate)) {
+    console.log(`Please press Enter for ${suggestion}, or use letters, numbers, - and _.`);
     continue;
   }
   if (existing.some((item) => (item.name ?? item?.instance?.instanceName) === candidate)) {

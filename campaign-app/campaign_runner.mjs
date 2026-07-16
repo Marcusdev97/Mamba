@@ -4,6 +4,7 @@ import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { FileBlob, SpreadsheetFile } from "./xlsx_compat.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
+import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -66,6 +67,7 @@ const env = Object.fromEntries(
 const apiBase = "http://127.0.0.1:8080";
 const apiHeaders = { "Content-Type": "application/json", apikey: env.AUTHENTICATION_API_KEY };
 const deviceIdentity = await loadDeviceIdentity(env, { dataDir });
+const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir, env });
 const automatedDryRun = process.argv.includes("--dry-run");
 let rl;
 let stopped = false;
@@ -134,13 +136,13 @@ function formatTime(date) {
 
 async function openInstances() {
   const items = await api("/instance/fetchInstances");
-  return items
+  return filterInstancesForDevice(items
     .filter((item) => (item.connectionStatus ?? item?.instance?.state ?? item?.instance?.status) === "open")
     .map((item) => ({
       name: item.name ?? item?.instance?.instanceName,
       owner: String(item.ownerJid ?? item?.instance?.owner ?? "").split("@")[0].split(":")[0],
     }))
-    .filter((item) => item.name);
+    .filter((item) => item.name), deviceSenderPolicy);
 }
 
 function chooseLanguage() {

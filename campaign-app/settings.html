@@ -549,21 +549,24 @@ async function refreshInstances() {
   const data = await api("/api/instances").catch((e) => ({ ok: true, online: false, error: e.message, instances: [] }));
   if (btn) { btn.disabled = false; btn.textContent = "刷新"; }
   const instances = data.instances || [];
-  const open = instances.filter((i) => i.status === "OPEN").length;
-  const closed = Math.max(0, instances.length - open);
+  const allowedInstances = instances.filter((i) => i.allowedOnThisDevice !== false);
+  const blocked = instances.length - allowedInstances.length;
+  const open = allowedInstances.filter((i) => i.status === "OPEN").length;
+  const closed = Math.max(0, allowedInstances.length - open);
   $("phoneHealth").innerHTML =
     '<div class="chip">API <b>' + (data.online ? "ONLINE" : "OFFLINE") + "</b></div>" +
     '<div class="chip">OPEN <b>' + open + "</b></div>" +
     '<div class="chip">Closed <b>' + closed + "</b></div>" +
+    (blocked ? '<div class="chip">Blocked on this Device <b>' + blocked + "</b></div>" : "") +
     '<div class="chip">Last Check <b>' + new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit", hour12: false }) + "</b></div>";
-  renderPhoneHealth(data, instances);
+  renderPhoneHealth(data, allowedInstances);
   const body = $("instBody");
   if (!instances.length) {
     body.innerHTML = '<tr><td colspan="4" class="muted">' + (data.online ? "暂无号码，点添加号码扫码" : (data.error || "Evolution API 离线")) + "</td></tr>";
     return;
   }
   body.innerHTML = instances.map((i) =>
-    "<tr><td><b>" + i.name + "</b></td><td>" + badge(i.status) + "</td><td>" + i.number +
+    "<tr><td><b>" + i.name + "</b></td><td>" + badge(i.status) + (i.allowedOnThisDevice === false ? ' <span class="pill bad">BLOCKED</span>' : "") + "</td><td>" + i.number +
     '</td><td style="text-align:right"><button class="btn" style="padding:4px 12px; font-size:12.5px" data-del="' + i.name + '">删除</button></td></tr>'
   ).join("");
 }

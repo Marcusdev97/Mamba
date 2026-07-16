@@ -40,10 +40,11 @@ import { classifyReplyText } from "./flow_sequence.mjs";
 import { loadSuppressionSync, isSuppressed, normalizePhone, addLocalStop } from "./suppression.mjs";
 import { loadBrainCacheSync } from "./brain_cache_sync.mjs";
 import { loadProjectContext, resolveProjectLocal, listProjects } from "./knowledge_layer.mjs";
-import { collectMessages, describeMessage, inboundEvent, resolvePhone } from "./reply_intake.mjs";
+import { collectMessages, describeMessage, inboundEvent, resolvePhone, senderFromPayload } from "./reply_intake.mjs";
 import { makeTelegram, parseUpdate } from "./telegram.mjs";
 import { makeHub } from "./telegram_hub.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
+import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 import {
   decideAction, logRouteOf, detectLanguage, pickModel, buildPrompt,
   draftCard, draftButtons, parseCallbackData, logActionOf, parseMediaTags,
@@ -73,6 +74,7 @@ if (!SIMULATE && !liveBrainEnabled) {
   process.exit(0);
 }
 const api = makeApi(env);
+const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
 // Customer alerts and approval drafts belong in the Telegram Inbox. Keep the
 // legacy chat as a fallback for older single-chat installations only.
 const tg = makeTelegram({
@@ -83,8 +85,9 @@ const tg = makeTelegram({
 const hub = makeHub(env);
 const telegramFilters = createTelegramFilterService({
   rootDir: paths.rootDir,
-  getConnectedPhones: async () => (await listInstances(api)).map((item) => item.number),
+  getConnectedPhones: async () => filterInstancesForDevice(await listInstances(api), deviceSenderPolicy).map((item) => item.number),
 });
+let allowedInstanceNames = new Set();
 
 // ---------- tiny persistence ----------
 
@@ -760,6 +763,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/webhook/evolution") {
       const payload = await readBody(req);
+      const payloadInstance = senderFromPayload(payload);
+      if (deviceSenderPolicy.configured && (!payloadInstance || !allowedInstanceNames.has(payloadInstance))) {
+        console.log(`[DEVICE_SENDER_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; expected phone ${deviceSenderPolicy.expectedSenderPhone}.`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, blocked: true, reason: "DEVICE_SENDER_BLOCKED" }));
+        return;
+      }
       forwardToTracker(payload); // 缺口 4: tracker keeps its stats, brain keeps the mic
       const seen = new Set();
       for (const message of collectMessages(payload)) {
@@ -806,13 +816,21 @@ server.listen(PORT, HOST, async () => {
   if (!skipWebhookSetup) {
     try {
       const instances = await listInstances(api);
-      const open = instances.filter((i) => i.status === "OPEN");
+      const open = filterInstancesForDevice(instances.filter((i) => i.status === "OPEN"), deviceSenderPolicy);
+      allowedInstanceNames = new Set(open.map((item) => item.name));
       for (const item of open) await setInstanceWebhook(item.name);
       console.log(open.length ? `Listening:  ${open.map((i) => i.name).join(", ")}` : "No OPEN WhatsApp instances — start one, then restart.");
     } catch (error) {
       console.log(`Webhook setup failed: ${error.message} — restart once Evolution is online.`);
     }
   } else {
+    try {
+      const instances = await listInstances(api);
+      const open = filterInstancesForDevice(instances.filter((i) => i.status === "OPEN"), deviceSenderPolicy);
+      allowedInstanceNames = new Set(open.map((item) => item.name));
+    } catch (error) {
+      console.log(`Device sender lock refresh failed: ${error.message}`);
+    }
     console.log("Webhook auto-setup skipped (--no-webhook).");
   }
   console.log("\n提醒: tracker 请用 --no-webhook 跑 (brain 是唯一回复出口,会转发数据给它)。");

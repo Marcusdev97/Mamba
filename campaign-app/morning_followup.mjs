@@ -19,6 +19,7 @@ import { makeTelegram, escapeHtml } from "./telegram.mjs";
 import { makeHub } from "./telegram_hub.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
 import { addLocalStop } from "./suppression.mjs";
+import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -212,10 +213,10 @@ async function applyOutbound(sync, hit, event) {
 }
 
 // ---- settlement --------------------------------------------------------------
-export async function settle(api, sync, dbIds, sinceMs) {
+export async function settle(api, sync, dbIds, sinceMs, { senderPolicy } = {}) {
   let instances = [];
   try {
-    instances = await openInstances(api);
+    instances = filterInstancesForDevice(await openInstances(api), senderPolicy);
   } catch (error) {
     return { error: `连不上 Evolution(${error.message})。请确认 Docker 已启动。`, inbound: 0, outbound: 0, unknown: 0 };
   }
@@ -372,6 +373,7 @@ function line(item, index) {
 async function main() {
   const env = await loadEnv();
   const api = makeApi(env);
+  const senderPolicy = await loadDeviceSenderPolicy({ dataDir: path.join(rootDir, "campaign-data"), env });
   const sync = await createNotionSync({ env, onLog: () => {} });
   const tg = makeTelegram(env);
 
@@ -399,7 +401,7 @@ async function main() {
   const sinceMs = state.lastSettledAt ? new Date(state.lastSettledAt).getTime() : startOfKLTodayMs();
 
   console.log(`Settling messages since ${klDateTime(new Date(sinceMs).toISOString())} (KL)...`);
-  const settled = await settle(api, sync, dbIds, sinceMs);
+  const settled = await settle(api, sync, dbIds, sinceMs, { senderPolicy });
   if (settled.error) console.log(`! ${settled.error}`);
   else {
     console.log(`Instances: ${settled.instances.join(", ")}`);
