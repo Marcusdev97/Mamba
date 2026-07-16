@@ -197,6 +197,7 @@ export function makeHub(env = loadEnvFile()) {
     const lines = [
       `${emoji} <b>${escapeHtml(event.name || "Unknown")}</b> (${escapeHtml(event.phone)})`,
       `🏢 ${escapeHtml(projectName || "未知盘")} · 📱 ${escapeHtml(event.instanceName || "?")} · ${escapeHtml(event.route || "")}`,
+      `💻 ${escapeHtml(event.deviceName || event.deviceId || "Unknown Mamba device")}`,
       "",
       `💬 ${escapeHtml(event.text || "")}`,
     ];

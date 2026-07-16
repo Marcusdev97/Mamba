@@ -14,6 +14,7 @@ import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
+import { createDeviceIdentity } from "./lib/device-identity.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
@@ -62,6 +63,7 @@ for (const [k, v] of Object.entries(env)) {
   if (v !== "" && process.env[k] === undefined) process.env[k] = v;
 }
 const api = makeApi(env);
+const deviceIdentity = createDeviceIdentity(env);
 const notionService = createNotionService({ env });
 const {
   notionTokenValue,
@@ -153,6 +155,7 @@ const campaignRunService = createCampaignRunService({
   klDateTime,
   flowByLabel,
   flowStateAfter,
+  deviceIdentity,
 });
 const {
   autoAdvanceFlow,
@@ -256,6 +259,8 @@ const runtime = await loadRuntime({
   getRunner: () => campaignRunnerRegistry.list().find((item) => item?.running) || runner,
   systemLogs: systemLogService,
   settings: settingsService,
+  device: deviceIdentity,
+  telegramHub,
   telegramFilters: telegramFilterService,
   replyServices: replyServiceManager,
   dailyCampaign: dailyCampaignService,
@@ -374,6 +379,7 @@ const runtime = await loadRuntime({
   },
   campaign: {
     env,
+    device: deviceIdentity,
     getRunner: (runId = null) => getCampaignRunner(runId),
     listRunners: () => campaignRunnerRegistry.list(),
     setRunner: (value, options) => setCurrentRunner(value, options),

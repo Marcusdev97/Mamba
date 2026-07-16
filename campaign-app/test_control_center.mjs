@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { campaignSummary, recentActivity, summarizeRecords } from "./routes/control-center.routes.mjs";
+import { campaignSummary, filterRecordsForDevice, recentActivity, recordDeviceScope, summarizeRecords } from "./routes/control-center.routes.mjs";
 
 const records = [
   {
@@ -66,5 +66,22 @@ assert.equal(campaign.sent, 1);
 assert.equal(campaign.failed, 1);
 assert.equal(campaign.skipped, 1);
 assert.deepEqual(campaign.instances, ["wa_01"]);
+
+const scope = { device: { id: "upstairs-mac", name: "Upstairs Mac" }, senderNames: ["wa_01"] };
+assert.equal(recordDeviceScope({ lastSentByDevice: "upstairs-mac", senderInstance: "wa_01" }, scope), "local");
+assert.equal(recordDeviceScope({ lastSentByDevice: "downstairs-mac", senderInstance: "wa_01" }, scope), "remote");
+assert.equal(recordDeviceScope({ lastSenderKey: "upstairs-mac::wa_02" }, scope), "local");
+assert.equal(recordDeviceScope({ lastSenderKey: "downstairs-mac::wa_01" }, scope), "remote");
+assert.equal(recordDeviceScope({ senderInstance: "wa_01" }, scope), "legacy");
+assert.equal(recordDeviceScope({ senderInstance: "wa_03" }, scope), "unassigned");
+
+const scoped = filterRecordsForDevice([
+  { id: "local", lastSentByDevice: "upstairs-mac" },
+  { id: "remote", lastSentByDevice: "downstairs-mac", senderInstance: "wa_01" },
+  { id: "legacy", senderInstance: "wa_01" },
+  { id: "unassigned", senderInstance: "wa_03" },
+], scope);
+assert.deepEqual(scoped.records.map((item) => item.id), ["local", "legacy"]);
+assert.deepEqual(scoped.counts, { local: 1, legacy: 1, remote: 1, unassigned: 1 });
 
 console.log("✅ all control-center tests passed");

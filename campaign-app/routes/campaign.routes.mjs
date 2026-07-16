@@ -288,6 +288,8 @@ export function registerCampaignRoutes(router) {
     try {
       await runner.prepare({ mode, startAt, endAt, instances, leads, project: project.name });
       runner.state.projectId = project.id;
+      runner.state.deviceId = campaign.device?.id || "";
+      runner.state.deviceName = campaign.device?.name || "";
     } catch (error) {
       throw httpError(500, `生成 campaign 预览失败: ${error.message}`);
     }

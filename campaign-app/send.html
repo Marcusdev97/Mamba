@@ -30,6 +30,19 @@
   .spacer { flex: 1; }
   .sendbar a { color: var(--muted, #94a3b8); text-decoration: none; font-size: 13px; }
   .sendbar a:hover { color: var(--text, #e2e8f0); }
+  .monitor-toggle {
+    display: inline-flex; align-items: center; gap: 7px; min-height: 34px;
+    padding: 7px 11px; border: 1px solid #334155; border-radius: 8px;
+    background: #111827; color: #cbd5e1; font: inherit; font-size: 12px;
+    font-weight: 800; cursor: pointer; white-space: nowrap;
+  }
+  .monitor-toggle:hover { border-color: #475569; color: #f8fafc; }
+  .monitor-toggle .monitor-chevron { font-size: 11px; transition: transform .18s ease; }
+  .monitor-toggle.collapsed .monitor-chevron { transform: rotate(180deg); }
+  .monitor-toggle .monitor-count {
+    min-width: 20px; padding: 2px 6px; border-radius: 999px;
+    background: #163524; color: #4ade80; text-align: center;
+  }
   .queuebar {
     display: flex; align-items: center; gap: 10px; min-width: 0;
     padding: 7px 12px; border: 1px solid #334155; border-radius: 7px;
@@ -45,6 +58,7 @@
   }
   .queuebar button.danger { border-color: #7f1d1d; color: #fca5a5; }
   .campaign-monitors { display: grid; border-bottom: 1px solid var(--line, #1f2a3d); background: #0b1018; }
+  .campaign-monitors.collapsed { display: none; }
   .campaign-monitor {
     display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(300px, 2fr);
     gap: 18px; padding: 12px 18px; border-bottom: 1px solid #1b2636;
@@ -152,6 +166,11 @@
       <button type="button" class="hidden" id="queueRelease">确认后启动</button>
       <button type="button" class="danger" id="queueCancel">取消下一批</button>
     </div>
+    <button type="button" class="monitor-toggle" id="monitorToggle" aria-controls="campaignMonitors" aria-expanded="true">
+      <span class="monitor-chevron">▴</span>
+      <span id="monitorToggleLabel">收起进度</span>
+      <span class="monitor-count" id="monitorCount">0</span>
+    </button>
     <a href="/knowledge">🧠 脑编辑器</a>
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
@@ -195,6 +214,7 @@ let successTimer = null;
 let firstQueuedRunId = null;
 let latestCampaignStatus = null;
 let latestCampaignQueue = null;
+let monitorDisplayChoice = sessionStorage.getItem("mamba-send-monitor-display");
 
 const terminalStatuses = new Set([
   "SENT", "REPLIED_WARM", "FAILED", "SKIPPED_END_TIME", "SKIPPED_MANUAL",
@@ -205,10 +225,36 @@ function monitorEscape(value) {
   return String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
 }
 
+function setCampaignMonitorsCollapsed(collapsed, { remember = false } = {}) {
+  const container = document.getElementById("campaignMonitors");
+  const toggle = document.getElementById("monitorToggle");
+  container.classList.toggle("collapsed", collapsed);
+  toggle.classList.toggle("collapsed", collapsed);
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  document.getElementById("monitorToggleLabel").textContent = collapsed ? "显示进度" : "收起进度";
+  if (remember) {
+    monitorDisplayChoice = collapsed ? "collapsed" : "expanded";
+    sessionStorage.setItem("mamba-send-monitor-display", monitorDisplayChoice);
+  }
+}
+
+function monitorRunIsActive(run) {
+  const syncStatus = String(run?.state?.notionSync?.status || run?.state?.advanceStatus || "").toUpperCase();
+  return run?.running === true || run?.state?.status === "RUNNING" || syncStatus === "RUNNING";
+}
+
+document.getElementById("monitorToggle").addEventListener("click", () => {
+  const collapsed = document.getElementById("campaignMonitors").classList.contains("collapsed");
+  setCampaignMonitorsCollapsed(!collapsed, { remember: true });
+});
+
 function renderCampaignMonitor(status, queue) {
   const supplied = Array.isArray(status?.runs) ? status.runs : [];
   const runs = supplied.length ? supplied : (status?.state ? [status] : []);
   const container = document.getElementById("campaignMonitors");
+  document.getElementById("monitorCount").textContent = String(runs.filter((item) => item?.state).length);
+  const shouldAutoCollapse = !runs.some(monitorRunIsActive) && !queue?.count;
+  setCampaignMonitorsCollapsed(monitorDisplayChoice === null ? shouldAutoCollapse : monitorDisplayChoice === "collapsed");
   if (!runs.length) {
     container.innerHTML = '<div class="campaign-monitor"><div class="monitor-summary"><div class="monitor-kicker">Campaign Ready</div><div class="monitor-title">没有正在运行的 Batch</div><div class="monitor-track"><span style="width:0"></span></div></div><div class="flow-steps"><div class="flow-step"><small>01 Prepared</small><strong>等待 Batch</strong></div><div class="flow-step"><small>02 Sending</small><strong>尚未开始</strong></div><div class="flow-step"><small>03 Notion</small><strong>等待发送完成</strong></div><div class="flow-step"><small>04 Next Batch</small><strong>Queue 空</strong></div></div></div>';
     return;

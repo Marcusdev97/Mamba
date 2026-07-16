@@ -3,6 +3,7 @@ import {
   goldenProperties,
   learningCandidateFromPage,
   learningKeyFor,
+  learningQueueSnapshot,
   learningTypeFor,
   objectionProperties,
 } from "./routes/brain-learning.routes.mjs";
@@ -60,5 +61,28 @@ assert.equal(contextual["Conversation Text"].rich_text.map((part) => part.text.c
 const objection = objectionProperties({ ...candidate, route: "Complaint", note: "Acknowledge first." }, key1);
 assert.equal(objection["Objection Key"].rich_text[0].text.content, key1);
 assert.equal(objection["Customer Says"].title[0].text.content, "Price can lower?");
+
+const approvedPage = {
+  ...page,
+  id: "5272e2ed-bf64-4f44-b670-c71ae4276052",
+  properties: {
+    ...page.properties,
+    "Learning Status": { select: { name: "Approved" } },
+  },
+};
+const snapshot = await learningQueueSnapshot({
+  notion: async (method, pathname) => {
+    assert.equal(method, "POST");
+    assert.equal(pathname, "/databases/reply-log/query");
+    return { results: [page, approvedPage], has_more: false };
+  },
+  aiReplyLogDbId: "reply-log",
+  goldenDbId: "golden",
+  objectionDbId: "objection",
+});
+assert.equal(snapshot.summary.Pending, 1);
+assert.equal(snapshot.summary.Approved, 1);
+assert.equal(snapshot.summary.Rejected, 0);
+assert.deepEqual(snapshot.projects, ["Gen Starz"]);
 
 console.log("✅ all brain-learning tests passed");

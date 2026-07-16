@@ -32,6 +32,20 @@ function requireLearning(runtime) {
   return service;
 }
 
+export async function learningQueueSnapshot(service) {
+  if (!service?.notion || !service.aiReplyLogDbId || !service.goldenDbId || !service.objectionDbId) {
+    throw new Error("Brain Learning configuration is incomplete.");
+  }
+  const pages = await queryAll(service.notion, service.aiReplyLogDbId);
+  const records = pages.map(learningCandidateFromPage).filter(Boolean)
+    .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+  return {
+    records,
+    summary: Object.fromEntries(LEARNING_STATUSES.map((name) => [name, records.filter((item) => item.learningStatus === name).length])),
+    projects: [...new Set(records.map((item) => item.project).filter(Boolean))].sort(),
+  };
+}
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -296,9 +310,8 @@ export function registerBrainLearningRoutes(router) {
     const status = clean(url.searchParams.get("status")) || "Pending";
     const project = clean(url.searchParams.get("project"));
     const q = clean(url.searchParams.get("q")).toLowerCase();
-    const pages = await queryAll(service.notion, service.aiReplyLogDbId);
-    const all = pages.map(learningCandidateFromPage).filter(Boolean)
-      .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+    const snapshot = await learningQueueSnapshot(service);
+    const all = snapshot.records;
     const filtered = all.filter((item) => {
       if (status !== "All" && item.learningStatus !== status) return false;
       if (project && item.project !== project) return false;
@@ -307,8 +320,8 @@ export function registerBrainLearningRoutes(router) {
     });
     json(res, 200, {
       ok: true,
-      summary: Object.fromEntries(LEARNING_STATUSES.map((name) => [name, all.filter((item) => item.learningStatus === name).length])),
-      projects: [...new Set(all.map((item) => item.project).filter(Boolean))].sort(),
+      summary: snapshot.summary,
+      projects: snapshot.projects,
       count: filtered.length,
       records: filtered.slice(0, 500),
     });

@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { json } from "../lib/http.mjs";
 import { listProjects } from "../knowledge_layer.mjs";
+import { senderKeyBelongsToDevice } from "../lib/device-identity.mjs";
+
+const LEARNING_HEALTH_TTL_MS = 120_000;
+let learningHealthCache = { checkedAt: 0, key: "", value: null, promise: null };
 
 function dateKeyKL(value) {
   if (!value) return "";
@@ -41,6 +45,35 @@ export function summarizeRecords(records, today) {
   const appointments = records.filter((record) => !isStopped(record) && activeAppointments.has(appointmentStage(record))).length;
   const followUps = records.filter((record) => !isStopped(record) && (hasReply(record) || !isDoneAction(record.nextAction) || record.followUpAt)).length;
   return { totalCustomers: records.length, todaySent, todayReplies, overdue, dueToday, appointments, followUps };
+}
+
+function sameDevice(value, device) {
+  const wanted = new Set([device?.id, device?.name, device?.hostname]
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean));
+  return wanted.has(String(value || "").trim().toLowerCase());
+}
+
+export function recordDeviceScope(record, { device = {}, senderNames = [] } = {}) {
+  const connected = new Set(senderNames.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean));
+  const explicitDevice = String(record.lastSentByDevice || "").trim();
+  const senderKeys = [record.assignedSenderKey, record.lastSenderKey].filter(Boolean);
+  if (explicitDevice) return sameDevice(explicitDevice, device) ? "local" : "remote";
+  if (senderKeys.some((key) => senderKeyBelongsToDevice(key, device.id))) return "local";
+  if (senderKeys.some((key) => String(key).includes("::"))) return "remote";
+  if (record.senderInstance && connected.has(String(record.senderInstance).trim().toLowerCase())) return "legacy";
+  return "unassigned";
+}
+
+export function filterRecordsForDevice(records, scope) {
+  const counts = { local: 0, legacy: 0, remote: 0, unassigned: 0 };
+  const filtered = [];
+  for (const record of records || []) {
+    const owner = recordDeviceScope(record, scope);
+    counts[owner] += 1;
+    if (owner === "local" || owner === "legacy") filtered.push(record);
+  }
+  return { records: filtered, counts };
 }
 
 export function recentActivity(records, limit = 8) {
@@ -109,10 +142,52 @@ async function whatsappHealth(runtime) {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2500));
     const instances = await Promise.race([runtime.whatsapp.listInstances(), timeout]);
     const open = instances.filter((item) => String(item.status || "").toUpperCase() === "OPEN").length;
-    return { ok: open > 0, label: `${open}/${instances.length} connected`, open, total: instances.length };
+    return {
+      ok: open > 0,
+      label: `${open}/${instances.length} connected`,
+      open,
+      total: instances.length,
+      instances: instances.map((item) => ({
+        name: String(item.name || ""),
+        number: String(item.number || ""),
+        status: String(item.status || ""),
+      })),
+    };
   } catch (error) {
     return { ok: false, label: error.message === "timeout" ? "Health check timeout" : "Evolution offline", open: 0, total: 0 };
   }
+}
+
+function healthItem(id, label, state, detail, href = "") {
+  const normalized = ["online", "warning", "offline"].includes(state) ? state : "offline";
+  return { id, label, state: normalized, ok: normalized === "online", detail: String(detail || ""), href };
+}
+
+async function learningQueueHealth(runtime, notionConfigured) {
+  const service = runtime.brainLearning;
+  const ids = [service?.aiReplyLogDbId, service?.goldenDbId, service?.objectionDbId].filter(Boolean);
+  if (!notionConfigured) {
+    return healthItem("learning", "Brain Learning Queue", "offline", "Notion token is not configured", "/brain-learning");
+  }
+  if (!service?.notion || ids.length !== 3) {
+    return healthItem("learning", "Brain Learning Queue", "offline", "Learning database configuration is incomplete", "/brain-learning");
+  }
+
+  const key = ids.join(":");
+  if (learningHealthCache.key === key && learningHealthCache.value && Date.now() - learningHealthCache.checkedAt < LEARNING_HEALTH_TTL_MS) {
+    return learningHealthCache.value;
+  }
+  if (learningHealthCache.key === key && learningHealthCache.promise) return learningHealthCache.promise;
+
+  learningHealthCache.key = key;
+  learningHealthCache.promise = service.notion("POST", `/databases/${service.aiReplyLogDbId}/query`, { page_size: 1 })
+    .then(() => healthItem("learning", "Brain Learning Queue", "online", "Notion learning source connected · review queue ready", "/brain-learning"))
+    .catch((error) => healthItem("learning", "Brain Learning Queue", "offline", `Notion learning source unavailable · ${error.message}`, "/brain-learning"))
+    .then((value) => {
+      learningHealthCache = { checkedAt: Date.now(), key, value, promise: null };
+      return value;
+    });
+  return learningHealthCache.promise;
 }
 
 export function registerControlCenterRoutes(router) {
@@ -121,7 +196,14 @@ export function registerControlCenterRoutes(router) {
     const today = dateKeyKL(new Date());
     const cache = await runtime.followUp?.readCache?.().catch(() => ({ syncedAt: null, records: [] }))
       ?? { syncedAt: null, records: [] };
-    const records = Array.isArray(cache.records) ? cache.records : [];
+    const allRecords = Array.isArray(cache.records) ? cache.records : [];
+    const whatsapp = await whatsappHealth(runtime);
+    const device = runtime.device || { id: "this-device", name: "This device", hostname: "" };
+    const localScope = filterRecordsForDevice(allRecords, {
+      device,
+      senderNames: (whatsapp.instances || []).map((item) => item.name),
+    });
+    const records = localScope.records;
     const metrics = summarizeRecords(records, today);
     const pendingBrain = await readJson(path.join(root, "campaign-data", "brain", "pending.json"), { pending: {} });
     const aiPending = Object.keys(pendingBrain.pending || {}).length;
@@ -132,7 +214,6 @@ export function registerControlCenterRoutes(router) {
       ? runnerSnapshot
       : { running: false, stopped: false, state: await readJson(path.join(root, "campaign-data", "active-run.json"), null) };
     const campaign = campaignSummary(activeRun);
-    const whatsapp = await whatsappHealth(runtime);
     const logs = await runtime.systemLogs?.list?.({ limit: 80, date: today }).catch(() => []) || [];
     const errorsToday = logs.filter((entry) => entry.level === "error").length;
     const warningsToday = logs.filter((entry) => entry.level === "warn").length;
@@ -140,6 +221,8 @@ export function registerControlCenterRoutes(router) {
     const activeBrain = listProjects();
     const replyServices = await runtime.replyServices?.status?.().catch(() => ({ tracker: false, brain: false }))
       || { tracker: false, brain: false };
+    const learning = await learningQueueHealth(runtime, Boolean(settings.notion?.configured));
+    const scheduler = await runtime.dailyCampaign?.snapshot?.().catch((error) => ({ error: error.message })) || null;
     const watchdog = await readJson(path.join(root, "campaign-data", "watchdog", "status.json"), null);
     const watchdogAgeSeconds = watchdog?.heartbeatAt
       ? Math.max(0, Math.round((Date.now() - dateMs(watchdog.heartbeatAt)) / 1000))
@@ -149,7 +232,7 @@ export function registerControlCenterRoutes(router) {
     const queue = [
       { id: "overdue", label: "Overdue follow-ups", count: metrics.overdue, tone: "red", href: "/follow-up?bucket=overdue" },
       { id: "today", label: "Follow up today", count: metrics.dueToday, tone: "amber", href: "/follow-up?bucket=today" },
-      { id: "brain", label: "AI replies awaiting review", count: aiPending, tone: "purple", href: "/brain-learning" },
+      { id: "brain", label: "AI replies awaiting approval", count: aiPending, tone: "purple", href: "/brain-learning" },
       { id: "appointments", label: "Active appointments", count: metrics.appointments, tone: "blue", href: "/follow-up?bucket=appointment" },
     ];
     if (campaign) {
@@ -166,6 +249,17 @@ export function registerControlCenterRoutes(router) {
       ok: true,
       generatedAt: new Date().toISOString(),
       today,
+      scope: {
+        mode: "device",
+        device,
+        senders: whatsapp.instances || [],
+        localRecords: records.length,
+        sharedRecords: allRecords.length,
+        legacyRecords: localScope.counts.legacy,
+        remoteRecords: localScope.counts.remote,
+        unassignedRecords: localScope.counts.unassigned,
+        telegram: runtime.telegramHub?.enabled ? "global" : "local-config",
+      },
       metrics: { ...metrics, aiPending },
       cache: { syncedAt: cache.syncedAt || null, ageMinutes: cacheAgeMinutes, stale: cacheAgeMinutes === null || cacheAgeMinutes > 60 },
       campaign,
@@ -173,13 +267,33 @@ export function registerControlCenterRoutes(router) {
       recent: recentActivity(records),
       brain: { activeProjects: activeBrain.length, provider: settings.brain?.provider || "rules" },
       health: [
-        { id: "server", label: "Mamba Server", ok: true, detail: `Online · port ${runtime.port}` },
-        { id: "whatsapp", label: "WhatsApp (Evolution)", ok: whatsapp.ok, detail: whatsapp.label },
-        { id: "notion", label: "Notion Cache", ok: Boolean(settings.notion?.configured && cache.syncedAt && cacheAgeMinutes <= 60), detail: cache.syncedAt ? `Synced ${cacheAgeMinutes} min ago${cacheAgeMinutes > 60 ? " · stale" : ""}` : "No local snapshot" },
-        { id: "telegram", label: "Telegram Approval", ok: Boolean(settings.telegram?.botConfigured && settings.telegram?.chatConfigured), detail: settings.telegram?.chatConfigured ? "Bot and chat configured" : "Setup incomplete" },
-        { id: "tracker", label: "Reply Tracker", ok: replyServices.tracker, detail: replyServices.tracker ? "Listening for inbound replies" : "Offline · replies will not reach Notion or Telegram" },
-        { id: "brain", label: "Sales Brain", ok: replyServices.brain, detail: replyServices.brain ? `${settings.brain?.provider || "rules"} · Telegram alerts online` : "Offline · Telegram alerts unavailable" },
-        { id: "watchdog", label: "Remote Watchdog", ok: watchdogFresh, detail: watchdogFresh ? `${watchdog.deviceName || "This Mac"} · checked ${watchdogAgeSeconds}s ago` : "Not installed or heartbeat is stale" },
+        healthItem("server", "Mamba Server", "online", `Online · port ${runtime.port}`),
+        healthItem("whatsapp", "WhatsApp (Evolution)", whatsapp.ok ? "online" : "offline", whatsapp.label, "/settings"),
+        healthItem(
+          "notion",
+          "Notion Customer Cache",
+          !settings.notion?.configured ? "offline" : cache.syncedAt && cacheAgeMinutes <= 60 ? "online" : "warning",
+          !settings.notion?.configured ? "Notion token is not configured" : cache.syncedAt ? `Synced ${cacheAgeMinutes} min ago${cacheAgeMinutes > 60 ? " · refresh recommended" : ""}` : "Connected, but no customer snapshot is available",
+          "/conversations",
+        ),
+        healthItem(
+          "telegram",
+          "Global Telegram Hub",
+          runtime.telegramHub?.enabled ? "online" : settings.telegram?.botConfigured && settings.telegram?.chatConfigured ? "warning" : "offline",
+          runtime.telegramHub?.enabled ? "Shared inbox receives alerts from every Mamba device" : settings.telegram?.botConfigured && settings.telegram?.chatConfigured ? "Legacy Telegram is configured; shared inbox Hub is incomplete" : "Telegram Hub token or inbox destination is missing",
+          "/settings",
+        ),
+        healthItem("tracker", "Reply Tracker", replyServices.tracker ? "online" : "offline", replyServices.tracker ? "Listening for inbound replies" : "Replies will not reach Notion or Telegram"),
+        healthItem("brain", "Sales Brain", replyServices.brain ? "online" : "offline", replyServices.brain ? `${settings.brain?.provider || "rules"} · classification and alerts online` : "Classification and Telegram alerts are unavailable"),
+        learning,
+        healthItem(
+          "scheduler",
+          "Daily Campaign Scheduler",
+          !scheduler || scheduler.error ? "offline" : scheduler.config?.enabled ? "online" : "warning",
+          !scheduler || scheduler.error ? scheduler?.error || "Scheduler service is unavailable" : scheduler.config?.enabled ? `TEST schedule active · daily ${scheduler.config.time}` : "Loaded but disabled · TEST-only safety mode",
+          "/campaign-todo",
+        ),
+        healthItem("watchdog", "Remote Watchdog", watchdogFresh ? "online" : "warning", watchdogFresh ? `${watchdog.deviceName || "This Mac"} · checked ${watchdogAgeSeconds}s ago` : "Optional protection is not installed or heartbeat is stale", "/remote-mamba"),
       ],
       logs: { errorsToday, warningsToday },
     });

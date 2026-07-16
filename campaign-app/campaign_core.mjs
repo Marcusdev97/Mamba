@@ -1035,7 +1035,9 @@ export class CampaignRunner {
       const proj = this.state.project?.name || this.state.project || this.config?.campaignName || "";
       const parts = Object.entries(s).map(([k, v]) => `${k}: ${v}`).join(" · ") || "(无)";
       const icon = this.state.status === "COMPLETED" ? "✅" : "⏹";
-      const text = `${icon} Mamba ${this.state.status}\n项目: ${proj}\n模式: ${this.state.mode}\n${parts}`;
+      const device = this.state.deviceName || this.state.deviceId || "Unknown Mamba device";
+      const senders = [...new Set((this.state.jobs || []).map((job) => job.instanceName).filter(Boolean))].join(", ") || "-";
+      const text = `${icon} Mamba ${this.state.status}\n电脑: ${device}\n号码: ${senders}\n项目: ${proj}\n模式: ${this.state.mode}\n${parts}`;
       const { makeHub } = await import("./telegram_hub.mjs");
       const hub = makeHub();
       if (hub.hasOps) {

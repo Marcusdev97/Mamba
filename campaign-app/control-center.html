@@ -11,6 +11,10 @@
   .cc-head { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:20px; align-items:start; margin-bottom:18px; }
   .cc-head h1 { margin:0; font-size:28px; letter-spacing:0; }
   .cc-head p { margin:4px 0 0; color:var(--muted); }
+  .scope-strip { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
+  .scope-pill { display:inline-flex; align-items:center; min-height:28px; padding:5px 9px; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--muted); font-size:10.5px; }
+  .scope-pill strong { color:var(--text); margin-left:4px; }
+  .scope-pill.global { border-color:rgba(37,211,102,.4); color:var(--green); }
   .head-tools { display:grid; gap:9px; }
   .global-search { position:relative; }
   .global-search input { height:42px; padding-left:38px; }
@@ -18,6 +22,7 @@
   .health-banner { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); background:var(--panel); border-radius:8px; }
   .health-banner .health-dot { width:11px; height:11px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px var(--green-bg); }
   .health-banner.warn .health-dot { background:var(--amber); box-shadow:0 0 0 4px var(--amber-bg); }
+  .health-banner.offline .health-dot { background:var(--red); box-shadow:0 0 0 4px var(--red-bg); }
   .health-banner strong { display:block; font-size:12.5px; }
   .health-banner small { display:block; color:var(--muted); font-size:11px; }
   .kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
@@ -44,13 +49,15 @@
   .queue-item span:nth-child(2) { font-size:12.5px; }
   .queue-count { font-weight:700; font-size:12.5px; }
   .chev { color:var(--faint); font-size:17px; }
-  .health-item { grid-template-columns:minmax(0,1fr) auto; gap:12px; }
+  .health-item { grid-template-columns:minmax(0,1fr) auto; gap:12px; color:var(--text); text-decoration:none; }
+  .health-item[href]:hover .health-name { color:var(--green); }
   .health-name { font-size:12.5px; }.health-detail { color:var(--muted); font-size:10.5px; margin-top:2px; }
   .health-state { display:flex; align-items:center; gap:7px; font-size:10.5px; color:var(--muted); }
   .health-state i { width:8px; height:8px; border-radius:50%; background:var(--red); }
-  .health-state.ok i { background:var(--green); }
+  .health-state.online i { background:var(--green); }
+  .health-state.warning i { background:var(--amber); }
   .quick-panel { margin-bottom:14px; }
-  .quick-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+  .quick-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
   .quick { display:flex; align-items:center; gap:11px; min-height:58px; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:var(--panel-2); color:var(--text); text-decoration:none; }
   .quick:hover { border-color:var(--line-2); background:var(--panel-3); }
   .quick.primary { border-color:rgba(37,211,102,.55); background:var(--green-bg); }
@@ -72,7 +79,7 @@
   .activity-meta span.stop { background:var(--red-bg); color:var(--red); }.activity-meta span.appointment { background:rgba(168,85,247,.16); color:#b794f6; }
   .cache-line { color:var(--muted); font-size:10.5px; margin-top:10px; }
   .error-text { color:var(--red); }
-  @media (max-width:1050px) { .kpi-grid { grid-template-columns:repeat(2,1fr); } .split,.bottom-grid { grid-template-columns:1fr; } }
+  @media (max-width:1050px) { .kpi-grid { grid-template-columns:repeat(2,1fr); } .split,.bottom-grid { grid-template-columns:1fr; } .quick-grid { grid-template-columns:repeat(3,1fr); } }
   @media (max-width:720px) { .cc-wrap { padding:16px 12px 48px; } .cc-head { grid-template-columns:1fr; } .cc-head h1 { font-size:23px; } .kpi-grid { gap:8px; } .kpi { min-height:102px; padding:12px; } .kpi strong { font-size:25px; } .quick-grid { grid-template-columns:repeat(2,1fr); } }
   @media (max-width:440px) { .quick-grid { grid-template-columns:1fr; } .campaign-stats { grid-template-columns:repeat(2,1fr); } }
 </style>
@@ -80,7 +87,7 @@
 <body>
 <main class="cc-wrap">
   <header class="cc-head">
-    <div><h1 id="greeting">Mamba Control Center</h1><p>今天最重要的客户、Campaign 与系统状态都在这里。</p></div>
+    <div><h1 id="greeting">Mamba Control Center</h1><p>这台电脑的客户、Campaign 与系统状态都在这里。</p><div class="scope-strip" id="scopeStrip"><span class="scope-pill">Checking device...</span></div></div>
     <div class="head-tools">
       <form class="global-search" id="searchForm"><input id="globalSearch" type="search" placeholder="Search customer name or phone" aria-label="Search customer" /></form>
       <div class="health-banner" id="healthBanner"><span class="health-dot"></span><div><strong>Checking system status</strong><small>Reading local services...</small></div></div>
@@ -106,6 +113,7 @@
       <a class="quick" href="/conversations"><span class="quick-code">IN</span><span><b>查看客户回复</b><small>Customer Inbox</small></span></a>
       <a class="quick" href="/follow-up"><span class="quick-code">FU</span><span><b>建立 Follow-up</b><small>Appointments & tasks</small></span></a>
       <a class="quick" href="/project-brain"><span class="quick-code">PB</span><span><b>搜索项目</b><small>Project Brain</small></span></a>
+      <a class="quick" href="/brain-learning"><span class="quick-code">LQ</span><span><b>审核学习资料</b><small>Learning Queue</small></span></a>
     </div>
   </section>
 
@@ -140,12 +148,31 @@ function renderQueue(items) {
     <a class="queue-item" href="${item.href}"><i class="signal ${esc(item.tone)}"></i><span>${esc(item.label)}</span><b class="queue-count">${esc(item.count)}</b><span class="chev">›</span></a>`).join("") : '<div class="empty">No action required right now.</div>';
 }
 
+function renderScope(scope) {
+  const senders = (scope.senders || []).map((item) => `${item.name}${item.number ? ` · ${item.number}` : ""}`);
+  const legacy = scope.legacyRecords ? `<span class="scope-pill">Legacy sender records<strong>${esc(scope.legacyRecords)}</strong></span>` : "";
+  $("scopeStrip").innerHTML = `
+    <span class="scope-pill">This device<strong>${esc(scope.device?.name || scope.device?.id || "Unknown")}</strong></span>
+    <span class="scope-pill">WhatsApp<strong>${esc(senders.join(" / ") || "No local connection")}</strong></span>
+    <span class="scope-pill global">Telegram<strong>${scope.telegram === "global" ? "Global Hub" : "Local config"}</strong></span>
+    ${legacy}`;
+}
+
 function renderHealth(items, logs) {
-  $("health").innerHTML = items.map((item) => `
-    <div class="health-item"><div><div class="health-name">${esc(item.label)}</div><div class="health-detail">${esc(item.detail)}</div></div><div class="health-state ${item.ok ? "ok" : ""}"><span>${item.ok ? "Healthy" : "Check"}</span><i></i></div></div>`).join("");
-  const allGood = items.every((item) => item.ok) && !logs.errorsToday;
-  $("healthBanner").classList.toggle("warn", !allGood);
-  $("healthBanner").innerHTML = `<span class="health-dot"></span><div><strong>${allGood ? "System ready" : "System needs attention"}</strong><small>${logs.errorsToday} errors · ${logs.warningsToday} warnings today</small></div>`;
+  const labels = { online:"Online", warning:"Warning", offline:"Offline" };
+  $("health").innerHTML = items.map((item) => {
+    const state = item.state || (item.ok ? "online" : "offline");
+    const tag = item.href ? "a" : "div";
+    const href = item.href ? ` href="${esc(item.href)}"` : "";
+    return `<${tag} class="health-item"${href}><div><div class="health-name">${esc(item.label)}</div><div class="health-detail">${esc(item.detail)}</div></div><div class="health-state ${esc(state)}"><span>${labels[state] || "Offline"}</span><i></i></div></${tag}>`;
+  }).join("");
+  const offline = items.filter((item) => (item.state || (item.ok ? "online" : "offline")) === "offline").length;
+  const warnings = items.filter((item) => item.state === "warning").length;
+  const banner = $("healthBanner");
+  banner.classList.toggle("offline", offline > 0);
+  banner.classList.toggle("warn", offline === 0 && warnings > 0);
+  const title = offline ? "System needs attention" : warnings ? "System ready with warnings" : "Everything is online";
+  banner.innerHTML = `<span class="health-dot"></span><div><strong>${title}</strong><small>${offline} offline · ${warnings} warnings · ${logs.errorsToday} errors today</small></div>`;
 }
 
 function renderCampaign(campaign) {
@@ -178,6 +205,7 @@ async function loadDashboard() {
     $("replyNote").textContent = data.metrics.appointments ? `${data.metrics.appointments} active appointments` : "No active appointments";
     $("followNote").textContent = `${data.metrics.overdue} overdue · ${data.metrics.dueToday} today`;
     $("brainNote").textContent = `${data.brain.provider} · ${data.brain.activeProjects} active projects`;
+    renderScope(data.scope || {});
     $("cacheLine").textContent = data.cache.syncedAt ? `Customer cache synced ${relative(data.cache.syncedAt)}${data.cache.stale ? " · refresh recommended" : ""}` : "Customer cache has not been synced.";
     renderQueue(data.queue || []);
     renderHealth(data.health || [], data.logs || { errorsToday:0, warningsToday:0 });

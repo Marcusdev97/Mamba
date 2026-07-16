@@ -22,6 +22,7 @@ import { resolveProjectLocal } from "./knowledge_layer.mjs";
 import { resolveInboundProject } from "./lib/inbound-project-resolver.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createTrackerReliabilityService } from "./lib/tracker-reliability-service.mjs";
+import { createDeviceIdentity } from "./lib/device-identity.mjs";
 
 const hub = makeHub();
 
@@ -38,6 +39,7 @@ const statusPath = path.join(trackerDir, "lead_status.json");
 const csvPath = path.join(trackerDir, "replies.csv");
 
 const env = await loadEnv();
+const deviceIdentity = createDeviceIdentity(env);
 const api = makeApi(env);
 const telegramFilters = createTelegramFilterService({
   rootDir: paths.rootDir,
@@ -379,6 +381,8 @@ function eventFromMessage(payload, message) {
   return {
     id: key.id ?? `${phone}_${Date.now()}`,
     receivedAt,
+    deviceId: deviceIdentity.id,
+    deviceName: deviceIdentity.name,
     instanceName: senderFromPayload(payload),
     name: lead.name ?? message.pushName ?? "Unknown",
     phone,
