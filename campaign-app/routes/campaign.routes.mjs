@@ -1,4 +1,5 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
+import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
 
 function requireCampaign(runtime) {
   if (!runtime.campaign) {
@@ -151,6 +152,25 @@ export function campaignQueueBlockReason(runner) {
   return null;
 }
 
+function campaignRunners(campaign) {
+  return typeof campaign.listRunners === "function"
+    ? campaign.listRunners()
+    : [campaign.getRunner()].filter(Boolean);
+}
+
+function conflictingRunner(campaign, instanceNames, excludeRunId = null, { force = false } = {}) {
+  return campaignRunners(campaign).find((candidate) => {
+    if (!candidate?.state || candidate.state.runId === excludeRunId) return false;
+    if (!instanceSetsOverlap(instanceNames, runnerInstanceNames(candidate))) return false;
+    if (candidate.running) return true;
+    return !force && Boolean(campaignQueueBlockReason(candidate));
+  }) || null;
+}
+
+function queuedLaneConflict(queueItems, instanceNames, excludeRunId = null) {
+  return (queueItems || []).find((item) => item.runId !== excludeRunId && instanceSetsOverlap(instanceNames, item.instanceNames)) || null;
+}
+
 async function restoreQueuedRunner(campaign, item) {
   try {
     return await campaign.restoreRunner({ runId: item.runId, projectId: item.projectId });
@@ -162,6 +182,7 @@ async function restoreQueuedRunner(campaign, item) {
 function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error") {
   const campaign = requireCampaign(runtime);
   campaign.setRunner(runner);
+  campaign.persistRunners?.().catch(() => {});
   (async () => {
     try {
       await runner.run();
@@ -172,6 +193,7 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
       runner.pushLog(`运行出错：${error.message}`);
       await runner.systemLog?.("error", errorEvent, "Campaign background run failed.", { error: error.message });
     } finally {
+      await campaign.persistRunners?.().catch(() => {});
       await startNextQueued(runtime).catch(async (error) => {
         await campaign.queue.setHold(`启动下一批失败: ${error.message}`, runner.state?.runId).catch(() => {});
         await writeCampaignLog(runtime, "error", "campaign_queue_start_failed", "Queued campaign failed to start.", {
@@ -185,17 +207,27 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
 
 async function startNextQueued(runtime, { force = false } = {}) {
   const campaign = requireCampaign(runtime);
-  const current = campaign.getRunner();
-  if (current?.running) return null;
-  const next = await campaign.queue.peek();
-  if (!next) {
+  const queueSnapshot = await campaign.queue.snapshot();
+  if (!queueSnapshot.count) {
     await campaign.queue.clearHold();
     return null;
   }
 
-  const reason = campaignQueueBlockReason(current);
-  if (reason && !force) {
-    await campaign.queue.setHold(reason, current?.state?.runId ?? null);
+  let next = null;
+  let blocker = null;
+  for (const item of queueSnapshot.items) {
+    const conflict = conflictingRunner(campaign, item.instanceNames, item.runId, { force });
+    if (!conflict) {
+      next = item;
+      break;
+    }
+    blocker ||= conflict;
+  }
+  if (!next) {
+    const reason = blocker?.running
+      ? `等待号码 ${runnerInstanceNames(blocker).join(", ")} 完成当前发送。`
+      : campaignQueueBlockReason(blocker) || "等待对应 WhatsApp 号码完成上一批收尾。";
+    await campaign.queue.setHold(reason, blocker?.state?.runId ?? null);
     return { held: true, reason };
   }
 
@@ -214,19 +246,19 @@ async function startNextQueued(runtime, { force = false } = {}) {
 }
 
 async function resolveStartRunner(campaign, body) {
-  const current = campaign.getRunner();
   const requestedRunId = String(body.runId || "").trim();
+  const current = campaign.getRunner(requestedRunId || null);
   if (!requestedRunId || current?.state?.runId === requestedRunId) return current;
   if (!body.project) throw httpError(400, "排队预览缺少 project，请重新生成预览。");
-  return campaign.restoreRunner({ runId: requestedRunId, projectId: body.project });
+  const restored = await campaign.restoreRunner({ runId: requestedRunId, projectId: body.project });
+  campaign.setRunner(restored);
+  await campaign.persistRunners?.().catch(() => {});
+  return restored;
 }
 
 export function registerCampaignRoutes(router) {
   router.post("/api/prepare", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
-    const currentRunner = campaign.getRunner();
-    const preparingBehindActiveRun = Boolean(currentRunner?.running);
-
     const body = await readJson(req);
     let project;
     let config;
@@ -247,11 +279,12 @@ export function registerCampaignRoutes(router) {
       throw httpError(400, "没有处于 OPEN 状态的 WhatsApp 号码，无法发送。请到 Settings 重新扫码或检查 Phone Health。");
     }
     const instances = selectedOpenInstances(open, body.instances);
+    const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null));
     const { startAt, endAt } = resolveSchedule(campaign, config, body);
     const leads = selectLeads(campaign, project, mode, body);
 
     const runner = campaign.createRunner(config);
-    runner.mirrorActiveState = !preparingBehindActiveRun;
+    runner.mirrorActiveState = true;
     try {
       await runner.prepare({ mode, startAt, endAt, instances, leads, project: project.name });
       runner.state.projectId = project.id;
@@ -273,7 +306,8 @@ export function registerCampaignRoutes(router) {
     } catch (error) {
       throw httpError(500, `保存 campaign 预览失败: ${error.message}`);
     }
-    if (!preparingBehindActiveRun) campaign.setRunner(runner);
+    campaign.setRunner(runner);
+    await campaign.persistRunners?.().catch(() => {});
 
     json(res, 200, {
       ok: true,
@@ -287,7 +321,6 @@ export function registerCampaignRoutes(router) {
   router.post("/api/start", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
     const body = await readJson(req);
-    const activeRunner = campaign.getRunner();
     const runner = await resolveStartRunner(campaign, body);
     ensureRunnableStart(runner, body);
     const skippedCount = applyManualSkips(runner, body.skipIds);
@@ -334,8 +367,11 @@ export function registerCampaignRoutes(router) {
       throw httpError(500, `保存 campaign 状态失败: ${error.message}`);
     }
 
+    const instanceNames = runnerInstanceNames(runner);
+    const activeConflict = conflictingRunner(campaign, instanceNames, runner.state.runId);
     const existingQueue = await campaign.queue.snapshot();
-    if ((activeRunner?.running && activeRunner !== runner) || existingQueue.count > 0) {
+    const earlierLaneBatch = queuedLaneConflict(existingQueue.items, instanceNames, runner.state.runId);
+    if (activeConflict || earlierLaneBatch) {
       runner.state.status = "QUEUED_BATCH";
       await runner.saveState();
       const queued = await campaign.queue.add(runner, { projectId: runner.state.projectId || body.project, autoAdvance });
@@ -346,7 +382,8 @@ export function registerCampaignRoutes(router) {
         flowLabel: runner.state.flowLabel || runner.state.templateFlow,
         position: queued.position,
       });
-      if (!activeRunner?.running) await startNextQueued(runtime);
+      await campaign.persistRunners?.().catch(() => {});
+      await startNextQueued(runtime);
       json(res, 200, { ok: true, queued: true, position: queued.position, queue: await campaign.queue.snapshot(), snapshot: runner.snapshot() });
       return;
     }
@@ -355,14 +392,18 @@ export function registerCampaignRoutes(router) {
     json(res, 200, { ok: true, queued: false, snapshot: runner.snapshot() });
   });
 
-  router.post("/api/resume", async (_req, res, runtime) => {
+  router.post("/api/resume", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
-    const runner = campaign.getRunner();
+    const body = await readJson(req);
+    const runner = campaign.getRunner(body.runId);
     if (!runner || !runner.state) throw httpError(400, "没有可继续的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
     const remaining = runner.state.assignments.filter((job) => job.status === "QUEUED").length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
+
+    const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId);
+    if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 
     markNotionSyncWaiting(runner);
     const autoAdvance = markFlowAdvanceWaiting(runner);
@@ -375,12 +416,15 @@ export function registerCampaignRoutes(router) {
   router.post("/api/retry-failed", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
     const body = await readJson(req);
-    const runner = campaign.getRunner();
+    const runner = campaign.getRunner(body.runId);
     if (!runner || !runner.state) throw httpError(400, "没有可补发的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
     const failed = runner.state.assignments.filter((job) => job.status === "FAILED").length;
     if (!failed) throw httpError(400, "没有失败客户需要补发。");
+
+    const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId);
+    if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 
     const queued = runner.retryFailedOnly();
     if (!queued) throw httpError(400, "没有失败客户需要补发。");
@@ -399,22 +443,33 @@ export function registerCampaignRoutes(router) {
     json(res, 200, { ok: true, retried: queued, snapshot: runner.snapshot() });
   });
 
-  router.post("/api/stop", async (_req, res, runtime) => {
+  router.post("/api/stop", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
-    const runner = campaign.getRunner();
+    const body = await readJson(req);
+    const runner = campaign.getRunner(body.runId);
     if (runner) runner.stop();
+    await campaign.persistRunners?.().catch(() => {});
     json(res, 200, { ok: true });
   });
 
-  router.get("/api/status", async (_req, res, runtime) => {
+  router.get("/api/status", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
-    const runner = campaign.getRunner();
-    json(res, 200, runner ? runner.snapshot() : campaign.emptySnapshot());
+    const requestUrl = new URL(req.url, "http://127.0.0.1");
+    const runner = campaign.getRunner(requestUrl.searchParams.get("runId"));
+    const snapshot = runner ? runner.snapshot() : campaign.emptySnapshot();
+    snapshot.runs = campaignRunners(campaign)
+      .filter((item) => item?.state)
+      .map((item) => {
+        const lane = item.snapshot();
+        if (lane.state) lane.state = { ...lane.state, assignments: [] };
+        return lane;
+      });
+    json(res, 200, snapshot);
   });
 
   router.get("/api/campaign-queue", async (_req, res, runtime) => {
     const campaign = requireCampaign(runtime);
-    if (!campaign.getRunner()?.running) await startNextQueued(runtime);
+    await startNextQueued(runtime);
     json(res, 200, { ok: true, queue: await campaign.queue.snapshot() });
   });
 
@@ -435,9 +490,10 @@ export function registerCampaignRoutes(router) {
     json(res, 200, { ok: true, result, queue: await campaign.queue.snapshot() });
   });
 
-  router.get("/api/export", async (_req, res, runtime) => {
+  router.get("/api/export", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
-    const runner = campaign.getRunner();
+    const requestUrl = new URL(req.url, "http://127.0.0.1");
+    const runner = campaign.getRunner(requestUrl.searchParams.get("runId"));
     if (!runner || !runner.state) throw httpError(404, "没有可导出的 run。");
     res.writeHead(200, {
       "Content-Type": "text/csv; charset=utf-8",

@@ -11,6 +11,7 @@ import { loadRuntime } from "./app/loadRuntime.mjs";
 import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
+import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
@@ -18,6 +19,7 @@ import { createNotionService } from "./lib/notion-service.mjs";
 import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
 import { createProjectService } from "./lib/project-service.mjs";
 import { createReplyServiceManager } from "./lib/reply-service-manager.mjs";
+import { createRemoteMambaService } from "./lib/remote-mamba-service.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createTemplateService } from "./lib/template-service.mjs";
@@ -88,6 +90,20 @@ const configuredBrainDb = (name, fallback) => String(notionConfig?.databases?.[n
 const settingsService = createSettingsService({ env, envPath, getNotionToken: notionTokenValue, notion });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
+const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
+const remoteMambaService = createRemoteMambaService({ rootDir: paths.rootDir, consolePort: PORT });
+
+function setCurrentRunner(value, { latest = true } = {}) {
+  if (!value) return;
+  if (runner && runner !== value) runner.mirrorActiveState = false;
+  runner = value;
+  value.mirrorActiveState = latest;
+  campaignRunnerRegistry.register(value, { latest });
+}
+
+function getCampaignRunner(runId = null) {
+  return campaignRunnerRegistry.get(runId) || (!runId ? runner : null);
+}
 const replyServiceManager = createReplyServiceManager({
   rootDir: paths.rootDir,
   onLog: (message) => console.log(message),
@@ -197,7 +213,7 @@ const dailyCampaignService = createDailyCampaignService({
   flowSequence: FLOW_SEQUENCE,
   replyServices: replyServiceManager,
   openInstances: () => openInstances(api),
-  getRunner: () => runner,
+  getRunner: () => campaignRunnerRegistry.list().find((item) => item?.running) || runner,
   queue: campaignQueueService,
   systemLogs: systemLogService,
   postOps: telegramHub.hasOps ? (text) => telegramHub.postOps(text) : null,
@@ -217,11 +233,11 @@ const dailyCampaignService = createDailyCampaignService({
     });
     await localJson("/api/next-flow/apply-templates", {
       method: "POST",
-      body: JSON.stringify({ projectName: batch.project, flow: batch.flow }),
+      body: JSON.stringify({ projectName: batch.project, flow: batch.flow, runId: prepared?.snapshot?.state?.runId }),
     });
     const started = await localJson("/api/start", {
       method: "POST",
-      body: JSON.stringify({ optIn: true, overrides: [] }),
+      body: JSON.stringify({ optIn: true, overrides: [], project: project.id, runId: prepared?.snapshot?.state?.runId }),
     });
     return { runId: prepared?.snapshot?.state?.runId || prepared?.snapshot?.runId || null, queued: started.queued === true };
   },
@@ -237,12 +253,13 @@ const runtime = await loadRuntime({
   appDir,
   paths,
   handlers,
-  getRunner: () => runner,
+  getRunner: () => campaignRunnerRegistry.list().find((item) => item?.running) || runner,
   systemLogs: systemLogService,
   settings: settingsService,
   telegramFilters: telegramFilterService,
   replyServices: replyServiceManager,
   dailyCampaign: dailyCampaignService,
+  remoteMamba: remoteMambaService,
   projects: {
     alias: notionConfig?.projectAlias || {},
     firstFlowLabel: FIRST_FLOW_LABEL,
@@ -357,8 +374,10 @@ const runtime = await loadRuntime({
   },
   campaign: {
     env,
-    getRunner: () => runner,
-    setRunner: (value) => { runner = value; },
+    getRunner: (runId = null) => getCampaignRunner(runId),
+    listRunners: () => campaignRunnerRegistry.list(),
+    setRunner: (value, options) => setCurrentRunner(value, options),
+    persistRunners: () => campaignRunnerRegistry.persist(),
     getLeadsCache: () => leadsCache,
     getProject,
     openInstances: () => openInstances(api),
@@ -406,7 +425,8 @@ const runtime = await loadRuntime({
     classifyReplyText,
     systemLogs: systemLogService,
     incPageNumber,
-    getRunner: () => runner,
+    getRunner: (runId = null) => getCampaignRunner(runId),
+    listRunners: () => campaignRunnerRegistry.list(),
     getProject,
     setLeadsCache: (value) => { leadsCache = value; },
     flowByLabel,
@@ -418,51 +438,76 @@ const runtime = await loadRuntime({
 const server = http.createServer(createApp(runtime));
 
 async function restoreActiveCampaign() {
-  let saved;
+  let index;
   try {
-    saved = JSON.parse(await fs.readFile(path.join(paths.dataDir, "active-run.json"), "utf8"));
+    index = await campaignRunnerRegistry.loadIndex();
   } catch (error) {
-    if (error?.code !== "ENOENT") console.log(`Active campaign recovery read failed: ${error.message}`);
-    return null;
+    console.log(`Active campaign registry recovery read failed: ${error.message}`);
+    index = { latestRunId: null, runs: [] };
   }
-  if (saved?.mode !== "LIVE" || !saved?.runId) return null;
-  const projectId = saved.projectId || saved.campaignId;
-  if (!projectId) {
-    console.log(`Active campaign ${saved.runId} cannot recover: missing projectId/campaignId.`);
-    return null;
+
+  if (!index.runs.length) {
+    try {
+      const saved = JSON.parse(await fs.readFile(path.join(paths.dataDir, "active-run.json"), "utf8"));
+      if (saved?.runId) index.runs = [{
+        runId: saved.runId,
+        projectId: saved.projectId || saved.campaignId,
+        mode: saved.mode,
+        status: saved.status,
+      }];
+    } catch (error) {
+      if (error?.code !== "ENOENT") console.log(`Legacy active campaign recovery read failed: ${error.message}`);
+    }
   }
-  try {
-    const restored = await runtime.campaign.restoreRunner({ runId: saved.runId, projectId });
-    runner = restored;
-    if (saved.status === "RUNNING") {
-      restored.state.status = "INTERRUPTED";
-      restored.pushLog("检测到上次运行期间服务中断。已停止自动发送；请人工检查后再按 Resume。已发送记录不会重发。");
-      await restored.saveState();
+
+  const results = [];
+  for (const saved of index.runs) {
+    if (!saved?.runId) continue;
+    const projectId = saved.projectId || saved.campaignId;
+    if (!projectId) {
+      console.log(`Active campaign ${saved.runId} cannot recover: missing projectId/campaignId.`);
+      continue;
+    }
+    try {
+      const restored = await runtime.campaign.restoreRunner({ runId: saved.runId, projectId });
+      const latest = saved.runId === index.latestRunId || !runner;
+      setCurrentRunner(restored, { latest });
+      if (saved.status === "RUNNING" || restored.state.status === "RUNNING") {
+        restored.state.status = "INTERRUPTED";
+        restored.pushLog("检测到上次运行期间服务中断。已停止自动发送；请人工检查后再按 Resume。已发送记录不会重发。");
+        await restored.saveState();
+        await systemLogService.write({
+          level: "warn",
+          area: "campaign",
+          event: "campaign_interrupted_recovered",
+          message: "Recovered an interrupted campaign without resuming sends.",
+          context: { runId: saved.runId, project: saved.project || null },
+        }).catch(() => {});
+        results.push({ runId: saved.runId, restored: true, interrupted: true });
+        continue;
+      }
+      const recovery = await runtime.campaign.recoverPendingUpdates(restored);
+      if (recovery?.recovered) {
+        console.log(`Recovered pending Notion update for ${saved.runId}: ${recovery.kind} ${recovery.status || ""}`);
+      }
+      results.push({ runId: saved.runId, restored: true, recovery });
+    } catch (error) {
+      console.log(`Active campaign recovery failed (${saved.runId}): ${error.message}`);
       await systemLogService.write({
-        level: "warn",
+        level: "error",
         area: "campaign",
-        event: "campaign_interrupted_recovered",
-        message: "Recovered an interrupted campaign without resuming sends.",
-        context: { runId: saved.runId, project: saved.project || null },
+        event: "campaign_recovery_failed",
+        message: "Could not restore pending campaign/Notion state after restart.",
+        context: { runId: saved.runId, error: error.message },
       }).catch(() => {});
-      return { restored: true, interrupted: true };
     }
-    const recovery = await runtime.campaign.recoverPendingUpdates(restored);
-    if (recovery?.recovered) {
-      console.log(`Recovered pending Notion update for ${saved.runId}: ${recovery.kind} ${recovery.status || ""}`);
-    }
-    return { restored: true, recovery };
-  } catch (error) {
-    console.log(`Active campaign recovery failed: ${error.message}`);
-    await systemLogService.write({
-      level: "error",
-      area: "campaign",
-      event: "campaign_recovery_failed",
-      message: "Could not restore pending campaign/Notion state after restart.",
-      context: { runId: saved.runId, error: error.message },
-    }).catch(() => {});
-    return null;
   }
+  if (index.latestRunId) {
+    const latest = campaignRunnerRegistry.get(index.latestRunId);
+    if (latest) setCurrentRunner(latest, { latest: true });
+  }
+  await campaignRunnerRegistry.persist().catch(() => {});
+  return results;
 }
 
 server.on("error", (error) => {
@@ -499,6 +544,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     replyServiceManager.stopManaged();
     outboundFollowUpService.stop();
     dailyCampaignService.stop();
+    remoteMambaService.stop();
     server.close(() => process.exit(0));
   });
 }

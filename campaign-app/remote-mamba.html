@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Remote Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<script src="/assets/mamba-shell.js" defer></script>
+<style>
+  .wrap { max-width: 900px; }
+  .hero { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:20px; }
+  .hero h1 { margin:0; font-size:22px; }
+  .hero p { margin:5px 0 0; color:var(--muted); font-size:13px; }
+  .state { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid var(--line); border-radius:var(--radius-full); background:var(--panel-2); font-weight:700; font-size:12px; }
+  .state i { width:9px; height:9px; border-radius:50%; background:var(--faint); }
+  .state.connecting i { background:var(--amber); animation:pulse 1s infinite; }
+  .state.connected i { background:var(--green); box-shadow:0 0 0 4px var(--green-bg); }
+  .state.error i { background:var(--red); }
+  @keyframes pulse { 50% { opacity:.35; } }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .ports { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .fld input { min-height:44px; }
+  .check { display:flex; align-items:flex-start; gap:10px; margin:6px 0 18px; color:var(--text); }
+  .check input { margin-top:3px; width:16px; height:16px; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; }
+  .actions .primary { min-width:210px; }
+  .message { margin-top:14px; min-height:20px; color:var(--muted); font-size:13px; line-height:1.55; overflow-wrap:anywhere; }
+  .message.ok { color:var(--green); }
+  .message.err { color:var(--red); }
+  .open-panel { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:14px; align-items:center; margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
+  .open-panel b { display:block; }
+  .open-panel small { color:var(--muted); overflow-wrap:anywhere; }
+  .guide { display:grid; gap:10px; margin:0; padding:0; list-style:none; counter-reset:guide; }
+  .guide li { display:grid; grid-template-columns:28px minmax(0,1fr); gap:11px; align-items:start; color:var(--muted); font-size:13px; line-height:1.55; }
+  .guide li::before { counter-increment:guide; content:counter(guide); display:flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:7px; border:1px solid var(--line); background:var(--panel-2); color:var(--green); font-weight:800; }
+  .security { margin-top:14px; padding:11px 13px; border-left:3px solid var(--blue); background:var(--panel-2); color:var(--muted); font-size:12px; }
+  @media (max-width:680px) {
+    .hero { flex-direction:column; }
+    .form-grid, .ports, .open-panel { grid-template-columns:1fr; }
+    .actions { flex-direction:column; }
+    .actions .btn, .open-panel .btn { width:100%; }
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="hero">
+    <div><h1>Remote Mamba</h1><p>从这台电脑安全映射并打开另一台 Mac 的 Mamba。</p></div>
+    <span class="state" id="state"><i></i><span>Checking</span></span>
+  </header>
+
+  <section class="card">
+    <h2>Remote Mac</h2>
+    <div class="form-grid">
+      <label class="fld"><span>远程 Mac 名称 / Tailscale 地址</span><input id="host" type="text" autocomplete="off" placeholder="home-mac 或 100.x.x.x" /></label>
+      <label class="fld"><span>远程 Mac 用户名</span><input id="username" type="text" autocomplete="username" placeholder="liuyichen" /></label>
+    </div>
+    <div class="ports">
+      <label class="fld"><span>本机映射端口</span><input id="localPort" type="number" min="1" max="65535" value="18787" /></label>
+      <label class="fld"><span>远程 Mamba 端口</span><input id="remotePort" type="number" min="1" max="65535" value="8787" /></label>
+    </div>
+    <label class="check"><input id="restartWatchdog" type="checkbox" checked /><span>连接时先启动 / 重启远程 Mamba Watchdog</span></label>
+    <div class="actions">
+      <button class="btn primary" id="connect">连接并启动 Remote Mamba</button>
+      <button class="btn danger" id="stop" disabled>停止映射</button>
+    </div>
+    <div class="message" id="message"></div>
+    <div class="open-panel hidden" id="openPanel">
+      <div><b>远程 Control Center 已映射</b><small id="openUrl"></small></div>
+      <button class="btn" id="openRemote">打开 Remote Mamba</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>首次使用</h2>
+    <ol class="guide">
+      <li><span>两台 Mac 登录同一个 Tailscale 私人网络。</span></li>
+      <li><span>远程 Mac 开启「系统设置 > 通用 > 共享 > 远程登录」。</span></li>
+      <li><span>先在 Terminal 使用 SSH Key 成功登录一次。这个页面不会储存密码。</span></li>
+      <li><span>远程 Mac 双击安装过 Mamba Watchdog 后，再回这里按连接。</span></li>
+    </ol>
+    <div class="security">这里只保存机器名称、用户名和端口，资料位于本机并被 Git 忽略。Mamba 不会开放到公网。</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null;
+
+function setBusy(busy) {
+  $("connect").disabled = busy;
+  $("connect").textContent = busy ? "正在连接..." : "连接并启动 Remote Mamba";
+}
+
+function render(remote) {
+  current = remote;
+  const config = remote.config || {};
+  if (document.activeElement?.tagName !== "INPUT") {
+    $("host").value = config.host || "";
+    $("username").value = config.username || "";
+    $("localPort").value = config.localPort || 18787;
+    $("remotePort").value = config.remotePort || 8787;
+    $("restartWatchdog").checked = config.restartWatchdog !== false;
+  }
+  const status = remote.status || "disconnected";
+  $("state").className = `state ${status}`;
+  $("state").querySelector("span").textContent = ({ connected:"Connected", connecting:"Connecting", error:"Needs attention", disconnected:"Disconnected" })[status] || status;
+  $("stop").disabled = !["connected", "connecting", "error"].includes(status);
+  $("openPanel").classList.toggle("hidden", status !== "connected");
+  $("openUrl").textContent = remote.openUrl || "";
+  const message = remote.error || remote.warning || (status === "connected" ? "远程 Mamba 已连接，可以安全打开。" : "填写资料后按一次连接。 ");
+  $("message").textContent = message;
+  $("message").className = `message ${remote.error ? "err" : status === "connected" ? "ok" : ""}`;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers:{ "Content-Type":"application/json", ...(options.headers || {}) } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+async function load() {
+  try {
+    const data = await api("/api/remote-mamba");
+    render(data.remote);
+  } catch (error) {
+    render({ config:{}, status:"error", error:error.message, openUrl:"" });
+  }
+}
+
+$("connect").addEventListener("click", async () => {
+  setBusy(true);
+  $("message").className = "message";
+  $("message").textContent = "正在启动远程 Watchdog 并建立安全映射...";
+  try {
+    const data = await api("/api/remote-mamba/connect", {
+      method:"POST",
+      body:JSON.stringify({
+        host:$("host").value,
+        username:$("username").value,
+        localPort:Number($("localPort").value),
+        remotePort:Number($("remotePort").value),
+        restartWatchdog:$("restartWatchdog").checked,
+      }),
+    });
+    render(data.remote);
+  } catch (error) {
+    $("message").textContent = error.message;
+    $("message").className = "message err";
+  } finally {
+    setBusy(false);
+  }
+});
+
+$("stop").addEventListener("click", async () => {
+  try {
+    const data = await api("/api/remote-mamba/stop", { method:"POST", body:"{}" });
+    render(data.remote);
+  } catch (error) {
+    $("message").textContent = error.message;
+    $("message").className = "message err";
+  }
+});
+
+$("openRemote").addEventListener("click", () => {
+  if (current?.openUrl) window.open(current.openUrl, "_blank", "noopener");
+});
+
+load();
+setInterval(() => { if (current?.status === "connected") load(); }, 30000);
+</script>
+</body>
+</html>

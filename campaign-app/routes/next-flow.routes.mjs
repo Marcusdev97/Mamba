@@ -324,9 +324,10 @@ export async function fetchInstanceMessagesDeep(nextFlow, instanceName, sinceMs,
 }
 
 export function registerNextFlowRoutes(router) {
-  router.post("/api/next-flow/scan-replies", async (_req, res, runtime) => {
+  router.post("/api/next-flow/scan-replies", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
-    const runner = nextFlow.getRunner();
+    const body = await readJson(req);
+    const runner = nextFlow.getRunner(body.runId);
     if (!runner || !runner.state) {
       json(res, 200, { ok: true, replies: [] });
       return;
@@ -585,8 +586,6 @@ export function registerNextFlowRoutes(router) {
 
   router.post("/api/next-flow/load", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
-    const runner = nextFlow.getRunner();
-    if (runner && runner.running) throw httpError(409, "campaign 正在运行，请先停止。");
     const replySafety = await currentReplySafety(runtime);
     if (!replySafety.safeToSend) {
       throw httpError(409, `回复安全检查已过期。Tracker 超过 ${replySafety.maxAgeMinutes} 分钟没有更新，请先按「Refresh + Check WhatsApp」完成深度扫描。`);
@@ -787,11 +786,11 @@ export function registerNextFlowRoutes(router) {
   router.post("/api/next-flow/apply-templates", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
     requireBlastDatabase(nextFlow);
-    const runner = nextFlow.getRunner();
+    const body = await readJson(req);
+    const runner = nextFlow.getRunner(body.runId);
     if (!runner || !runner.state) throw httpError(400, "请先 prepare。");
     if (runner.running) throw httpError(409, "campaign 正在运行。");
 
-    const body = await readJson(req);
     const projectName = String(body.projectName ?? "").trim();
     const flow = String(body.flow ?? "").trim();
     if (!projectName || !flow) throw httpError(400, "缺少 projectName 或 flow。");

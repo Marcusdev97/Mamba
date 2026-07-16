@@ -17,7 +17,7 @@ function fakeRunner(runId, overrides = {}) {
       project: "Binastra",
       flowLabel: "Flow 1 - Project Template",
       mode: "TEST",
-      assignments: [{ id: `${runId}-1` }, { id: `${runId}-2` }],
+      assignments: [{ id: `${runId}-1`, instanceName: "wa_01" }, { id: `${runId}-2`, instanceName: "wa_01" }],
       ...overrides,
     },
   };
@@ -46,6 +46,7 @@ const restoredSnapshot = await restoredQueue.snapshot();
 assert.equal(restoredSnapshot.count, 2, "queue must survive a server restart");
 assert.equal(restoredSnapshot.items[0].runId, "run_flow2");
 assert.equal(restoredSnapshot.items[1].runId, "run_flow1");
+assert.deepEqual(restoredSnapshot.items[0].instanceNames, ["wa_01"], "queue must preserve occupied sender lanes");
 assert.equal(restoredSnapshot.hold.runId, "run_active");
 
 await restoredQueue.clearHold();

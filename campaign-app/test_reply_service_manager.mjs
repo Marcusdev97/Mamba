@@ -23,6 +23,7 @@ const manager = createReplyServiceManager({
   probe: fakeProbe,
   spawnProcess: fakeSpawn,
   onLog: () => {},
+  downConfirmDelayMs: 0,
 });
 
 const status = await manager.ensureStarted();
@@ -32,6 +33,24 @@ assert.ok(started[0].includes("--no-webhook"), "tracker must never own the webho
 
 await manager.ensureStarted();
 assert.equal(started.length, 2, "online services must not be started twice");
+
+let trackerProbeCount = 0;
+const transientManager = createReplyServiceManager({
+  rootDir: "/tmp/mamba-test",
+  probe: async (url) => {
+    if (url.includes("8798")) {
+      trackerProbeCount += 1;
+      return trackerProbeCount > 1;
+    }
+    return true;
+  },
+  spawnProcess: fakeSpawn,
+  onLog: () => {},
+  downConfirmDelayMs: 0,
+});
+await transientManager.ensureStarted();
+assert.equal(started.length, 2, "one transient health timeout must not start a duplicate reply service");
+transientManager.stopManaged();
 
 manager.stopManaged();
 console.log("✅ all reply-service manager tests passed");

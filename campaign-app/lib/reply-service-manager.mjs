@@ -22,6 +22,7 @@ export function createReplyServiceManager({
   probe = defaultProbe,
   spawnProcess = spawn,
   onLog = (message) => console.log(message),
+  downConfirmDelayMs = 500,
 } = {}) {
   const children = new Map();
   let lastStatus = { tracker: false, brain: false, checkedAt: null };
@@ -70,16 +71,22 @@ export function createReplyServiceManager({
     return lastStatus;
   }
 
+  async function confirmedOffline(url) {
+    if (await probe(url)) return false;
+    await delay(downConfirmDelayMs);
+    return !(await probe(url));
+  }
+
   async function ensureOnce() {
     let current = await status();
-    if (!current.tracker) {
+    if (!current.tracker && await confirmedOffline(TRACKER_URL)) {
       start("reply-tracker", "blaster_tracker.mjs", ["--no-webhook"]);
       const ready = await waitFor(TRACKER_URL);
       if (!ready) onLog("[reply-tracker:error] did not become ready on port 8798.");
     }
 
     current = await status();
-    if (!current.brain) {
+    if (!current.brain && await confirmedOffline(BRAIN_URL)) {
       start("sales-brain", "brain_service.mjs");
       const ready = await waitFor(BRAIN_URL, 12000);
       if (!ready) onLog("[sales-brain:error] did not become ready on port 8799. Telegram reply alerts are offline.");

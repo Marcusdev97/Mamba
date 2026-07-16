@@ -44,16 +44,24 @@
     background: #1f2937; color: #e5e7eb; font: inherit; cursor: pointer; white-space: nowrap;
   }
   .queuebar button.danger { border-color: #7f1d1d; color: #fca5a5; }
+  .campaign-monitors { display: grid; border-bottom: 1px solid var(--line, #1f2a3d); background: #0b1018; }
   .campaign-monitor {
     display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(300px, 2fr);
-    gap: 18px; padding: 12px 18px; border-bottom: 1px solid var(--line, #1f2a3d);
+    gap: 18px; padding: 12px 18px; border-bottom: 1px solid #1b2636;
     background: #0b1018; color: #e5e7eb;
   }
+  .campaign-monitor:last-child { border-bottom: 0; }
   .monitor-summary { min-width: 0; display: grid; align-content: center; gap: 7px; }
   .monitor-kicker { color: #94a3b8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
   .monitor-title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .monitor-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 800; }
   .monitor-percent { margin-left: auto; color: #2dd36f; font-size: 17px; font-weight: 800; }
+  .monitor-sender { color: #7dd3fc; font-size: 12px; font-weight: 800; white-space: nowrap; }
+  .lane-stop {
+    border: 1px solid #7f1d1d; border-radius: 6px; padding: 4px 8px;
+    background: #241216; color: #fca5a5; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
+  }
+  .lane-stop:disabled { opacity: .4; cursor: default; }
   .monitor-track { height: 7px; overflow: hidden; border-radius: 4px; background: #243041; }
   .monitor-track span {
     display: block; width: 0; height: 100%; border-radius: inherit;
@@ -148,27 +156,7 @@
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
   </div>
-  <section class="campaign-monitor" aria-label="Campaign live progress">
-    <div class="monitor-summary">
-      <div class="monitor-kicker" id="monitorKicker">Campaign Ready</div>
-      <div class="monitor-title-row">
-        <div class="monitor-title" id="monitorTitle">没有正在运行的 Batch</div>
-        <div class="monitor-percent" id="monitorPercent">0%</div>
-      </div>
-      <div class="monitor-track" id="monitorTrack"><span id="monitorFill"></span></div>
-      <div class="monitor-meta">
-        <span>完成 <b id="monitorDone">0</b></span>
-        <span>等待 <b id="monitorWaiting">0</b></span>
-        <span>失败 <b id="monitorFailed">0</b></span>
-      </div>
-    </div>
-    <div class="flow-steps">
-      <div class="flow-step" id="stepPrepared"><small>01 Prepared</small><strong id="stepPreparedText">等待 Batch</strong></div>
-      <div class="flow-step" id="stepSending"><small>02 Sending</small><strong id="stepSendingText">尚未开始</strong></div>
-      <div class="flow-step" id="stepNotion"><small>03 Notion</small><strong id="stepNotionText">等待发送完成</strong></div>
-      <div class="flow-step" id="stepQueue"><small>04 Next Batch</small><strong id="stepQueueText">Queue 空</strong></div>
-    </div>
-  </section>
+  <section class="campaign-monitors" id="campaignMonitors" aria-label="Campaign live progress"></section>
   <div class="frames">
     <iframe id="frame-flow1" src="/"></iframe>
     <iframe id="frame-next" class="hidden" data-src="/next-flow"></iframe>
@@ -213,16 +201,27 @@ const terminalStatuses = new Set([
   "SKIPPED_SUPPRESSED", "SKIPPED_REPLIED", "PART1_ONLY_END_TIME",
 ]);
 
-function setStep(id, state, text) {
-  const element = document.getElementById(id);
-  element.classList.remove("active", "done", "held");
-  if (state) element.classList.add(state);
-  const strong = element.querySelector("strong");
-  if (strong) strong.textContent = text;
+function monitorEscape(value) {
+  return String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
 }
 
 function renderCampaignMonitor(status, queue) {
-  const state = status?.state || null;
+  const supplied = Array.isArray(status?.runs) ? status.runs : [];
+  const runs = supplied.length ? supplied : (status?.state ? [status] : []);
+  const container = document.getElementById("campaignMonitors");
+  if (!runs.length) {
+    container.innerHTML = '<div class="campaign-monitor"><div class="monitor-summary"><div class="monitor-kicker">Campaign Ready</div><div class="monitor-title">没有正在运行的 Batch</div><div class="monitor-track"><span style="width:0"></span></div></div><div class="flow-steps"><div class="flow-step"><small>01 Prepared</small><strong>等待 Batch</strong></div><div class="flow-step"><small>02 Sending</small><strong>尚未开始</strong></div><div class="flow-step"><small>03 Notion</small><strong>等待发送完成</strong></div><div class="flow-step"><small>04 Next Batch</small><strong>Queue 空</strong></div></div></div>';
+    return;
+  }
+  const visibleRuns = runs
+    .filter((item) => item?.state)
+    .sort((a, b) => Number(b.running) - Number(a.running) || String(b.state?.updatedAt || "").localeCompare(String(a.state?.updatedAt || "")))
+    .slice(0, 6);
+  container.innerHTML = visibleRuns.map((run) => renderCampaignLane(run, queue)).join("");
+}
+
+function renderCampaignLane(status, queue) {
+  const state = status?.state || {};
   const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
   const summary = state?.summary || {};
   const total = Number(state?.total || assignments.length || 0);
@@ -238,27 +237,38 @@ function renderCampaignMonitor(status, queue) {
   const notionStatus = String(state?.advanceStatus || state?.notionSync?.status || "").toUpperCase();
   const notionBusy = ["WAITING", "RUNNING"].includes(notionStatus);
   const notionFailed = ["FAILED", "PARTIAL"].includes(notionStatus);
-  const queueFirst = queue?.items?.[0] || null;
-
-  document.getElementById("monitorKicker").textContent = running ? "Campaign Running" : state ? "Latest Campaign" : "Campaign Ready";
-  document.getElementById("monitorTitle").textContent = state
-    ? [project, flow, state.mode].filter(Boolean).join(" · ")
-    : "没有正在运行的 Batch";
-  document.getElementById("monitorPercent").textContent = percent + "%";
-  document.getElementById("monitorFill").style.width = percent + "%";
-  document.getElementById("monitorTrack").classList.toggle("running", running);
-  document.getElementById("monitorDone").textContent = done;
-  document.getElementById("monitorWaiting").textContent = waiting;
-  document.getElementById("monitorFailed").textContent = failed;
-
-  setStep("stepPrepared", state ? "done" : "", state ? `${total} 人 · ${state.mode}` : "等待 Batch");
-  setStep("stepSending", running ? "active" : state?.status === "COMPLETED" ? "done" : state?.status === "STOPPED" ? "held" : "",
-    running ? `${done}/${total} 正在发送` : state?.status === "STOPPED" ? "已停止" : state?.status === "COMPLETED" ? "发送完成" : "尚未开始");
-  setStep("stepNotion", notionFailed ? "held" : notionBusy ? "active" : notionStatus === "SUCCEEDED" ? "done" : "",
-    notionFailed ? `需要检查 · ${notionStatus}` : notionBusy ? `更新中 · ${notionStatus}` : notionStatus === "SUCCEEDED" ? "已同步" : "等待发送完成");
-  setStep("stepQueue", queue?.hold ? "held" : queueFirst ? "active" : "",
-    queue?.hold ? "Queue 已暂停" : queueFirst ? `${queue.count} 批 · ${queueFirst.project || queueFirst.projectId}` : "Queue 空");
+  const senders = [...new Set([
+    ...assignments.map((item) => item.instanceKey || item.instanceName),
+    ...Object.keys(state.perSender || {}),
+  ].filter(Boolean))];
+  const laneQueue = (queue?.items || []).find((item) => (item.instanceNames || []).some((name) => senders.includes(name)));
+  const sendingClass = running ? "active" : state.status === "COMPLETED" ? "done" : ["STOPPED", "INTERRUPTED"].includes(state.status) ? "held" : "";
+  const notionClass = notionFailed ? "held" : notionBusy ? "active" : notionStatus === "SUCCEEDED" ? "done" : "";
+  const queueClass = laneQueue ? "active" : "";
+  return `<article class="campaign-monitor" data-run-id="${monitorEscape(state.runId)}">
+    <div class="monitor-summary">
+      <div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">${monitorEscape(senders.join(" + ") || "No sender")}</span></div>
+      <div class="monitor-title-row"><div class="monitor-title">${monitorEscape([project, flow, state.mode].filter(Boolean).join(" · "))}</div><div class="monitor-percent">${percent}%</div></div>
+      <div class="monitor-track ${running ? "running" : ""}"><span style="width:${percent}%"></span></div>
+      <div class="monitor-meta"><span>完成 <b>${done}</b></span><span>等待 <b>${waiting}</b></span><span>失败 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
+    </div>
+    <div class="flow-steps">
+      <div class="flow-step done"><small>01 Prepared</small><strong>${total} 人 · ${monitorEscape(state.mode)}</strong></div>
+      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? `${done}/${total} 正在发送` : state.status === "COMPLETED" ? "发送完成" : ["STOPPED", "INTERRUPTED"].includes(state.status) ? "已停止" : monitorEscape(state.status || "尚未开始")}</strong></div>
+      <div class="flow-step ${notionClass}"><small>03 Notion</small><strong>${notionFailed ? `需要检查 · ${notionStatus}` : notionBusy ? `更新中 · ${notionStatus}` : notionStatus === "SUCCEEDED" ? "已同步" : "等待发送完成"}</strong></div>
+      <div class="flow-step ${queueClass}"><small>04 This Sender Queue</small><strong>${laneQueue ? `${laneQueue.position}. ${monitorEscape(laneQueue.flowLabel)}` : "Queue 空"}</strong></div>
+    </div>
+  </article>`;
 }
+
+document.getElementById("campaignMonitors").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-stop-run]");
+  if (!button || button.disabled) return;
+  if (!confirm("只停止这个号码正在跑的 Campaign？另一个号码会继续发送。")) return;
+  const response = await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: button.dataset.stopRun }) });
+  const data = await response.json().catch(() => ({}));
+  if (!data.ok) alert(data.error || "停止失败。");
+});
 
 function hideSyncOverlay() {
   document.getElementById("syncOverlay").classList.add("hidden");
@@ -340,8 +350,11 @@ async function pollRunning() {
     const r = await fetch("/api/status", { cache: "no-store" });
     const d = await r.json().catch(() => ({}));
     latestCampaignStatus = d;
-    const running = d?.status === "RUNNING" || d?.state?.status === "RUNNING" || d?.running === true;
-    document.getElementById("tab-flow1").classList.toggle("running", Boolean(running));
+    const runs = Array.isArray(d?.runs) ? d.runs : [d];
+    const runningFlow1 = runs.some((item) => item?.running && !item?.state?.flowLabel);
+    const runningNext = runs.some((item) => item?.running && item?.state?.flowLabel);
+    document.getElementById("tab-flow1").classList.toggle("running", runningFlow1);
+    document.getElementById("tab-next").classList.toggle("running", runningNext);
     renderNotionSync(d?.state?.notionSync, d?.state?.runId);
   } catch { /* console 自己会显示, 这里只是点缀 */ }
   await refreshCampaignQueue();

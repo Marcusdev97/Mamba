@@ -140,6 +140,11 @@ export function registerControlCenterRoutes(router) {
     const activeBrain = listProjects();
     const replyServices = await runtime.replyServices?.status?.().catch(() => ({ tracker: false, brain: false }))
       || { tracker: false, brain: false };
+    const watchdog = await readJson(path.join(root, "campaign-data", "watchdog", "status.json"), null);
+    const watchdogAgeSeconds = watchdog?.heartbeatAt
+      ? Math.max(0, Math.round((Date.now() - dateMs(watchdog.heartbeatAt)) / 1000))
+      : null;
+    const watchdogFresh = watchdogAgeSeconds !== null && watchdogAgeSeconds <= 120;
 
     const queue = [
       { id: "overdue", label: "Overdue follow-ups", count: metrics.overdue, tone: "red", href: "/follow-up?bucket=overdue" },
@@ -174,6 +179,7 @@ export function registerControlCenterRoutes(router) {
         { id: "telegram", label: "Telegram Approval", ok: Boolean(settings.telegram?.botConfigured && settings.telegram?.chatConfigured), detail: settings.telegram?.chatConfigured ? "Bot and chat configured" : "Setup incomplete" },
         { id: "tracker", label: "Reply Tracker", ok: replyServices.tracker, detail: replyServices.tracker ? "Listening for inbound replies" : "Offline · replies will not reach Notion or Telegram" },
         { id: "brain", label: "Sales Brain", ok: replyServices.brain, detail: replyServices.brain ? `${settings.brain?.provider || "rules"} · Telegram alerts online` : "Offline · Telegram alerts unavailable" },
+        { id: "watchdog", label: "Remote Watchdog", ok: watchdogFresh, detail: watchdogFresh ? `${watchdog.deviceName || "This Mac"} · checked ${watchdogAgeSeconds}s ago` : "Not installed or heartbeat is stale" },
       ],
       logs: { errorsToday, warningsToday },
     });

@@ -13,6 +13,7 @@ import { registerLookupRoutes } from "../routes/lookup.routes.mjs";
 import { registerNextFlowRoutes } from "../routes/next-flow.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerProjectBrainRoutes } from "../routes/project-brain.routes.mjs";
+import { registerRemoteMambaRoutes } from "../routes/remote-mamba.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
 import { registerSystemLogsRoutes } from "../routes/system-logs.routes.mjs";
@@ -24,6 +25,7 @@ export function createApp(runtime) {
   registerSettingsRoutes(router);
   registerProjectsRoutes(router);
   registerProjectBrainRoutes(router);
+  registerRemoteMambaRoutes(router);
   registerControlCenterRoutes(router);
   registerDailyCampaignRoutes(router);
   registerInstancesRoutes(router);

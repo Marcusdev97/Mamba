@@ -411,10 +411,11 @@ async function doSend(mode, proj, rows, flow, limitCount) {
     const endTime = document.getElementById("endTime").value.trim();
     const prep = { project: proj.id, mode, instances, startTime, endTime };
     if (mode === "LIVE" && limitCount && limitCount < rows.length) prep.leadCount = limitCount;
-    await api("/api/prepare", prep);
-    const ap = await api("/api/next-flow/apply-templates", { projectName: currentProject, flow });
+    const prepared = await api("/api/prepare", prep);
+    activeNextRunId = prepared?.snapshot?.state?.runId || null;
+    const ap = await api("/api/next-flow/apply-templates", { projectName: currentProject, flow, runId: activeNextRunId });
     toast(`套用模板 ${flow} · ${ap.languages.join("/")} · ${ap.overridden} 人`);
-    await api("/api/start", { optIn: true, overrides: {}, autoAdvance: mode === "LIVE" });
+    await api("/api/start", { optIn: true, overrides: {}, autoAdvance: mode === "LIVE", project: proj.id, runId: activeNextRunId });
     setTimeout(() => toast(mode === "LIVE" ? `已开始发送 ${flow} 🚀 发完自动推进到下一轮` : "已发测试给自己 🧪"), 800);
     setTimeout(pollStatus, 1800);
   } catch (e) { toast("发送失败:" + e.message, true); }
@@ -427,7 +428,7 @@ function hhmmss(iso) {
 async function stopSend() {
   if (!confirm("确定停止这批发送?已经发出去的会自动推进到下一轮,没发的留着下次再发。")) return;
   try {
-    await api("/api/stop", {});
+    await api("/api/stop", { runId: activeNextRunId });
     toast("已发停止指令,正在收尾并更新 Notion…");
   } catch (e) { toast("停止失败:" + e.message, true); }
 }
@@ -436,7 +437,7 @@ async function retryFailedNextFlow(count) {
   if (!count) return;
   if (!confirm(`只补发 ${count} 个 FAILED 客户?已成功/已回复/手动不发的人不会重发。timeout 客户请先确认 WhatsApp 没收到再补发。`)) return;
   try {
-    await api("/api/retry-failed", { autoAdvance: true });
+    await api("/api/retry-failed", { autoAdvance: true, runId: activeNextRunId });
     toast(`已重新排队 ${count} 个失败客户,发送成功后会自动推进 Notion。`);
     setTimeout(pollStatus, 1200);
   } catch (e) { toast("补发失败:" + e.message, true); }
@@ -445,7 +446,7 @@ async function retryFailedNextFlow(count) {
 // Real-time reply routing during a blast: scan Evolution, colour repliers red/green.
 async function scanReplies() {
   try {
-    const r = await api("/api/next-flow/scan-replies", {});
+    const r = await api("/api/next-flow/scan-replies", { runId: activeNextRunId });
     const box = document.getElementById("replyPanel");
     const reps = r.replies || [];
     if (!reps.length) { box.style.display = "none"; return; }
@@ -465,12 +466,14 @@ async function scanReplies() {
 }
 
 let wasRunning = false;      // was the run active on the previous poll?
+let activeNextRunId = null;  // 精确追踪本页启动的号码通道，不会串到另一台 WhatsApp。
 let postDoneChecks = 0;      // how many times we've polled after it stopped
 let scanTick = 0;            // throttle Evolution scans (~every 3rd poll)
 async function pollStatus() {
   const box = document.getElementById("statusPanel");
   try {
-    const s = await api("/api/status");
+    const s = await api("/api/status" + (activeNextRunId ? `?runId=${encodeURIComponent(activeNextRunId)}` : ""));
+    if (!activeNextRunId && s?.state?.flowLabel) activeNextRunId = s.state.runId;
     if (!s || !s.state) { box.style.display = "none"; return; }
     box.style.display = "";
     const a = s.state.assignments || [];

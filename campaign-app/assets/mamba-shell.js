@@ -23,6 +23,7 @@
     ] },
     { title: "System", links: [
       { code: "LG", label: "System Logs", href: "/logs", paths: ["/logs"] },
+      { code: "RM", label: "Remote Mamba", href: "/remote-mamba", paths: ["/remote-mamba"] },
       { code: "ST", label: "Settings", href: "/settings", paths: ["/settings", "/numbers"] },
     ] },
   ];

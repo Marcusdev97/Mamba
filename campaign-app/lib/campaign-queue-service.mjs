@@ -12,6 +12,7 @@ function cleanItems(value) {
       flowLabel: String(item.flowLabel || "Flow 1 - Project Template"),
       mode: item.mode === "LIVE" ? "LIVE" : "TEST",
       total: Number(item.total || 0),
+      instanceNames: [...new Set((Array.isArray(item.instanceNames) ? item.instanceNames : []).map(String).filter(Boolean))],
       autoAdvance: item.autoAdvance === true,
       queuedAt: String(item.queuedAt || new Date().toISOString()),
     }));
@@ -55,6 +56,7 @@ export function createCampaignQueueService({ rootDir, fsImpl = fs } = {}) {
       flowLabel: String(runner.state.flowLabel || runner.state.templateFlow || "Flow 1 - Project Template"),
       mode: runner.state.mode === "LIVE" ? "LIVE" : "TEST",
       total: Number(runner.state.assignments?.length || 0),
+      instanceNames: [...new Set((runner.state.assignments || []).map((job) => job.instanceKey || job.instanceName).filter(Boolean).map(String))],
       autoAdvance: autoAdvance === true,
       queuedAt: new Date().toISOString(),
     };

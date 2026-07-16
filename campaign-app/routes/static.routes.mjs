@@ -19,6 +19,7 @@ const HTML_ROUTES = {
   "/project-brain": "project-brain.html",
   "/send": "send.html",
   "/campaign-todo": "campaign-todo.html",
+  "/remote-mamba": "remote-mamba.html",
 };
 
 async function serveHtml(res, appDir, filename) {

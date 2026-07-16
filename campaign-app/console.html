@@ -467,11 +467,11 @@ $("btnStartLive").addEventListener("click", () => {
 });
 $("btnStop").addEventListener("click", async () => {
   if (!confirm("确认停止当前 campaign？已发送的不会撤回。")) return;
-  await post("/api/stop", {});
+  await post("/api/stop", { runId: preparedRunId });
 });
-$("btnExport").addEventListener("click", () => { window.location = "/api/export"; });
+$("btnExport").addEventListener("click", () => { window.location = "/api/export" + (preparedRunId ? "?runId=" + encodeURIComponent(preparedRunId) : ""); });
 $("btnResume").addEventListener("click", async () => {
-  const r = await post("/api/resume", {});
+  const r = await post("/api/resume", { runId: preparedRunId });
   if (!r.ok) { alert(r.error); return; }
   startPolling();
 });
@@ -479,7 +479,7 @@ $("btnRetryFailed").addEventListener("click", async () => {
   const count = Number($("btnRetryFailed").dataset.count || 0);
   if (!count) return;
   if (!confirm("只补发 " + count + " 个 FAILED 客户？已成功、手动跳过、客户已回复的人都不会重发。timeout 客户请先确认 WhatsApp 没收到再补发。")) return;
-  const r = await post("/api/retry-failed", {});
+  const r = await post("/api/retry-failed", { runId: preparedRunId });
   if (!r.ok) { alert(r.error); return; }
   startPolling();
 });
@@ -491,7 +491,7 @@ function startPolling() {
   statusTimer = setInterval(pollStatus, 2000);
 }
 async function pollStatus() {
-  const snap = await get("/api/status").catch(() => null);
+  const snap = await get("/api/status" + (preparedRunId ? "?runId=" + encodeURIComponent(preparedRunId) : "")).catch(() => null);
   if (!snap || !snap.state) return;
   const s = snap.state;
   const c = s.summary || {};
@@ -532,7 +532,13 @@ $("projectSel").addEventListener("change", async () => {
 loadProjects().then(refreshInstances);
 setInterval(refreshInstances, 10000); // 从 Settings / Phone Setup 回来时自动更新 senders
 // if a run is already in progress (server restarted page), show it
-get("/api/status").then((snap) => { if (snap && snap.state) { $("progressCard").classList.remove("hidden"); startPolling(); } });
+get("/api/status").then((snap) => {
+  if (snap && snap.state) {
+    preparedRunId = snap.state.runId || preparedRunId;
+    $("progressCard").classList.remove("hidden");
+    startPolling();
+  }
+});
 </script>
 </body>
 </html>
