@@ -68,8 +68,9 @@
       <h2><span class="step-no">2</span>配置</h2>
       <div class="row">
         <label class="fld"><span>开始时间（now 或 HH:MM）</span><input type="text" id="startTime" placeholder="now" /></label>
-        <label class="fld"><span>结束时间（HH:MM）</span><input type="text" id="endTime" placeholder="21:00" /></label>
+        <label class="fld"><span>结束时间（可留空）</span><input type="text" id="endTime" placeholder="留空 = 自动尽早完成" /></label>
       </div>
+      <div class="muted" style="font-size:12px;margin:-4px 0 14px;line-height:1.55">留空会按安全发送速度自动计算最早完成时间；只有你填写 <b>21:00</b>（或其他时间）时，才会把这一批平均铺到该时间。</div>
       <label class="fld"><span>模式</span></label>
       <div class="seg" id="modeSeg" style="margin-bottom:14px">
         <button data-mode="TEST" class="active">TEST</button>
@@ -392,9 +393,17 @@ function renderPreview(r) {
   const overflowChip = (s.overflow || []).length
     ? '<div class="chip" style="border-color:#f59e0b;color:#fbbf24">⚠️ 超量未排队 <b>' + s.overflow.length + ' 人</b>(全部号已到上限,留给下一批)</div>'
     : "";
+  const scheduleAuto = r.schedule.mode === "AUTO";
+  const durationMin = Number(r.schedule.estimatedMinutes) || 0;
+  const durationText = durationMin >= 60
+    ? Math.floor(durationMin / 60) + "小时" + (durationMin % 60 ? (durationMin % 60) + "分" : "")
+    : durationMin + "分钟";
+  const scheduleChip = scheduleAuto
+    ? '<div class="chip" style="border-color:#22c55e;color:#86efac">自动尽早完成 <b>约 ' + r.schedule.end + '</b>（约 ' + durationText + '）</div>'
+    : '<div class="chip">指定时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>";
   $("previewChips").innerHTML =
     '<div class="chip">模式 <b>' + s.mode + "</b></div>" +
-    '<div class="chip">时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>" +
+    scheduleChip +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
     senderChips + overflowChip +
     '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>" +

@@ -43,6 +43,13 @@
     min-width: 20px; padding: 2px 6px; border-radius: 999px;
     background: #163524; color: #4ade80; text-align: center;
   }
+  .monitor-restore {
+    min-height: 34px; padding: 7px 11px; border: 1px solid #475569; border-radius: 8px;
+    background: #18212f; color: #cbd5e1; font: inherit; font-size: 12px;
+    font-weight: 800; cursor: pointer; white-space: nowrap;
+  }
+  .monitor-restore:hover { border-color: #38bdf8; color: #f8fafc; }
+  .monitor-restore.hidden { display: none; }
   .queuebar {
     display: flex; align-items: center; gap: 10px; min-width: 0;
     padding: 7px 12px; border: 1px solid #334155; border-radius: 7px;
@@ -66,7 +73,13 @@
   }
   .campaign-monitor:last-child { border-bottom: 0; }
   .monitor-summary { min-width: 0; display: grid; align-content: center; gap: 7px; }
+  .monitor-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .monitor-kicker { color: #94a3b8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+  .lane-dismiss {
+    margin-left: auto; border: 1px solid #475569; border-radius: 6px; padding: 4px 8px;
+    background: #18212f; color: #cbd5e1; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
+  }
+  .lane-dismiss:hover { border-color: #64748b; color: #fff; }
   .monitor-title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .monitor-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 800; }
   .monitor-percent { margin-left: auto; color: #2dd36f; font-size: 17px; font-weight: 800; }
@@ -171,6 +184,7 @@
       <span id="monitorToggleLabel">收起进度</span>
       <span class="monitor-count" id="monitorCount">0</span>
     </button>
+    <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已关闭</button>
     <a href="/knowledge">🧠 脑编辑器</a>
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
@@ -215,6 +229,8 @@ let firstQueuedRunId = null;
 let latestCampaignStatus = null;
 let latestCampaignQueue = null;
 let monitorDisplayChoice = sessionStorage.getItem("mamba-send-monitor-display");
+const dismissedRunsKey = "mamba-send-dismissed-runs-v1";
+let dismissedCampaignRuns = loadDismissedCampaignRuns();
 
 const terminalStatuses = new Set([
   "SENT", "REPLIED_WARM", "FAILED", "SKIPPED_END_TIME", "SKIPPED_MANUAL",
@@ -223,6 +239,37 @@ const terminalStatuses = new Set([
 
 function monitorEscape(value) {
   return String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+}
+
+function loadDismissedCampaignRuns() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(dismissedRunsKey) || "{}");
+    return Object.fromEntries(Object.entries(parsed).filter(([runId, dismissedAt]) =>
+      runId && Number.isFinite(Number(dismissedAt))
+    ));
+  } catch {
+    return {};
+  }
+}
+
+function saveDismissedCampaignRuns() {
+  // Keep the newest 200 closed cards. This stays tiny but, unlike a temporary
+  // collapse, a closed Batch never comes back by itself after refresh/restart.
+  dismissedCampaignRuns = Object.fromEntries(
+    Object.entries(dismissedCampaignRuns).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 200)
+  );
+  try { localStorage.setItem(dismissedRunsKey, JSON.stringify(dismissedCampaignRuns)); } catch {}
+}
+
+function dismissCampaignRun(runId) {
+  if (!runId) return;
+  dismissedCampaignRuns[runId] = Date.now();
+  saveDismissedCampaignRuns();
+}
+
+function restoreDismissedCampaignRuns(runIds) {
+  for (const runId of runIds) delete dismissedCampaignRuns[runId];
+  saveDismissedCampaignRuns();
 }
 
 function setCampaignMonitorsCollapsed(collapsed, { remember = false } = {}) {
@@ -251,15 +298,25 @@ document.getElementById("monitorToggle").addEventListener("click", () => {
 function renderCampaignMonitor(status, queue) {
   const supplied = Array.isArray(status?.runs) ? status.runs : [];
   const runs = supplied.length ? supplied : (status?.state ? [status] : []);
+  const dismissedNow = runs.filter((item) => item?.state?.runId && dismissedCampaignRuns[item.state.runId]);
+  const visible = runs.filter((item) => !item?.state?.runId || !dismissedCampaignRuns[item.state.runId]);
   const container = document.getElementById("campaignMonitors");
-  document.getElementById("monitorCount").textContent = String(runs.filter((item) => item?.state).length);
-  const shouldAutoCollapse = !runs.some(monitorRunIsActive) && !queue?.count;
+  const restoreButton = document.getElementById("monitorRestore");
+  document.getElementById("monitorCount").textContent = String(visible.filter((item) => item?.state).length);
+  restoreButton.classList.toggle("hidden", dismissedNow.length === 0);
+  restoreButton.textContent = dismissedNow.length ? `恢复已关闭 (${dismissedNow.length})` : "恢复已关闭";
+  const shouldAutoCollapse = !visible.some(monitorRunIsActive) && !queue?.count;
   setCampaignMonitorsCollapsed(monitorDisplayChoice === null ? shouldAutoCollapse : monitorDisplayChoice === "collapsed");
   if (!runs.length) {
     container.innerHTML = '<div class="campaign-monitor"><div class="monitor-summary"><div class="monitor-kicker">Campaign Ready</div><div class="monitor-title">没有正在运行的 Batch</div><div class="monitor-track"><span style="width:0"></span></div></div><div class="flow-steps"><div class="flow-step"><small>01 Prepared</small><strong>等待 Batch</strong></div><div class="flow-step"><small>02 Sending</small><strong>尚未开始</strong></div><div class="flow-step"><small>03 Notion</small><strong>等待发送完成</strong></div><div class="flow-step"><small>04 Next Batch</small><strong>Queue 空</strong></div></div></div>';
     return;
   }
-  const visibleRuns = runs
+  if (!visible.length) {
+    container.innerHTML = "";
+    setCampaignMonitorsCollapsed(true);
+    return;
+  }
+  const visibleRuns = visible
     .filter((item) => item?.state)
     .sort((a, b) => Number(b.running) - Number(a.running) || String(b.state?.updatedAt || "").localeCompare(String(a.state?.updatedAt || "")))
     .slice(0, 6);
@@ -293,7 +350,7 @@ function renderCampaignLane(status, queue) {
   const queueClass = laneQueue ? "active" : "";
   return `<article class="campaign-monitor" data-run-id="${monitorEscape(state.runId)}">
     <div class="monitor-summary">
-      <div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">${monitorEscape(senders.join(" + ") || "No sender")}</span></div>
+      <div class="monitor-head"><div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">${monitorEscape(senders.join(" + ") || "No sender")}</span></div><button type="button" class="lane-dismiss" data-dismiss-run="${monitorEscape(state.runId)}" title="关闭这张进度卡；不会停止发送">× 关闭</button></div>
       <div class="monitor-title-row"><div class="monitor-title">${monitorEscape([project, flow, state.mode].filter(Boolean).join(" · "))}</div><div class="monitor-percent">${percent}%</div></div>
       <div class="monitor-track ${running ? "running" : ""}"><span style="width:${percent}%"></span></div>
       <div class="monitor-meta"><span>完成 <b>${done}</b></span><span>等待 <b>${waiting}</b></span><span>失败 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
@@ -308,12 +365,32 @@ function renderCampaignLane(status, queue) {
 }
 
 document.getElementById("campaignMonitors").addEventListener("click", async (event) => {
+  const dismissButton = event.target.closest("[data-dismiss-run]");
+  if (dismissButton) {
+    const runId = dismissButton.dataset.dismissRun;
+    const supplied = Array.isArray(latestCampaignStatus?.runs) ? latestCampaignStatus.runs : [];
+    const run = supplied.find((item) => item?.state?.runId === runId) ||
+      (latestCampaignStatus?.state?.runId === runId ? latestCampaignStatus : null);
+    if (monitorRunIsActive(run) && !confirm("这批仍在运行。关闭只会收起这张进度卡，WhatsApp 发送与 Notion 收尾仍会在后台继续。确定关闭显示？")) return;
+    dismissCampaignRun(runId);
+    renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+    return;
+  }
   const button = event.target.closest("[data-stop-run]");
   if (!button || button.disabled) return;
   if (!confirm("只停止这个号码正在跑的 Campaign？另一个号码会继续发送。")) return;
   const response = await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: button.dataset.stopRun }) });
   const data = await response.json().catch(() => ({}));
   if (!data.ok) alert(data.error || "停止失败。");
+});
+
+document.getElementById("monitorRestore").addEventListener("click", () => {
+  const supplied = Array.isArray(latestCampaignStatus?.runs) ? latestCampaignStatus.runs : [];
+  const runs = supplied.length ? supplied : (latestCampaignStatus?.state ? [latestCampaignStatus] : []);
+  restoreDismissedCampaignRuns(runs.map((item) => item?.state?.runId).filter(Boolean));
+  monitorDisplayChoice = "expanded";
+  sessionStorage.setItem("mamba-send-monitor-display", monitorDisplayChoice);
+  renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
 });
 
 function hideSyncOverlay() {

@@ -86,7 +86,7 @@
     <span class="pill">发送时间</span>
     <input id="startTime" class="tinp" placeholder="现在" title="开始时间,如 14:00,留空=现在">
     <span class="muted">→</span>
-    <input id="endTime" class="tinp" placeholder="21:00" title="结束时间,如 21:00,留空=今晚21:00">
+    <input id="endTime" class="tinp" placeholder="留空=自动完成" title="留空会按安全速度尽早完成；填写 21:00 才会铺到晚上 9 点">
   </div>
 
   <div id="scanPanel" class="statusbox" style="display:none;"></div>
@@ -414,7 +414,10 @@ async function doSend(mode, proj, rows, flow, limitCount) {
     const prepared = await api("/api/prepare", prep);
     activeNextRunId = prepared?.snapshot?.state?.runId || null;
     const ap = await api("/api/next-flow/apply-templates", { projectName: currentProject, flow, runId: activeNextRunId });
-    toast(`套用模板 ${flow} · ${ap.languages.join("/")} · ${ap.overridden} 人`);
+    const timing = prepared.schedule?.mode === "AUTO"
+      ? `自动排程 · 预计约 ${prepared.schedule.end} 完成`
+      : `指定时间窗 ${prepared.schedule?.start || "-"}–${prepared.schedule?.end || "-"}`;
+    toast(`套用模板 ${flow} · ${ap.languages.join("/")} · ${ap.overridden} 人 · ${timing}`);
     await api("/api/start", { optIn: true, overrides: {}, autoAdvance: mode === "LIVE", project: proj.id, runId: activeNextRunId });
     setTimeout(() => toast(mode === "LIVE" ? `已开始发送 ${flow} 🚀 发完自动推进到下一轮` : "已发测试给自己 🧪"), 800);
     setTimeout(pollStatus, 1800);

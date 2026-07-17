@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUTO_SCHEDULE, campaignPacing, estimateAutoEnd } from "./lib/campaign-schedule.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -507,11 +508,18 @@ export class CampaignRunner {
     this.pushLog(message);
   }
 
-  async prepare({ mode, startAt, endAt, instances, leads, project }) {
+  async prepare({ mode, startAt, endAt, scheduleMode = "FIXED", instances, leads, project }) {
     const runId = `run_${new Date().toISOString().replace(/[:.]/g, "-")}`;
     this.runPath = path.join(paths.runsDir, `${runId}.json`);
     await fs.mkdir(paths.runsDir, { recursive: true });
-    const built = buildAssignments(leads, instances, startAt, endAt, this.config);
+    let effectiveEndAt = endAt;
+    let built = buildAssignments(leads, instances, startAt, effectiveEndAt, this.config);
+    // Sender quotas may leave some imported leads in overflow. AUTO estimates
+    // from the assignments that will really send, not from the Excel row count.
+    if (scheduleMode === AUTO_SCHEDULE) {
+      effectiveEndAt = estimateAutoEnd(startAt, built.assignments.length, this.config);
+      built = buildAssignments(leads, instances, startAt, effectiveEndAt, this.config);
+    }
     this.state = {
       runId,
       project: project ?? null,
@@ -521,7 +529,8 @@ export class CampaignRunner {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       startAt: startAt.toISOString(),
-      endAt: endAt.toISOString(),
+      endAt: effectiveEndAt.toISOString(),
+      scheduleMode,
       instances,
       assignments: built.assignments,
       overflow: built.overflow,
@@ -951,14 +960,9 @@ export class CampaignRunner {
     const n = queued.length;
     if (n === 0) return;
 
-    const partGapMs = (this.config.delivery.partGapSeconds || 0) * 1000;
+    const { partGapMs, floorMs } = campaignPacing(this.config);
     const minGapSec = this.config.delivery.contactGapSeconds?.min ?? 45;
     const maxGapSec = this.config.delivery.contactGapSeconds?.max ?? Math.max(minGapSec, 75);
-    // Hard floor between the START of one lead's blast and the next. Defaults to
-    // 2 minutes (configurable via delivery.minBlastGapSeconds) and is never
-    // smaller than the two-part send needs. Sending can never be faster.
-    const minBlastGapSec = this.config.delivery.minBlastGapSeconds ?? 120;
-    const floorMs = Math.max(minBlastGapSec * 1000, partGapMs + minGapSec * 1000);
 
     // Honor the start time: if the run is launched before it, the first lead
     // waits until the start time; if launched after, we begin now. Either way
@@ -966,11 +970,17 @@ export class CampaignRunner {
     const now = Date.now();
     const startMs = Math.max(now, new Date(this.state.startAt).getTime());
     const endMs = new Date(this.state.endAt).getTime();
-    const windowMs = endMs - startMs;
+    // In a fixed window, the final Part 1 must leave room for Part 2 before the
+    // requested finish time. AUTO has its own full-slot safety buffer below.
+    const latestPart1Ms = endMs - partGapMs;
+    const windowMs = latestPart1Ms - startMs;
     const evenInterval = n > 1 ? windowMs / (n - 1) : 0;
     // TEST runs shouldn't be stretched across the whole window — pace the few
     // test contacts by the floor gap so the test completes promptly.
-    const baseInterval = this.state.mode === "TEST" ? floorMs : Math.max(evenInterval, floorMs);
+    const isAutoSchedule = this.state.scheduleMode === AUTO_SCHEDULE;
+    const baseInterval = this.state.mode === "TEST" || isAutoSchedule
+      ? floorMs
+      : Math.max(evenInterval, floorMs);
     // Human-like jitter, capped by the contact-gap range and never below floor.
     const jitterMs = Math.max(0, Math.min((maxGapSec - minGapSec) * 1000, baseInterval * 0.3));
 
@@ -984,7 +994,7 @@ export class CampaignRunner {
     // If the floor pushed the last send past the window, extend endAt so the
     // end-time cutoff doesn't skip those leads (safety beats the strict window).
     const lastScheduled = new Date(queued[n - 1].scheduledAt).getTime();
-    if (lastScheduled + floorMs > endMs) {
+    if (isAutoSchedule || lastScheduled + partGapMs > endMs) {
       this.state.endAt = new Date(lastScheduled + floorMs).toISOString();
     }
 
@@ -992,7 +1002,7 @@ export class CampaignRunner {
     const hhmm = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour12: false });
     const waitMin = Math.max(0, Math.round((startMs - now) / 60000));
     this.showProgress(
-      `Pacing ${n} leads ~${perMin} min apart (floor ${Math.round(floorMs / 1000)}s), ` +
+      `${isAutoSchedule ? "AUTO pacing" : "Fixed-window pacing"} ${n} leads ~${perMin} min apart (floor ${Math.round(floorMs / 1000)}s), ` +
       `first at ${hhmm(startMs)}${waitMin > 0 ? ` (waiting ~${waitMin} min)` : ""}, ` +
       `last around ${hhmm(new Date(this.state.endAt).getTime())}.`
     );
@@ -1073,6 +1083,7 @@ export class CampaignRunner {
             status: this.state.status,
             startAt: this.state.startAt,
             endAt: this.state.endAt,
+            scheduleMode: this.state.scheduleMode ?? "FIXED",
             total: this.state.assignments.length,
             summary: this.summary(),
             perSender: this.state.perSender ?? null,

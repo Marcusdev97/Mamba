@@ -1,5 +1,12 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
+import {
+  AUTO_SCHEDULE,
+  FIXED_SCHEDULE,
+  estimateAutoEnd,
+  scheduleDurationMinutes,
+  scheduleModeForEnd,
+} from "../lib/campaign-schedule.mjs";
 
 function requireCampaign(runtime) {
   if (!runtime.campaign) {
@@ -30,21 +37,34 @@ function selectedOpenInstances(open, requested) {
   return selected;
 }
 
-function resolveSchedule(campaign, config, body) {
+function resolveSchedule(campaign, config, body, leadCount) {
   const now = new Date();
-  const defaultEnd = new Date(now);
-  defaultEnd.setHours(21, 0, 0, 0);
-  if (defaultEnd <= now) defaultEnd.setTime(now.getTime() + 60 * 60 * 1000);
+  let startAt;
+  try {
+    startAt = campaign.resolveTime(body.startTime, now);
+  } catch (error) {
+    throw httpError(400, `开始时间不正确：${error.message}`);
+  }
 
-  const startAt = campaign.resolveTime(body.startTime, now);
-  const endAt = campaign.resolveTime(body.endTime, defaultEnd);
+  const requestedEnd = String(body.endTime ?? "").trim();
+  const scheduleMode = scheduleModeForEnd(requestedEnd);
+  let endAt;
+  if (scheduleMode === AUTO_SCHEDULE) {
+    endAt = estimateAutoEnd(startAt, leadCount, config);
+  } else {
+    try {
+      endAt = campaign.resolveTime(requestedEnd, startAt);
+    } catch (error) {
+      throw httpError(400, `结束时间不正确：${error.message}`);
+    }
+  }
   if (endAt <= startAt) {
     throw httpError(400, "结束时间必须晚于开始时间。请检查 Start / End time。");
   }
-  if (endAt.getTime() - startAt.getTime() <= config.delivery.partGapSeconds * 1000) {
+  if (scheduleMode === FIXED_SCHEDULE && endAt.getTime() - startAt.getTime() <= config.delivery.partGapSeconds * 1000) {
     throw httpError(400, `发送时间窗必须长于 ${config.delivery.partGapSeconds} 秒。`);
   }
-  return { startAt, endAt };
+  return { startAt, endAt, scheduleMode };
 }
 
 function selectLeads(campaign, project, mode, body) {
@@ -279,14 +299,14 @@ export function registerCampaignRoutes(router) {
       throw httpError(400, "没有处于 OPEN 状态的 WhatsApp 号码，无法发送。请到 Settings 重新扫码或检查 Phone Health。");
     }
     const instances = selectedOpenInstances(open, body.instances);
-    const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null));
-    const { startAt, endAt } = resolveSchedule(campaign, config, body);
     const leads = selectLeads(campaign, project, mode, body);
+    const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null));
+    const { startAt, endAt, scheduleMode } = resolveSchedule(campaign, config, body, leads.length);
 
     const runner = campaign.createRunner(config);
     runner.mirrorActiveState = true;
     try {
-      await runner.prepare({ mode, startAt, endAt, instances, leads, project: project.name });
+      await runner.prepare({ mode, startAt, endAt, scheduleMode, instances, leads, project: project.name });
       runner.state.projectId = project.id;
       runner.state.deviceId = campaign.device?.id || "";
       runner.state.deviceName = campaign.device?.name || "";
@@ -315,7 +335,12 @@ export function registerCampaignRoutes(router) {
       ok: true,
       project: project.id,
       queueAvailable: preparingBehindActiveRun,
-      schedule: { start: campaign.formatTime(startAt), end: campaign.formatTime(endAt) },
+      schedule: {
+        mode: runner.state.scheduleMode,
+        start: campaign.formatTime(new Date(runner.state.startAt)),
+        end: campaign.formatTime(new Date(runner.state.endAt)),
+        estimatedMinutes: scheduleDurationMinutes(runner.state.startAt, runner.state.endAt),
+      },
       snapshot: runner.snapshot(),
     });
   });
