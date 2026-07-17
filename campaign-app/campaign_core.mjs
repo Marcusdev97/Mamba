@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { campaignSenderSummary } from "./lib/campaign-notification.mjs";
 import { AUTO_SCHEDULE, campaignPacing, estimateAutoEnd } from "./lib/campaign-schedule.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -1046,7 +1047,7 @@ export class CampaignRunner {
       const parts = Object.entries(s).map(([k, v]) => `${k}: ${v}`).join(" · ") || "(无)";
       const icon = this.state.status === "COMPLETED" ? "✅" : "⏹";
       const device = this.state.deviceName || this.state.deviceId || "Unknown Mamba device";
-      const senders = [...new Set((this.state.jobs || []).map((job) => job.instanceName).filter(Boolean))].join(", ") || "-";
+      const senders = campaignSenderSummary(this.state);
       const text = `${icon} Mamba ${this.state.status}\n电脑: ${device}\n号码: ${senders}\n项目: ${proj}\n模式: ${this.state.mode}\n${parts}`;
       const { makeHub } = await import("./telegram_hub.mjs");
       const hub = makeHub();
