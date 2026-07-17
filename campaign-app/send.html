@@ -99,8 +99,10 @@
     background-size: 180px 100%; animation: monitorMove 1.4s linear infinite;
   }
   @keyframes monitorMove { to { background-position: 180px 0; } }
-  .monitor-meta { display: flex; gap: 12px; color: #94a3b8; font-size: 11.5px; white-space: nowrap; }
+  .monitor-meta { display: flex; gap: 12px; align-items:center; flex-wrap:wrap; color: #94a3b8; font-size: 11.5px; white-space: nowrap; }
   .monitor-meta b { color: #dbe4ef; }
+  .monitor-meta .meta-skip b { color:#fbbf24; }
+  .monitor-meta .meta-fail b { color:#fca5a5; }
   .flow-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
   .flow-step {
     position: relative; min-width: 0; padding: 9px 10px; border: 1px solid #283447;
@@ -234,8 +236,29 @@ let dismissedCampaignRuns = loadDismissedCampaignRuns();
 
 const terminalStatuses = new Set([
   "SENT", "REPLIED_WARM", "FAILED", "SKIPPED_END_TIME", "SKIPPED_MANUAL",
-  "SKIPPED_SUPPRESSED", "SKIPPED_REPLIED", "PART1_ONLY_END_TIME",
+  "SKIPPED_SUPPRESSED", "SKIPPED_REPLIED", "SKIPPED_NO_WHATSAPP", "PART1_ONLY_END_TIME",
 ]);
+
+function monitorOutcomes(state, assignments, summary) {
+  if (state?.outcomes) return state.outcomes;
+  const total = Number(state?.total || assignments.length || 0);
+  const result = { total, processed:0, contacted:0, pending:0, skipped:0, noWhatsapp:0, failed:0, percent:0 };
+  const items = assignments.length ? assignments : Object.entries(summary).flatMap(([status, count]) =>
+    Array.from({ length:Number(count || 0) }, () => ({ status }))
+  );
+  for (const item of items) {
+    const status = String(item.status || "");
+    if (status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(status)) result.pending += 1;
+    else if (status === "FAILED") result.failed += 1;
+    else if (status === "SKIPPED_NO_WHATSAPP") { result.skipped += 1; result.noWhatsapp += 1; }
+    else if (status.startsWith("SKIPPED_")) result.skipped += 1;
+    else if (item.part1At || ["SENT","REPLIED_WARM","PART1_ONLY_END_TIME"].includes(status)) result.contacted += 1;
+    else result.skipped += 1;
+  }
+  result.processed = Math.max(0, total - result.pending);
+  result.percent = total ? Math.min(100, Math.round(result.processed / total * 100)) : 0;
+  return result;
+}
 
 function monitorEscape(value) {
   return String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
@@ -328,13 +351,14 @@ function renderCampaignLane(status, queue) {
   const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
   const summary = state?.summary || {};
   const total = Number(state?.total || assignments.length || 0);
-  const done = assignments.length
-    ? assignments.filter((item) => terminalStatuses.has(item.status)).length
-    : Object.entries(summary).reduce((sum, [key, count]) => sum + (terminalStatuses.has(key) ? Number(count || 0) : 0), 0);
-  const failed = Number(summary.FAILED || 0);
-  const waiting = Math.max(0, total - done);
-  const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const outcomes = monitorOutcomes(state, assignments, summary);
+  const done = outcomes.processed;
+  const failed = outcomes.failed;
+  const waiting = outcomes.pending;
   const running = status?.running === true || state?.status === "RUNNING";
+  const resumable = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "")).length;
+  const displayStatus = !running && state.status === "COMPLETED" && resumable > 0 ? "INCOMPLETE" : state.status;
+  const percent = outcomes.percent;
   const project = typeof state?.project === "string" ? state.project : state?.project?.name;
   const flow = state?.flowLabel || state?.templateFlow || "Flow 1 - Project Template";
   const notionStatus = String(state?.advanceStatus || state?.notionSync?.status || "").toUpperCase();
@@ -345,7 +369,7 @@ function renderCampaignLane(status, queue) {
     ...Object.keys(state.perSender || {}),
   ].filter(Boolean))];
   const laneQueue = (queue?.items || []).find((item) => (item.instanceNames || []).some((name) => senders.includes(name)));
-  const sendingClass = running ? "active" : state.status === "COMPLETED" ? "done" : ["STOPPED", "INTERRUPTED"].includes(state.status) ? "held" : "";
+  const sendingClass = running ? "active" : failed > 0 ? "held" : displayStatus === "COMPLETED" ? "done" : ["STOPPED", "INTERRUPTED", "INCOMPLETE"].includes(displayStatus) ? "held" : "";
   const notionClass = notionFailed ? "held" : notionBusy ? "active" : notionStatus === "SUCCEEDED" ? "done" : "";
   const queueClass = laneQueue ? "active" : "";
   return `<article class="campaign-monitor" data-run-id="${monitorEscape(state.runId)}">
@@ -353,11 +377,11 @@ function renderCampaignLane(status, queue) {
       <div class="monitor-head"><div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">${monitorEscape(senders.join(" + ") || "No sender")}</span></div><button type="button" class="lane-dismiss" data-dismiss-run="${monitorEscape(state.runId)}" title="关闭这张进度卡；不会停止发送">× 关闭</button></div>
       <div class="monitor-title-row"><div class="monitor-title">${monitorEscape([project, flow, state.mode].filter(Boolean).join(" · "))}</div><div class="monitor-percent">${percent}%</div></div>
       <div class="monitor-track ${running ? "running" : ""}"><span style="width:${percent}%"></span></div>
-      <div class="monitor-meta"><span>完成 <b>${done}</b></span><span>等待 <b>${waiting}</b></span><span>失败 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
+      <div class="monitor-meta"><span>已触达 <b>${outcomes.contacted}</b></span><span>待处理 <b>${waiting}</b></span><span class="meta-skip">已跳过 <b>${outcomes.skipped}</b>${outcomes.noWhatsapp ? `（无 WhatsApp ${outcomes.noWhatsapp}）` : ""}</span><span class="meta-fail">发送异常 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
     </div>
     <div class="flow-steps">
       <div class="flow-step done"><small>01 Prepared</small><strong>${total} 人 · ${monitorEscape(state.mode)}</strong></div>
-      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? `${done}/${total} 正在发送` : state.status === "COMPLETED" ? "发送完成" : ["STOPPED", "INTERRUPTED"].includes(state.status) ? "已停止" : monitorEscape(state.status || "尚未开始")}</strong></div>
+      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? `${done}/${total} 已处理` : failed > 0 ? `${failed} 个发送异常待检查` : displayStatus === "COMPLETED" ? "发送流程完成" : displayStatus === "INCOMPLETE" ? `${resumable} 个 Part 等待继续` : ["STOPPED", "INTERRUPTED"].includes(displayStatus) ? "已停止" : monitorEscape(displayStatus || "尚未开始")}</strong></div>
       <div class="flow-step ${notionClass}"><small>03 Notion</small><strong>${notionFailed ? `需要检查 · ${notionStatus}` : notionBusy ? `更新中 · ${notionStatus}` : notionStatus === "SUCCEEDED" ? "已同步" : "等待发送完成"}</strong></div>
       <div class="flow-step ${queueClass}"><small>04 This Sender Queue</small><strong>${laneQueue ? `${laneQueue.position}. ${monitorEscape(laneQueue.flowLabel)}` : "Queue 空"}</strong></div>
     </div>

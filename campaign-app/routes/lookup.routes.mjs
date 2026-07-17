@@ -77,6 +77,7 @@ export function registerLookupRoutes(router) {
       count: rows.length,
       results: rows,
       cached: cache.records.length > 0,
+      source: cache.source || (cache.records.length > 0 ? "cache" : "notion"),
       syncedAt: cache.syncedAt || null,
     });
   });
@@ -84,7 +85,7 @@ export function registerLookupRoutes(router) {
   router.get("/api/lookup/cache-info", async (_req, res, runtime) => {
     const lookup = requireLookup(runtime);
     const cache = await lookup.readCache();
-    json(res, 200, { ok: true, syncedAt: cache.syncedAt, count: cache.records.length });
+    json(res, 200, { ok: true, source: cache.source || "cache", syncedAt: cache.syncedAt, count: cache.records.length });
   });
 
   router.post("/api/lookup/sync", async (_req, res, runtime) => {

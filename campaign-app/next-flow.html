@@ -438,7 +438,7 @@ async function stopSend() {
 
 async function retryFailedNextFlow(count) {
   if (!count) return;
-  if (!confirm(`只补发 ${count} 个 FAILED 客户?已成功/已回复/手动不发的人不会重发。timeout 客户请先确认 WhatsApp 没收到再补发。`)) return;
+  if (!confirm(`只重试 ${count} 个真正的发送异常？无 WhatsApp、已触达、已跳过和已回复客户不会重发。timeout 客户请先确认 WhatsApp 没收到，避免重复发送。`)) return;
   try {
     await api("/api/retry-failed", { autoAdvance: true, runId: activeNextRunId });
     toast(`已重新排队 ${count} 个失败客户,发送成功后会自动推进 Notion。`);
@@ -480,10 +480,19 @@ async function pollStatus() {
     if (!s || !s.state) { box.style.display = "none"; return; }
     box.style.display = "";
     const a = s.state.assignments || [];
-    const sent = a.filter((j) => j.part1At).length;
-    const failed = a.filter((j) => j.status === "FAILED").length;
-    const sum = s.state.summary || {};
-    const sumStr = Object.entries(sum).map(([k, v]) => `${k}:${v}`).join(" · ");
+    const fallbackOutcomes = {
+      total:a.length,
+      contacted:a.filter((j) => j.part1At || ["SENT","REPLIED_WARM","PART1_ONLY_END_TIME"].includes(j.status)).length,
+      pending:a.filter((j) => j.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(j.status || "")).length,
+      skipped:a.filter((j) => String(j.status || "").startsWith("SKIPPED_")).length,
+      noWhatsapp:a.filter((j) => j.status === "SKIPPED_NO_WHATSAPP").length,
+      failed:a.filter((j) => j.status === "FAILED").length,
+    };
+    fallbackOutcomes.processed = Math.max(0, fallbackOutcomes.total - fallbackOutcomes.pending);
+    const outcomes = s.state.outcomes || fallbackOutcomes;
+    const failed = Number(outcomes.failed || 0);
+    const resultSummary = `已触达 ${outcomes.contacted || 0} · 待处理 ${outcomes.pending || 0} · 已跳过 ${outcomes.skipped || 0}` +
+      (outcomes.noWhatsapp ? `（无 WhatsApp ${outcomes.noWhatsapp}）` : "") + ` · 发送异常 ${failed}`;
     const log = s.log || [];
     const running = !!s.running;
     const isFlowRun = !!s.state.flowLabel;   // a picker flow send (has auto-advance)
@@ -501,11 +510,11 @@ async function pollStatus() {
       ? ` <button class="ghost" style="padding:3px 12px; margin-left:10px; border-color:#dc2626; color:#f87171;" onclick="stopSend()">⏸ 停止发送</button>`
       : "";
     const retryBtn = !running && failed
-      ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="retryFailedNextFlow(${failed})">重试失败客户</button>`
+      ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="retryFailedNextFlow(${failed})">重试发送异常 (${failed})</button>`
       : "";
     box.innerHTML =
-      `<div class="statushead">${head} · ${sent}/${a.length} 已发${failed ? ` · ❌ ${failed} 失败` : ""}${stopBtn}${retryBtn}</div>` +
-      `<div class="muted" style="margin:4px 0;">${esc(sumStr)}</div>` +
+      `<div class="statushead">${head} · ${outcomes.processed || 0}/${outcomes.total || a.length} 已处理${failed ? ` · ❌ ${failed} 个发送异常` : ""}${stopBtn}${retryBtn}</div>` +
+      `<div class="muted" style="margin:4px 0;">${esc(resultSummary)}</div>` +
       `<div class="loglist">${recent}</div>`;
 
     if (running) {

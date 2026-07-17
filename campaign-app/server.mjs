@@ -138,6 +138,51 @@ const blastCacheService = createBlastCacheService({
   nfTitle,
   nfText,
 });
+const localProjectCodeByName = new Map((await loadProjects().catch(() => [])).flatMap((project) => [
+  [String(project?.id || "").trim().toLowerCase(), String(project?.id || "").trim()],
+  [String(project?.name || "").trim().toLowerCase(), String(project?.id || "").trim()],
+]).filter(([name, code]) => name && code));
+localDatabaseService.configureNotionImport({
+  fetchRecords: () => blastCacheService.queryRows(undefined),
+  scopeRecords: (records) => filterRecordsForDevice(records, {
+    device: deviceIdentity,
+    senderPhones: deviceIdentity.senderPhones,
+  }),
+  resolveProjectCode: (name) => localProjectCodeByName.get(String(name || "").trim().toLowerCase()) || "",
+});
+await localDatabaseService.initialize().catch(async (error) => {
+  console.log(`[local-database] startup initialization held: ${error.code || "SQLITE_STARTUP_FAILED"} ${error.message}`);
+  await systemLogService.write({
+    level: "error",
+    area: "local_database",
+    event: "sqlite_startup_initialization_failed",
+    message: "SQLite Shadow could not initialize or migrate at Mamba startup.",
+    context: { code: error.code || "SQLITE_STARTUP_FAILED", error: error.message },
+  }).catch(() => {});
+});
+
+async function readLeadStore() {
+  if (await localDatabaseService.isPrimary().catch(() => false)) {
+    return localDatabaseService.readLeadCache();
+  }
+  return blastCacheService.read();
+}
+
+async function syncLeadStore(options = {}) {
+  const primary = await localDatabaseService.isPrimary().catch(() => false);
+  if (primary && options.force !== true) return localDatabaseService.readLeadCache();
+  const payload = await blastCacheService.sync(options);
+  if (!primary) return payload;
+  await localDatabaseService.syncNotionRecords(payload.records, { reason: "manual_notion_refresh" });
+  return localDatabaseService.readLeadCache();
+}
+
+async function writeLeadStore(records) {
+  const payload = await blastCacheService.writeCache(records);
+  if (!await localDatabaseService.isPrimary().catch(() => false)) return payload;
+  await localDatabaseService.syncNotionRecords(payload.records, { reason: "notion_write_through" });
+  return localDatabaseService.readLeadCache();
+}
 const templateService = await createTemplateService({
   rootDir: paths.rootDir,
   notionConfig,
@@ -209,7 +254,7 @@ const outboundFollowUpService = createOutboundFollowUpService({
   messageTime,
   queryNotionRows: blastCacheService.queryRows,
   filterRecords: (records) => filterRecordsForDevice(records, { device: deviceIdentity }).records,
-  writeCache: blastCacheService.writeCache,
+  writeCache: writeLeadStore,
   history: conversationHistoryService,
   systemLogs: systemLogService,
   intervalMs: followUpSyncMinutes * 60 * 1000,
@@ -317,8 +362,8 @@ const runtime = await loadRuntime({
     hasBlastDatabase: Boolean(blastDsId),
     importLeads,
     normalizePhone: nfNormalizePhone,
-    readCache: blastCacheService.read,
-    syncCache: blastCacheService.sync,
+    readCache: readLeadStore,
+    syncCache: syncLeadStore,
     queryNotionRows: blastCacheService.queryRows,
   },
   conversations: {
@@ -338,9 +383,9 @@ const runtime = await loadRuntime({
     classifyReplyText,
     systemLogs: systemLogService,
     history: conversationHistoryService,
-    readCache: blastCacheService.read,
-    syncCache: blastCacheService.sync,
-    writeCache: blastCacheService.writeCache,
+    readCache: readLeadStore,
+    syncCache: syncLeadStore,
+    writeCache: writeLeadStore,
     queryNotionRows: blastCacheService.queryRows,
   },
   followUp: {
@@ -358,8 +403,9 @@ const runtime = await loadRuntime({
     history: conversationHistoryService,
     outboundSync: outboundFollowUpService,
     systemLogs: systemLogService,
-    readCache: blastCacheService.read,
-    writeCache: blastCacheService.writeCache,
+    readCache: readLeadStore,
+    syncCache: syncLeadStore,
+    writeCache: writeLeadStore,
     queryNotionRows: blastCacheService.queryRows,
   },
   brainLearning: {
@@ -372,7 +418,7 @@ const runtime = await loadRuntime({
     messageTime,
     normalizePhone: nfNormalizePhone,
     history: conversationHistoryService,
-    readCache: blastCacheService.read,
+    readCache: readLeadStore,
     systemLogs: systemLogService,
     aiReplyLogDbId: configuredBrainDb("aiReplyLog", "4272e2edbf644f44b670c71ae4276051"),
     goldenDbId: configuredBrainDb("goldenConversations", "dc5c303e463145abb9d635c007120157"),

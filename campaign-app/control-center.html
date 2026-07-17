@@ -95,7 +95,7 @@
   </header>
 
   <section class="kpi-grid" aria-label="Today overview">
-    <div class="kpi green"><div class="kpi-top"><span class="kpi-label">今日发送</span><span class="kpi-code">TX</span></div><strong id="todaySent">-</strong><small id="sentNote">From Notion cache</small></div>
+    <div class="kpi green"><div class="kpi-top"><span class="kpi-label">今日已接触客户</span><span class="kpi-code">TX</span></div><strong id="todaySent">-</strong><small id="sentNote">Loading local customer store</small></div>
     <div class="kpi"><div class="kpi-top"><span class="kpi-label">客户回复</span><span class="kpi-code">RX</span></div><strong id="todayReplies">-</strong><small id="replyNote">Today</small></div>
     <div class="kpi amber"><div class="kpi-top"><span class="kpi-label">待跟进</span><span class="kpi-code">FU</span></div><strong id="followUps">-</strong><small id="followNote">Agent work queue</small></div>
     <div class="kpi purple"><div class="kpi-top"><span class="kpi-label">AI 待审核</span><span class="kpi-code">AI</span></div><strong id="aiPending">-</strong><small id="brainNote">Approval queue</small></div>
@@ -172,7 +172,7 @@ function renderHealth(items, logs) {
   banner.classList.toggle("offline", offline > 0);
   banner.classList.toggle("warn", offline === 0 && warnings > 0);
   const title = offline ? "System needs attention" : warnings ? "System ready with warnings" : "Everything is online";
-  banner.innerHTML = `<span class="health-dot"></span><div><strong>${title}</strong><small>${offline} offline · ${warnings} warnings · ${logs.errorsToday} errors today</small></div>`;
+  banner.innerHTML = `<span class="health-dot"></span><div><strong>${title}</strong><small>${offline} offline · ${warnings} current warnings · ${logs.errorsToday} error log entries today</small></div>`;
 }
 
 function renderCampaign(campaign) {
@@ -180,11 +180,12 @@ function renderCampaign(campaign) {
     $("campaign").innerHTML = '<div class="campaign-empty">No campaign run has been prepared on this computer.</div>';
     return;
   }
-  const percent = campaign.total ? Math.round(campaign.sent / campaign.total * 100) : 0;
+  const percent = campaign.total ? Math.round((campaign.processed || 0) / campaign.total * 100) : 0;
+  const pendingText = campaign.pending ? ` · ${campaign.pending} waiting to resume` : "";
   $("campaign").innerHTML = `
     <div class="campaign-title"><div><h3>${esc(campaign.project)}</h3><p>${esc(campaign.mode || "")} · ${esc(campaign.instances.join(", ") || "No sender")}</p></div><span class="badge ${campaign.failed ? "b-fail" : campaign.running ? "b-go" : "b-queued"}">${esc(campaign.status)}</span></div>
-    <div class="campaign-stats"><div class="campaign-stat"><span>Total</span><b>${campaign.total}</b></div><div class="campaign-stat"><span>Sent</span><b>${campaign.sent}</b></div><div class="campaign-stat"><span>Failed</span><b>${campaign.failed}</b></div><div class="campaign-stat"><span>Skipped</span><b>${campaign.skipped}</b></div></div>
-    <div class="campaign-progress"><i style="width:${percent}%"></i></div><div class="cache-line">${percent}% complete · updated ${esc(relative(campaign.updatedAt))}</div>`;
+    <div class="campaign-stats"><div class="campaign-stat"><span>Total</span><b>${campaign.total}</b></div><div class="campaign-stat"><span>Fully sent</span><b>${campaign.sent}</b></div><div class="campaign-stat"><span>Failed</span><b>${campaign.failed}</b></div><div class="campaign-stat"><span>Pending</span><b>${campaign.pending || 0}</b></div></div>
+    <div class="campaign-progress"><i style="width:${percent}%"></i></div><div class="cache-line">${percent}% processed · ${campaign.sent} fully sent${esc(pendingText)} · updated ${esc(relative(campaign.updatedAt))}</div>`;
 }
 
 function renderRecent(items) {
@@ -201,12 +202,12 @@ async function loadDashboard() {
     $("todayReplies").textContent = data.metrics.todayReplies;
     $("followUps").textContent = data.metrics.followUps;
     $("aiPending").textContent = data.metrics.aiPending;
-    $("sentNote").textContent = `${data.metrics.totalCustomers} customers in cache`;
+    $("sentNote").textContent = `${data.metrics.totalCustomers} customers on this device`;
     $("replyNote").textContent = data.metrics.appointments ? `${data.metrics.appointments} active appointments` : "No active appointments";
     $("followNote").textContent = `${data.metrics.overdue} overdue · ${data.metrics.dueToday} today`;
     $("brainNote").textContent = data.brain.enabled
       ? `${data.brain.provider} · ${data.brain.activeProjects} active projects`
-      : "自动回复已关闭 · Tracker-only";
+      : `自动回复已关闭 · 旧审核记录不计入工作项`;
     renderScope(data.scope || {});
     $("cacheLine").textContent = data.cache.syncedAt ? `Customer cache synced ${relative(data.cache.syncedAt)}${data.cache.stale ? " · refresh recommended" : ""}` : "Customer cache has not been synced.";
     renderQueue(data.queue || []);

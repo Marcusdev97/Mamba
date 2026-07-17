@@ -16,6 +16,8 @@
   .source-note { display:flex; justify-content:space-between; gap:18px; align-items:center; padding:12px 16px; border:1px solid rgba(74,158,255,.4); background:var(--blue-bg); border-radius:var(--radius); margin-bottom:16px; }
   .source-note b { color:var(--blue); }
   .source-note small { color:var(--muted); }
+  .source-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; text-align:right; }
+  .source-actions .btn { white-space:nowrap; }
   .kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:var(--radius-l); overflow:hidden; margin-bottom:16px; }
   .kpi { padding:17px 18px; background:var(--panel); border-right:1px solid var(--line); min-height:92px; }
   .kpi:last-child { border-right:0; }
@@ -56,12 +58,32 @@
   .detail { position:sticky; top:16px; min-height:320px; }
   .detail-empty { color:var(--muted); padding:40px 6px; text-align:center; }
   .detail h3 { margin:0; font-size:20px; }
+  .detail-heading-row { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .detail-heading-row .btn { flex:0 0 auto; padding:7px 10px; font-size:11.5px; }
   .detail .developer { color:var(--muted); margin:4px 0 14px; }
   .detail-grid { display:grid; grid-template-columns:110px 1fr; gap:8px 12px; font-size:12.5px; padding:14px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
   .detail-grid dt { color:var(--muted); }
   .detail-grid dd { margin:0; overflow-wrap:anywhere; }
   .qa-box { margin-top:14px; padding:10px 12px; border-radius:var(--radius); background:var(--panel-2); font-size:12.5px; }
   .body-preview { white-space:pre-wrap; color:var(--muted); font-size:12px; max-height:210px; overflow:auto; margin-top:14px; padding-right:6px; }
+  .company-detail { margin-top:16px; display:grid; gap:12px; }
+  .company-detail-block { padding:12px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
+  .company-detail-block h4 { margin:0 0 8px; font-size:12px; color:var(--text); text-transform:uppercase; letter-spacing:.55px; }
+  .company-detail-copy { white-space:pre-wrap; color:var(--muted); font-size:12px; line-height:1.55; max-height:190px; overflow:auto; }
+  .company-detail-empty { color:var(--faint); font-size:12px; }
+  .company-detail-meta { color:var(--faint); font-size:11px; }
+  .plan-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .plan-card { display:block; color:var(--text); text-decoration:none; border:1px solid var(--line); border-radius:7px; overflow:hidden; background:var(--panel); }
+  .plan-card img { width:100%; aspect-ratio:4/3; display:block; object-fit:cover; background:var(--panel-3); }
+  .plan-card span { display:block; padding:8px; font-size:11.5px; line-height:1.4; }
+  .credential-grid { display:grid; grid-template-columns:72px 1fr; gap:7px 9px; align-items:center; font-size:12px; }
+  .credential-grid .label { color:var(--muted); }
+  .credential-grid a { color:var(--blue); overflow-wrap:anywhere; }
+  .secret-line { display:flex; align-items:center; gap:7px; min-width:0; }
+  .secret-value { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+  .mini-btn { border:1px solid var(--line); color:var(--text); background:var(--panel-3); border-radius:6px; padding:4px 7px; font-size:11px; cursor:pointer; }
+  .mini-btn:disabled { opacity:.55; cursor:wait; }
+  .detail-errors { padding:10px 12px; border:1px solid rgba(255,82,82,.35); border-radius:var(--radius); background:var(--red-bg); color:var(--red); font-size:11.5px; }
   .loading { color:var(--muted); padding:40px; text-align:center; }
   .error { color:var(--red); }
   @media (max-width:1050px) {
@@ -81,6 +103,7 @@
     .filters label:first-child { grid-column:auto; }
     .bar-row { grid-template-columns:110px 1fr 32px; }
     .source-note { display:block; }
+    .source-actions { justify-content:space-between; text-align:left; margin-top:12px; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
@@ -100,7 +123,10 @@
 
   <div class="source-note">
     <div><b>Market Library 是参考库，不会自动回答客户。</b> 只有经过核对并放进 Active Brain 的项目，Sales Brain 才会使用。</div>
-    <small id="source">正在读取资料...</small>
+    <div class="source-actions">
+      <small id="source">正在读取资料...</small>
+      <button class="btn primary" id="refresh-company" type="button">↻ 从公司刷新</button>
+    </div>
   </div>
 
   <section class="kpis" aria-label="Project Brain summary">
@@ -165,6 +191,72 @@ function range(min, max, unit) {
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[char]);
+}
+
+function planSummary(plan) {
+  return [
+    plan.name,
+    plan.builtUp ? `${fmt.format(plan.builtUp)} sq ft` : "",
+    plan.bedrooms ? `${plan.bedrooms} room` : "",
+    plan.bathrooms ? `${plan.bathrooms} bath` : "",
+    plan.carParks ? `${plan.carParks} parking` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderPlanGroup(title, plans, emptyText) {
+  const valid = (plans || []).filter((plan) => plan.imageUrl);
+  return `
+    <div class="company-detail-block">
+      <h4>${escapeHtml(title)} <span class="company-detail-meta">${valid.length}</span></h4>
+      ${valid.length ? `<div class="plan-grid">${valid.map((plan) => `
+        <a class="plan-card" href="${escapeHtml(plan.imageUrl)}" target="_blank" rel="noopener noreferrer">
+          <img src="${escapeHtml(plan.imageUrl)}" alt="${escapeHtml(plan.name)}" loading="lazy" referrerpolicy="no-referrer" />
+          <span>${escapeHtml(planSummary(plan))}</span>
+        </a>`).join("")}</div>` : `<div class="company-detail-empty">${escapeHtml(emptyText)}</div>`}
+    </div>`;
+}
+
+function renderInformationBlock(title, section, emptyText) {
+  return `
+    <div class="company-detail-block">
+      <h4>${escapeHtml(title)}</h4>
+      ${section?.value ? `<div class="company-detail-copy">${escapeHtml(section.value)}</div>` : `<div class="company-detail-empty">${escapeHtml(emptyText)}</div>`}
+    </div>`;
+}
+
+function renderSalesChart(detail) {
+  const chart = detail?.salesChart;
+  if (!chart) return `
+    <div class="company-detail-block">
+      <h4>Sales Chart</h4>
+      <div class="company-detail-empty">公司 Information 没有提供 Sales Chart 资料。</div>
+    </div>`;
+  return `
+    <div class="company-detail-block">
+      <h4>Sales Chart · Availability</h4>
+      <div class="credential-grid">
+        <div class="label">Website</div>
+        <div>${chart.website ? `<a href="${escapeHtml(chart.website)}" target="_blank" rel="noopener noreferrer">打开 Sales Chart ↗</a>` : "-"}</div>
+        <div class="label">Account</div><div>${escapeHtml(chart.username || "-")}</div>
+        <div class="label">Password</div>
+        <div class="secret-line"><span class="secret-value" id="sales-chart-password">••••••••</span>${chart.passwordAvailable ? '<button class="mini-btn" id="reveal-sales-chart" type="button">显示</button><button class="mini-btn" id="copy-sales-chart" type="button" hidden>复制</button>' : '<span class="company-detail-meta">未提供</span>'}</div>
+      </div>
+    </div>`;
+}
+
+function renderCompanyDetail(detail) {
+  if (!detail) return "";
+  const errors = (detail.errors || []).map((item) => `${item.section}: ${item.message}`);
+  return `
+    <div class="company-detail">
+      <div class="company-detail-meta">公司详情更新于 ${escapeHtml(new Date(detail.refreshedAt).toLocaleString([], { hour12:false }))}</div>
+      ${renderInformationBlock("Layout / Built-up", detail.layout, "公司 Information 没有填写 Layout 说明。")}
+      ${renderPlanGroup("Unit Plans", detail.unitPlans, "这个楼盘暂时没有上传 Unit Plan。")}
+      ${renderPlanGroup("Site / Floor Plans", detail.sitePlans, "这个楼盘暂时没有上传 Site / Floor Plan。")}
+      ${renderInformationBlock("Sales Package", detail.salesPackage, "公司 Information 没有填写 Sales Package。")}
+      ${renderSalesChart(detail)}
+      ${errors.length ? `<div class="detail-errors"><b>部分资料读取失败</b><br>${errors.map(escapeHtml).join("<br>")}</div>` : ""}
+    </div>`;
 }
 
 function fillSelect(id, values) {
@@ -235,31 +327,81 @@ function renderRows() {
     $("rows").innerHTML = '<tr><td colspan="6" class="loading">没有符合这些条件的项目。</td></tr>';
     return;
   }
-  $("rows").innerHTML = state.filtered.map((project) => `
-    <tr data-file="${escapeHtml(project.file)}" class="${state.selected === project.file ? "selected" : ""}">
+  $("rows").innerHTML = state.filtered.map((project) => {
+    const detailKey = project.detailKey || project.file;
+    const detailKind = project.detailKey ? "uid" : "file";
+    return `
+    <tr data-detail-key="${escapeHtml(detailKey)}" data-detail-kind="${detailKind}" class="${state.selected === detailKey ? "selected" : ""}">
       <td class="project-name">${escapeHtml(project.name)}<small>${escapeHtml(project.developer || "Developer not listed")}</small></td>
       <td class="place">${escapeHtml(project.state)}<small>${escapeHtml(project.area)}</small></td>
       <td>${escapeHtml(project.tenure)}</td>
       <td class="money">${escapeHtml(money(project.priceMin, project.priceMax))}</td>
       <td>${escapeHtml(project.completion || "-")}</td>
       <td><span class="status ${project.qaReady ? "ready" : "review"}">${project.qaReady ? "QA Ready" : "Review"}</span>${project.activeBrain ? '<span class="status active">Active</span>' : ""}</td>
-    </tr>`).join("");
-  document.querySelectorAll("#rows tr[data-file]").forEach((row) => row.addEventListener("click", () => selectProject(row.dataset.file)));
+    </tr>`;
+  }).join("");
+  document.querySelectorAll("#rows tr[data-detail-key]").forEach((row) => row.addEventListener("click", () => selectProject(row.dataset.detailKey, row.dataset.detailKind)));
 }
 
-async function selectProject(file) {
-  state.selected = file;
+async function revealSalesChart(uid) {
+  const button = $("reveal-sales-chart");
+  const output = $("sales-chart-password");
+  if (!button || !output) return;
+  button.disabled = true;
+  button.textContent = "读取中...";
+  try {
+    const response = await fetch("/api/project-brain/sales-chart/reveal", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({ uid }),
+      cache:"no-store",
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "Sales Chart 密码读取失败。");
+    output.textContent = data.salesChart.password;
+    button.textContent = "隐藏";
+    button.disabled = false;
+    button.onclick = () => {
+      const hidden = output.textContent === "••••••••";
+      output.textContent = hidden ? data.salesChart.password : "••••••••";
+      button.textContent = hidden ? "隐藏" : "显示";
+    };
+    const copy = $("copy-sales-chart");
+    if (copy) {
+      copy.hidden = false;
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(data.salesChart.password);
+          copy.textContent = "已复制";
+        } catch {
+          copy.textContent = "复制失败";
+        }
+        setTimeout(() => { copy.textContent = "复制"; }, 1200);
+      };
+    }
+  } catch (error) {
+    output.textContent = error.message;
+    button.textContent = "重试";
+    button.disabled = false;
+  }
+}
+
+async function selectProject(detailKey, detailKind, forceRefresh = false) {
+  state.selected = detailKey;
   renderRows();
   $("detail").innerHTML = '<h2>Project Detail</h2><div class="loading">Loading detail...</div>';
   try {
-    const response = await fetch(`/api/project-brain/detail?file=${encodeURIComponent(file)}`);
+    const query = `${detailKind === "uid" ? "uid" : "file"}=${encodeURIComponent(detailKey)}${forceRefresh && detailKind === "uid" ? "&refresh=1" : ""}`;
+    const response = await fetch(`/api/project-brain/detail?${query}`);
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || "Could not load project.");
     const p = data.project;
     $("detail").innerHTML = `
       <h2>Project Detail</h2>
-      <h3>${escapeHtml(p.name)}</h3>
-      <div class="developer">${escapeHtml(p.developer || "Developer not listed")}</div>
+      <div class="detail-heading-row">
+        <div><h3>${escapeHtml(p.name)}</h3><div class="developer">${escapeHtml(p.developer || "Developer not listed")}</div></div>
+        ${detailKind === "uid" ? '<button class="btn" id="refresh-project-detail" type="button">↻ 刷新详情</button>' : ""}
+      </div>
       <div><span class="status ${p.qaReady ? "ready" : "review"}">${p.qaReady ? "QA Ready" : "Needs Review"}</span>${p.activeBrain ? '<span class="status active">Active Brain Match</span>' : ""}</div>
       <dl class="detail-grid">
         <dt>Location</dt><dd>${escapeHtml([p.area, p.state].filter(Boolean).join(", "))}</dd>
@@ -274,7 +416,12 @@ async function selectProject(file) {
         <dt>Verified</dt><dd>${p.verified ? "Yes" : "No - check before quoting"}</dd>
       </dl>
       <div class="qa-box"><b>QA note</b><br>${escapeHtml(p.qaFlag)}</div>
+      ${renderCompanyDetail(p.companyDetail)}
       <div class="body-preview">${escapeHtml(p.body || "No project notes.")}</div>`;
+    const refreshDetail = $("refresh-project-detail");
+    if (refreshDetail) refreshDetail.addEventListener("click", () => selectProject(detailKey, detailKind, true));
+    const reveal = $("reveal-sales-chart");
+    if (reveal) reveal.onclick = () => revealSalesChart(detailKey);
   } catch (error) {
     $("detail").innerHTML = `<h2>Project Detail</h2><div class="error">${escapeHtml(error.message)}</div>`;
   }
@@ -291,9 +438,15 @@ async function load() {
     $("k-active").textContent = data.summary.activeBrainSheets;
     $("k-ready").textContent = data.summary.qaReady;
     $("k-verified").textContent = data.summary.verified;
-    $("source").textContent = `${data.source} · ${data.summary.recoveredFiles} legacy files normalized for viewing · ${new Date(data.generatedAt).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" })}`;
+    const company = data.company || {};
+    const sourceTime = company.collectedAt || data.generatedAt;
+    $("source").textContent = company.cached
+      ? `${data.source} · ${data.summary.marketProjects} projects · 已排除 Penang/Johor ${company.excludedCount || 0} 个 · ${new Date(sourceTime).toLocaleString([], { hour12:false })}`
+      : `${data.source} · 按「从公司刷新」读取最新楼盘`;
     renderBars(data.distributions.states);
     renderReadiness();
+    $("state").innerHTML = '<option value="">All states</option>';
+    $("price").innerHTML = '<option value="">All price bands</option>';
     fillSelect("state", data.projects.map((p) => p.state));
     fillSelect("price", data.distributions.priceBands.map((item) => item.label));
     refreshAreas();
@@ -304,11 +457,34 @@ async function load() {
   }
 }
 
+async function refreshFromCompany() {
+  const button = $("refresh-company");
+  const previousText = button.textContent;
+  button.disabled = true;
+  button.textContent = "正在从公司读取...";
+  $("source").textContent = "正在连接公司 Property 213 数据库...";
+  try {
+    const response = await fetch("/api/project-brain/refresh", { method:"POST" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "公司楼盘刷新失败。");
+    state.selected = null;
+    await load();
+    const result = data.result;
+    $("source").textContent = `${data.message} 新盘 ${result.newProjects} · 价格变动 ${result.priceChanges} · ${new Date(result.collectedAt).toLocaleString([], { hour12:false })}`;
+  } catch (error) {
+    $("source").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = previousText;
+  }
+}
+
 $("search").addEventListener("input", applyFilters);
 $("state").addEventListener("change", () => { refreshAreas(); applyFilters(); });
 $("area").addEventListener("change", applyFilters);
 $("price").addEventListener("change", applyFilters);
 $("readiness-filter").addEventListener("change", applyFilters);
+$("refresh-company").addEventListener("click", refreshFromCompany);
 load();
 </script>
 </body>

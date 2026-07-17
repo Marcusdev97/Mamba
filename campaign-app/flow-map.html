@@ -3,540 +3,352 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Mamba Flow Map</title>
+<title>Mamba Project Design</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
+  :root {
+    --map-green: #25d366;
+    --map-blue: #55a1ff;
+    --map-amber: #f5b342;
+    --map-purple: #a78bfa;
+    --map-red: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
   body { background: var(--bg); }
-  .shell {
-    max-width: 1480px;
-    min-height: calc(100vh - 16px);
-    margin: 8px auto;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 8px;
-    overflow: hidden;
-    background: rgba(10,13,17,.82);
-    box-shadow: 0 22px 70px rgba(0,0,0,.38);
+  .page { max-width: 1560px; margin: 0 auto; padding: 28px 30px 60px; }
+  .topbar { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:20px; }
+  h1 { margin:0; font-size:30px; letter-spacing:-.03em; }
+  .sub { color:var(--muted); margin-top:7px; line-height:1.55; }
+  .refresh {
+    border:1px solid var(--line); border-radius:10px; background:var(--panel-2); color:var(--text);
+    padding:10px 15px; font:inherit; font-weight:750; cursor:pointer;
   }
-  .content { padding: 28px 30px 34px; min-width: 0; }
-  .topbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 18px;
-    margin-bottom: 24px;
+  .refresh:hover { border-color:rgba(37,211,102,.4); color:var(--green); }
+  .live-strip {
+    display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); border:1px solid var(--line);
+    border-radius:14px; overflow:hidden; background:var(--panel); margin-bottom:18px;
   }
-  h1 { margin: 0; font-size: 30px; letter-spacing: -.2px; }
-  .sub { color: var(--muted); margin-top: 4px; }
-  .static-pill {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 40px;
-    padding: 9px 15px;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--panel-2);
-    color: var(--muted);
-    font-weight: 700;
+  .live-item { padding:15px 16px; border-right:1px solid var(--line); min-width:0; }
+  .live-item:last-child { border-right:0; }
+  .live-item span { display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:7px; }
+  .live-item b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 28px; }
+  .state { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:4px 8px; font-size:10px; font-weight:850; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--line); }
+  .state::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+  .state.active { color:var(--map-green); border-color:rgba(37,211,102,.32); background:rgba(37,211,102,.08); }
+  .state.transition { color:var(--map-amber); border-color:rgba(245,179,66,.3); background:rgba(245,179,66,.08); }
+  .state.off { color:var(--muted); background:rgba(255,255,255,.03); }
+  .state.target { color:var(--map-blue); border-color:rgba(85,161,255,.3); background:rgba(85,161,255,.08); }
+  .state.alert { color:var(--map-red); border-color:rgba(255,107,107,.3); background:rgba(255,107,107,.08); }
+  .section { margin-top:28px; }
+  .section-head { display:flex; justify-content:space-between; gap:16px; align-items:end; margin-bottom:13px; }
+  .section-head h2 { margin:0; font-size:18px; }
+  .section-head p { color:var(--muted); margin:0; font-size:12px; text-align:right; }
+  .map-panel { border:1px solid var(--line); border-radius:16px; background:rgba(21,24,30,.76); padding:18px; }
+  .lane-label { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:.08em; margin-bottom:12px; }
+  .lane-label::after { content:""; height:1px; background:var(--line); flex:1; }
+  .flow-row { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:18px; align-items:stretch; }
+  .flow-row.six { grid-template-columns:repeat(6,minmax(0,1fr)); }
+  .flow-row.five { grid-template-columns:repeat(5,minmax(0,1fr)); }
+  .node {
+    position:relative; min-height:150px; border:1px solid var(--line); border-radius:13px;
+    background:var(--panel-2); padding:14px; display:flex; flex-direction:column; min-width:0;
   }
-  .static-pill.primary {
-    color: var(--green);
-    border-color: rgba(37,211,102,.32);
-    background: rgba(37,211,102,.10);
+  .node:not(:last-child)::after {
+    content:"→"; position:absolute; right:-18px; top:50%; transform:translate(50%,-50%);
+    color:var(--map-green); font-size:20px; font-weight:900; z-index:2;
   }
-  .static-pill {
-    min-height: 0;
-    padding: 6px 12px;
-    width: fit-content;
-    margin-top: 12px;
-    font-size: 12px;
+  .node.active { border-color:rgba(37,211,102,.32); background:linear-gradient(145deg,rgba(37,211,102,.09),var(--panel-2)); }
+  .node.transition { border-color:rgba(245,179,66,.32); background:linear-gradient(145deg,rgba(245,179,66,.08),var(--panel-2)); }
+  .node.target { border-style:dashed; border-color:rgba(85,161,255,.42); }
+  .node.off { opacity:.68; border-style:dashed; }
+  .node-icon { width:34px; height:34px; display:grid; place-items:center; border-radius:10px; background:rgba(255,255,255,.055); margin-bottom:12px; font-size:18px; }
+  .node h3 { margin:0 0 6px; font-size:14px; }
+  .node p { margin:0; color:var(--muted); font-size:11px; line-height:1.55; }
+  .node .state { margin-top:auto; width:max-content; }
+  .branch-note {
+    margin:15px 0 2px; border-left:3px solid var(--map-amber); background:rgba(245,179,66,.07);
+    padding:10px 12px; color:var(--muted); font-size:12px; line-height:1.55;
   }
-  .status-strip {
-    display: grid;
-    grid-template-columns: 1.25fr repeat(5, 1fr);
-    gap: 0;
-    border: 1px solid rgba(37,211,102,.26);
-    border-radius: 13px;
-    overflow: hidden;
-    background: linear-gradient(90deg, rgba(37,211,102,.13), rgba(31,35,43,.78));
-    margin-bottom: 28px;
+  .branch-note b { color:var(--text); }
+  .data-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
+  .store { border:1px solid var(--line); border-radius:13px; background:var(--panel-2); padding:14px; min-height:142px; }
+  .store-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+  .store h3 { margin:0; font-size:14px; }
+  .store p { color:var(--muted); font-size:11px; line-height:1.55; margin:0; }
+  .store strong { display:block; color:var(--text); margin-top:9px; font-size:12px; }
+  .truth-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .truth-table th { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.07em; text-align:left; padding:11px 12px; border-bottom:1px solid var(--line); }
+  .truth-table td { padding:12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.45; }
+  .truth-table tr:last-child td { border-bottom:0; }
+  .truth-table td:nth-child(2), .truth-table td:nth-child(3) { color:var(--muted); }
+  .flow-sequence { display:grid; grid-template-columns:repeat(8,minmax(0,1fr)); gap:9px; }
+  .flow-step { position:relative; border:1px solid var(--line); border-radius:12px; padding:12px; background:var(--panel-2); min-height:118px; }
+  .flow-step:not(:last-child)::after { content:"›"; position:absolute; right:-8px; top:44%; color:var(--green); font-weight:900; z-index:2; }
+  .flow-day { color:var(--green); font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:.06em; }
+  .flow-step b { display:block; margin:8px 0 5px; font-size:13px; }
+  .flow-step span { color:var(--muted); font-size:10px; }
+  .conditional { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
+  .conditional div { border:1px dashed rgba(167,139,250,.42); border-radius:11px; padding:11px 13px; color:var(--muted); font-size:11px; }
+  .conditional b { color:var(--text); margin-right:6px; }
+  .identity-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+  .identity {
+    border:1px solid var(--line); border-radius:13px; background:var(--panel-2); padding:14px;
+    display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start;
   }
-  .status-cell {
-    padding: 16px 18px;
-    border-right: 1px solid rgba(255,255,255,.08);
-    min-height: 86px;
+  .identity-no { width:30px; height:30px; display:grid; place-items:center; border-radius:9px; background:rgba(85,161,255,.1); color:var(--map-blue); font-weight:850; }
+  .identity b { display:block; font-size:13px; margin-bottom:5px; }
+  .identity span { color:var(--muted); font-size:11px; line-height:1.5; }
+  .safety-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+  .rule { border-left:3px solid var(--green); background:var(--panel-2); border-radius:0 11px 11px 0; padding:12px 13px; min-height:88px; }
+  .rule:nth-child(2), .rule:nth-child(5) { border-color:var(--map-blue); }
+  .rule:nth-child(3), .rule:nth-child(6) { border-color:var(--map-amber); }
+  .rule b { display:block; font-size:12px; margin-bottom:6px; }
+  .rule span { color:var(--muted); font-size:11px; line-height:1.45; }
+  .warning {
+    display:none; margin-top:14px; padding:12px 14px; border:1px solid rgba(255,107,107,.32);
+    background:rgba(255,107,107,.08); color:#ffb1b1; border-radius:11px; font-size:12px;
   }
-  .status-cell:last-child { border-right: none; }
-  .status-cell span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-  .status-cell b { display: flex; align-items: center; gap: 10px; font-size: 22px; color: var(--text); }
-  .status-emoji {
-    width: 34px;
-    height: 34px;
-    display: inline-grid;
-    place-items: center;
-    border-radius: 10px;
-    background: rgba(255,255,255,.06);
-    border: 1px solid rgba(255,255,255,.08);
-    font-size: 18px;
-    flex: 0 0 auto;
+  @media (max-width:1250px) {
+    .flow-row, .flow-row.six, .flow-row.five { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .node::after { display:none; }
+    .data-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .flow-sequence { grid-template-columns:repeat(4,minmax(0,1fr)); }
   }
-  .status-cell.run b { color: var(--green); font-size: 15px; margin-top: 8px; }
-  .pulse {
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    color: var(--text);
-    font-weight: 800;
+  @media (max-width:850px) {
+    .page { padding:20px 16px 46px; }
+    .topbar, .section-head { align-items:flex-start; flex-direction:column; }
+    .section-head p { text-align:left; }
+    .live-strip { grid-template-columns:1fr 1fr; }
+    .live-item { border-bottom:1px solid var(--line); }
+    .flow-row, .flow-row.six, .flow-row.five, .data-grid, .safety-grid, .identity-grid { grid-template-columns:1fr 1fr; }
+    .truth-wrap { overflow-x:auto; }
   }
-  .pulse::before {
-    content: "";
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--green);
-    box-shadow: 0 0 0 6px rgba(37,211,102,.14), 0 0 20px rgba(37,211,102,.75);
-  }
-  .wave {
-    width: 100%;
-    height: 28px;
-    margin-top: 8px;
-    background:
-      linear-gradient(90deg, transparent 0 10%, rgba(37,211,102,.2) 10% 11%, transparent 11% 20%),
-      repeating-linear-gradient(100deg, transparent 0 9px, rgba(37,211,102,.22) 10px 12px, transparent 13px 20px);
-    mask-image: linear-gradient(90deg, transparent, #000 18%, #000 80%, transparent);
-    opacity: .75;
-  }
-  .main-map {
-    display: grid;
-    grid-template-columns: 1fr 1.05fr 1.12fr .95fr;
-    gap: 18px;
-    align-items: start;
-    margin-bottom: 22px;
-  }
-  .node-card, .brain-card, .decision-card {
-    position: relative;
-    border: 1px solid rgba(255,255,255,.10);
-    border-radius: 14px;
-    background: rgba(24,27,33,.78);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-  }
-  .node-card {
-    height: 560px;
-    padding: 18px;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-  .node-card::before {
-    content: "";
-    position: absolute;
-    inset: -20%;
-    background: radial-gradient(circle at 55% 48%, rgba(37,211,102,.20), transparent 34%);
-    opacity: .65;
-    pointer-events: none;
-  }
-  .node-head { position: relative; display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
-  .node-no {
-    width: 30px; height: 30px; border-radius: 50%;
-    display: grid; place-items: center;
-    background: var(--green-bg);
-    color: var(--green);
-    font-weight: 850;
-    border: 1px solid rgba(37,211,102,.25);
-  }
-  .node-head h3 { margin: 0; font-size: 18px; }
-  .megaphone {
-    position: relative;
-    height: 246px;
-    margin: 10px 0 16px;
-    flex: 1 0 auto;
-  }
-  .horn {
-    position: absolute;
-    left: 52px;
-    bottom: 54px;
-    width: 126px;
-    height: 84px;
-    border-radius: 20px 70px 70px 20px;
-    background: linear-gradient(135deg, #13251e, #2ed572);
-    border: 1px solid rgba(87,255,168,.5);
-    box-shadow: 0 0 35px rgba(37,211,102,.36);
-    transform: rotate(-10deg);
-  }
-  .horn::before {
-    content: "";
-    position: absolute;
-    left: -22px;
-    top: 28px;
-    width: 34px;
-    height: 30px;
-    border-radius: 7px;
-    background: #16362a;
-    border: 1px solid rgba(87,255,168,.4);
-  }
-  .beam {
-    position: absolute;
-    left: 150px;
-    bottom: 92px;
-    width: 170px;
-    height: 70px;
-    background: linear-gradient(90deg, rgba(37,211,102,.7), transparent);
-    clip-path: polygon(0 38%, 100% 0, 100% 100%, 0 62%);
-    filter: blur(.3px);
-  }
-  .doc {
-    position: absolute;
-    width: 34px;
-    height: 44px;
-    border-radius: 6px;
-    background: linear-gradient(145deg, #2ddf78, #1e7b50);
-    border: 1px solid rgba(255,255,255,.22);
-    box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  }
-  .doc:nth-child(1) { left: 92px; top: 28px; transform: rotate(-15deg); }
-  .doc:nth-child(2) { left: 166px; top: 66px; transform: rotate(13deg); background: #26313d; }
-  .doc:nth-child(3) { left: 70px; top: 124px; transform: rotate(8deg); background: #26313d; }
-  .node-copy { position: relative; color: var(--muted); }
-  .node-copy b { color: var(--text); display: block; margin-bottom: 5px; }
-  .arrow {
-    position: absolute;
-    right: -28px;
-    top: 50%;
-    width: 56px;
-    height: 3px;
-    background: linear-gradient(90deg, var(--green), #5999ff);
-    box-shadow: 0 0 16px rgba(37,211,102,.45);
-    z-index: 3;
-  }
-  .arrow::after {
-    content: "";
-    position: absolute;
-    right: -1px;
-    top: -5px;
-    border-left: 12px solid #5999ff;
-    border-top: 6px solid transparent;
-    border-bottom: 6px solid transparent;
-  }
-  .chat-card { padding: 18px; height: 560px; }
-  .chat-stack { display: grid; gap: 12px; margin: 22px 0 20px; }
-  .bubble {
-    width: 84%;
-    border: 1px solid var(--line);
-    border-radius: 13px;
-    background: var(--panel-2);
-    padding: 11px 12px;
-    color: var(--text);
-    box-shadow: 0 10px 24px rgba(0,0,0,.18);
-  }
-  .bubble.me { justify-self: end; background: rgba(37,211,102,.16); border-color: rgba(37,211,102,.30); }
-  .bubble small { display:block; color:var(--muted); text-align:right; margin-top:2px; }
-  .people {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 8px;
-    margin-top: 14px;
-  }
-  .person {
-    height: 42px;
-    border: 1px solid var(--line);
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: var(--panel-2);
-  }
-  .brain-card {
-    height: 560px;
-    padding: 22px 18px;
-    border-color: rgba(91,142,255,.38);
-    background: linear-gradient(180deg, rgba(34,51,93,.72), rgba(18,24,35,.92));
-    text-align: center;
-  }
-  .brain-orb {
-    width: 220px;
-    height: 220px;
-    margin: 20px auto 18px;
-    border-radius: 50%;
-    position: relative;
-    display: grid;
-    place-items: center;
-    background:
-      radial-gradient(circle at 50% 48%, rgba(37,211,102,.34), transparent 36%),
-      radial-gradient(circle at 48% 48%, rgba(74,158,255,.38), transparent 58%),
-      rgba(12,16,26,.72);
-    border: 1px solid rgba(89,153,255,.50);
-    box-shadow: 0 0 40px rgba(74,158,255,.25), inset 0 0 42px rgba(37,211,102,.10);
-  }
-  .brain-orb::before, .brain-orb::after {
-    content: "";
-    position: absolute;
-    border-radius: 50%;
-    border: 1px solid rgba(74,158,255,.38);
-    inset: 22px;
-  }
-  .brain-orb::after {
-    inset: 44px;
-    border-color: rgba(37,211,102,.35);
-  }
-  .brain-emoji {
-    font-size: 82px;
-    filter: drop-shadow(0 0 22px rgba(37,211,102,.55));
-  }
-  .trigger {
-    width: fit-content;
-    margin: 0 auto 12px;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 9px 17px;
-    color: var(--green);
-    border: 1px solid rgba(37,211,102,.35);
-    border-radius: 999px;
-    background: rgba(37,211,102,.10);
-    font-weight: 800;
-  }
-  .tags { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin: 10px 0 14px; }
-  .tag {
-    padding: 5px 10px;
-    border-radius: 7px;
-    border: 1px solid var(--line);
-    color: var(--muted);
-    background: rgba(255,255,255,.03);
-    font-size: 12px;
-  }
-  .tag.hot { color:#ffae42; border-color:rgba(245,179,66,.35); background:rgba(245,179,66,.12); }
-  .tag.warm { color:var(--green); border-color:rgba(37,211,102,.35); background:rgba(37,211,102,.10); }
-  .tag.stop { color:var(--red); border-color:rgba(255,93,93,.35); background:rgba(255,93,93,.10); }
-  .tag.cold { color:var(--blue); border-color:rgba(74,158,255,.35); background:rgba(74,158,255,.10); }
-  .decision-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .decision-card { padding: 9px; min-height: 70px; display: grid; grid-template-columns: 30px 1fr; gap: 8px; align-items: center; }
-  .decision-card.hot { border-color: rgba(245,179,66,.28); background: rgba(245,179,66,.08); }
-  .decision-card.green { border-color: rgba(37,211,102,.26); background: rgba(37,211,102,.07); }
-  .decision-card.red { border-color: rgba(255,93,93,.28); background: rgba(255,93,93,.08); }
-  .decision-card.purple { border-color: rgba(157,112,255,.28); background: rgba(157,112,255,.08); }
-  .decision-icon {
-    width: 30px;
-    height: 30px;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-    background: rgba(255,255,255,.06);
-    font-size: 17px;
-  }
-  .decision-card b { display:block; }
-  .decision-card span { color:var(--muted); font-size:11px; }
-  .right-stack { display:grid; gap:10px; }
-  .notion-card {
-    border:1px solid rgba(37,211,102,.36);
-    border-radius:16px;
-    padding:12px;
-    background:linear-gradient(180deg, rgba(37,211,102,.10), rgba(24,27,33,.88));
-  }
-  .notion-box {
-    margin-top:8px;
-    border:1px solid rgba(255,255,255,.10);
-    border-radius:12px;
-    background:rgba(255,255,255,.03);
-    padding:9px;
-  }
-  .notion-logo {
-    width:34px; height:34px; border-radius:8px;
-    display:grid; place-items:center;
-    background:#fff;
-    color:#111;
-    font-size:22px;
-    font-weight:900;
-    margin-bottom:8px;
-  }
-  .check-list { display:grid; gap:4px; color:var(--muted); font-size:12px; }
-  .check-list span::before { content:"✓"; color:var(--green); margin-right:8px; }
-  .desk-card {
-    border:1px solid rgba(157,112,255,.38);
-    border-radius:16px;
-    padding:12px;
-    background:linear-gradient(135deg, rgba(115,71,255,.22), rgba(24,27,33,.88));
-  }
-  .desk-row { display:flex; align-items:center; gap:13px; }
-  .desk-icon { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; background:rgba(157,112,255,.20); font-size:21px; }
-  .bottom-grid {
-    display:grid;
-    grid-template-columns:1fr;
-    gap:16px;
-    margin-top:18px;
-  }
-  .loop-card {
-    border:1px solid rgba(255,255,255,.10);
-    border-radius:14px;
-    background:rgba(24,27,33,.78);
-    padding:18px;
-  }
-  .section-title { margin:0 0 14px; color:var(--muted); font-size:14px; letter-spacing:.05em; text-transform:uppercase; }
-  .timeline { display:grid; gap:10px; position:relative; }
-  .timeline::before { content:""; position:absolute; left:7px; top:15px; bottom:16px; width:1px; background:var(--line-2); }
-  .time-row {
-    display:grid;
-    grid-template-columns:54px 1fr auto;
-    gap:12px;
-    align-items:center;
-    padding:10px 10px 10px 0;
-    border:1px solid var(--line);
-    border-radius:10px;
-    background:var(--panel-2);
-  }
-  .time-dot { width:14px; height:14px; border-radius:50%; background:var(--green); margin-left:1px; box-shadow:0 0 0 4px rgba(37,211,102,.12); }
-  .time { color:var(--muted); font-family:var(--font-mono); }
-  .time-main b { display:block; }
-  .time-main span { color:var(--muted); font-size:12px; }
-  .orange { color:#ffae42; }
-  .blue { color:var(--blue); }
-  .green { color:var(--green); }
-  .red { color:var(--red); }
-  .purple { color:#a78bfa; }
-  .hint {
-    margin-top:16px;
-    color:var(--muted);
-    font-size:12px;
-    text-align:center;
-  }
-  @media (max-width: 1220px) {
-    .main-map { grid-template-columns:1fr 1fr; }
-    .brain-card { grid-row:span 2; }
-    .right-stack { grid-column:2; }
-    .arrow { display:none; }
-  }
-  @media (max-width: 900px) {
-    .shell { margin:0; border-radius:0; }
-    .content { padding:20px; }
-    .topbar { justify-content:flex-start; }
-    .topbar { flex-direction:column; }
-    .status-strip { grid-template-columns:1fr 1fr; }
-    .status-cell { border-bottom:1px solid rgba(255,255,255,.08); }
-    .main-map, .bottom-grid { grid-template-columns:1fr; }
-    .right-stack { grid-column:auto; }
-  }
-  @media (max-width: 560px) {
-    .status-strip { grid-template-columns:1fr; }
-    .time-row { grid-template-columns:1fr; }
-    .brain-orb { width:210px; height:210px; }
+  @media (max-width:560px) {
+    .live-strip, .flow-row, .flow-row.six, .flow-row.five, .data-grid, .safety-grid, .flow-sequence, .conditional, .identity-grid { grid-template-columns:1fr; }
+    .live-item { border-right:0; }
+    .flow-step::after { display:none; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
-<div class="shell">
-  <main class="content">
-    <div class="topbar">
-      <div>
-        <h1>Mamba Flow Map</h1>
-        <div class="sub">流程示意: 群发 → 对话 → Rule / AI 判断 → 更新 Notion → 人工跟进</div>
+<main class="page">
+  <header class="topbar">
+    <div>
+      <h1>Mamba Project Design</h1>
+      <div class="sub">这张图分开显示「现在真正运行的路径」和「还在迁移中的目标」，避免把未来设计误当成已经完成。</div>
+    </div>
+    <button class="refresh" id="refreshMap" type="button">↻ 刷新实时状态</button>
+  </header>
+
+  <section class="live-strip" aria-label="Mamba live architecture status">
+    <div class="live-item"><span>Device</span><b id="liveDevice">读取中…</b></div>
+    <div class="live-item"><span>WhatsApp Account</span><b id="liveSender">读取中…</b></div>
+    <div class="live-item"><span>SQLite</span><b id="liveSqlite">读取中…</b></div>
+    <div class="live-item"><span>Customer Scope</span><b id="liveCustomers">读取中…</b></div>
+    <div class="live-item"><span>Reply Brain</span><b id="liveBrain">读取中…</b></div>
+  </section>
+  <div class="legend">
+    <span class="state active">Active now</span>
+    <span class="state transition">Transition / mixed source</span>
+    <span class="state off">Disabled</span>
+    <span class="state target">Target design</span>
+  </div>
+
+  <section class="section">
+    <div class="section-head"><h2>1. Outbound · 群发关键路径</h2><p>按钮 → 安全检查 → 排队 → Multi-Part → WhatsApp</p></div>
+    <div class="map-panel">
+      <div class="lane-label">Current runtime path</div>
+      <div class="flow-row">
+        <article class="node active"><div class="node-icon">👤</div><h3>Marcus / Operator</h3><p>在 Campaign Center 选择项目、名单、号码与时间。</p><span class="state active">Manual trigger</span></article>
+        <article class="node active"><div class="node-icon">🖥️</div><h3>Mamba :8787</h3><p>唯一业务入口。建立 run、套模板、保存发送状态。</p><span class="state active">Core server</span></article>
+        <article class="node active"><div class="node-icon">🛡️</div><h3>Safety Gates</h3><p>Device + 真号码、OPEN、STOP、回复拦截、发送速度。</p><span class="state active">Required</span></article>
+        <article class="node active"><div class="node-icon">🧵</div><h3>Sender Queue</h3><p>每个号码一条 lane。AUTO 尽早完成；FIXED 遵守截止时间。</p><span class="state active">Per sender</span></article>
+        <article class="node active"><div class="node-icon">📨</div><h3>Multi-Part Runner</h3><p>Part 1 → 间隔 → Part 2 → Part 3+。状态持续写入本机。</p><span class="state active">Resume safe</span></article>
+        <article class="node active"><div class="node-icon">⚙️</div><h3>Evolution :8080</h3><p>只负责 WhatsApp Provider 的发送、接收与连接健康。</p><span class="state active">Transport</span></article>
+        <article class="node active"><div class="node-icon">💬</div><h3>Customer WhatsApp</h3><p>客户接收 Flow、回复、STOP 或提出预约。</p><span class="state active">External</span></article>
       </div>
+      <div class="branch-note"><b>中断恢复：</b>run JSON 保存每个 Part 的 sentAt。Resume 只继续 `QUEUED / WAITING_PARTn / SENDING_PARTn`；已完成 Part、FAILED 与其他客户不会重发。Provider timeout 无法确认时也不会自动重试。</div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>2. Inbound · 回复与人工接管</h2><p>AI 自动回复目前关闭；Tracker、Rule 分类和人工队列继续工作</p></div>
+    <div class="map-panel">
+      <div class="lane-label">Reply path</div>
+      <div class="flow-row six">
+        <article class="node active"><div class="node-icon">💬</div><h3>Customer Reply</h3><p>客户通过 WhatsApp 回复当前发送号码。</p><span class="state active">Inbound</span></article>
+        <article class="node active"><div class="node-icon">⚙️</div><h3>Evolution</h3><p>提供消息记录；Mamba Tracker 读取并去重。</p><span class="state active">Connected</span></article>
+        <article class="node active"><div class="node-icon">📡</div><h3>Reply Tracker</h3><p>保存原始回复、电话号码、instance 和时间。</p><span class="state active">Always on</span></article>
+        <article class="node active"><div class="node-icon">📜</div><h3>Local History</h3><p>回复先留在本机 JSONL；Notion 失败也不会丢消息。</p><span class="state active">Local safety</span></article>
+        <article class="node active"><div class="node-icon">🧭</div><h3>Rule Classifier</h3><p>STOP、价格、Layout、地点、预约、Unknown 分流。</p><span class="state active">Deterministic</span></article>
+        <article class="node active"><div class="node-icon">🎧</div><h3>Human Follow-Up</h3><p>Customer Desk、Follow-Up、预约与 Telegram 告警。</p><span class="state active">Manual action</span></article>
+      </div>
+      <div class="branch-note"><b>AI 分支：</b>Sales Brain 自动回复当前是 OFF。旧 approval backlog 不再算作今天的工作项；开启前必须先完成测试、清理历史 pending，并保持人工审批安全门。</div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>3. Data Layer · 数据到底放在哪里</h2><p>Local-first 是目标；现在仍处于 SQLite 与 Notion 混合迁移期</p></div>
+    <div class="data-grid">
+      <article class="store"><div class="store-head"><h3>Run JSON</h3><span class="state active">Active</span></div><p>当前 Campaign 的实时状态：每个客户、每个 Part、错误与 Resume 位置。</p><strong>发送运行状态的当前真相源</strong></article>
+      <article class="store" id="sqliteStore"><div class="store-head"><h3>SQLite Runtime</h3><span class="state transition" id="sqliteState">Checking</span></div><p>当前 v3 客户库可以进入 Primary；v4 Account / Binding 候选库仍未 Cutover。</p><strong id="sqliteDetail">读取数据库状态…</strong></article>
+      <article class="store"><div class="store-head"><h3>Notion</h3><span class="state transition">Transition</span></div><p>目前仍提供 Flow 1/2-10 部分名单、模板与写回；目标是异步云端镜像。</p><strong>不能再长期留在发送/回复关键路径</strong></article>
+      <article class="store"><div class="store-head"><h3>Telegram Hub</h3><span class="state active">Ops</span></div><p>接收 Campaign、回复、错误与人工审批通知；不是客户资料真相源。</p><strong>跨设备系统台</strong></article>
+      <article class="store"><div class="store-head"><h3>Property 213</h3><span class="state active">Read only</span></div><p>Market Dashboard 独立读取公司楼盘、Layout、Package 与 Sales Chart。</p><strong>不会进入 blasting 客户数据库</strong></article>
     </div>
 
-    <section class="status-strip">
-      <div class="status-cell run">
-        <div class="pulse">Mamba 工作流程</div>
-        <b>Flow 1 → Reply → Next Flow</b>
-        <div class="wave"></div>
+    <div class="map-panel truth-wrap" style="margin-top:12px">
+      <table class="truth-table">
+        <thead><tr><th>Business area</th><th>Current source</th><th>Target source</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Campaign 运行状态</td><td>本机 run JSON</td><td>SQLite `campaign_runs / send_jobs`</td><td><span class="state transition">Migration</span></td></tr>
+          <tr><td>Customer Desk / Search / Follow-Up</td><td id="deskCurrent">Notion cache</td><td>SQLite Primary</td><td><span class="state transition" id="deskState">Checking</span></td></tr>
+          <tr><td>Flow 1 名单与 Template</td><td>Excel / Notion Template</td><td>SQLite + 已验证 Template cache</td><td><span class="state transition">Mixed</span></td></tr>
+          <tr><td>Flow 2–10 选人 / 推进</td><td>Notion Blast Leads</td><td>SQLite `project_leads`</td><td><span class="state transition">Not cut over</span></td></tr>
+          <tr><td>Reply 原始历史</td><td>本机 JSONL + Notion retry queue</td><td>SQLite `conversations / messages`</td><td><span class="state transition">Protected locally</span></td></tr>
+          <tr><td>账号 / 换机 / 原子去重</td><td>v4 candidate code + shadow database</td><td>Account + Binding + Send Claims</td><td><span class="state target">Not cut over</span></td></tr>
+          <tr><td>Notion</td><td>仍在部分关键路径</td><td>异步镜像 + 人看的面板</td><td><span class="state target">Target</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>4. Account &amp; Device · 号码身份与换电脑</h2><p>`wa_01` 不是账号身份；真正跨电脑的是 WhatsApp 号码</p></div>
+    <div class="identity-grid">
+      <div class="identity"><span class="identity-no">A</span><div><b>WhatsApp Account</b><span>`account_key = 真实号码`。暖机、Daily Cap、健康和累计发送跟着号码走。</span></div></div>
+      <div class="identity"><span class="identity-no">B</span><div><b>Device Binding</b><span>`device_key::真实号码 + generation`。决定这个号码目前允许在哪台电脑运行。</span></div></div>
+      <div class="identity"><span class="identity-no">C</span><div><b>Evolution Connection</b><span>`wa_01 / wa_02` 只是本机连接名称，可以在不同电脑重复。</span></div></div>
+    </div>
+    <div class="map-panel">
+      <div class="lane-label">Cooperative handoff · v4 candidate / 尚未 Cutover</div>
+      <div class="flow-row five">
+        <article class="node transition"><div class="node-icon">💻</div><h3>PC A · ACTIVE</h3><p>号码、客户、STOP、Campaign、Cap 与发送历史都在本机。</p><span class="state transition">Source</span></article>
+        <article class="node transition"><div class="node-icon">⏸️</div><h3>Freeze &amp; Check</h3><p>停 Scheduler；确认没有未结算 CLAIMED Part，才可建立快照。</p><span class="state transition">Preparing</span></article>
+        <article class="node target"><div class="node-icon">🔐</div><h3>Encrypted Bundle</h3><p>AES-GCM + 密码 + hash + expiry。SQLite 文件本身不会云同步。</p><span class="state target">Handoff file</span></article>
+        <article class="node target"><div class="node-icon">📥</div><h3>PC B · Import</h3><p>连接同一个真实号码，验证并导入客户、STOP、未完成 run 与发送证据。</p><span class="state target">Target PC</span></article>
+        <article class="node target"><div class="node-icon">✅</div><h3>New Generation</h3><p>PC B 取得 generation +1；PC A 变 RELEASED，未完成 Part 从证据点续跑。</p><span class="state target">New active</span></article>
       </div>
-      <div class="status-cell"><span>发送入口</span><b><i class="status-emoji">📣</i>Blasting</b></div>
-      <div class="status-cell"><span>回复入口</span><b><i class="status-emoji">💬</i>Reply Intake</b></div>
-      <div class="status-cell"><span>匹配触发</span><b><i class="status-emoji">🧠</i>Brain</b></div>
-      <div class="status-cell"><span>推送到</span><b><i class="status-emoji">🗂️</i>Notion</b></div>
-      <div class="status-cell"><span>处理人</span><b><i class="status-emoji">🎧</i>Agent</b></div>
-    </section>
+      <div class="branch-note"><b>目前边界：</b>v4 Schema、迁移、Account/Binding、Send Claims 与加密 Bundle 核心服务已经写入候选代码，但发送热路径和 Handoff UI 仍关闭。现在不能把上面的蓝色步骤当成可正式使用；Emergency Takeover 必须等 Phase 2 原子 Arbiter。</div>
+    </div>
+  </section>
 
-    <section class="main-map">
-      <article class="node-card">
-        <div class="node-head"><div class="node-no">01</div><h3>Blasting</h3></div>
-        <div class="megaphone">
-          <div class="doc"></div><div class="doc"></div><div class="doc"></div>
-          <div class="horn"></div>
-          <div class="beam"></div>
-        </div>
-        <div class="node-copy">
-          <b>群发消息触达大量客户</b>
-          Excel / CSV · Notion 模板 · 多号码 sender
-        </div>
-        <div class="arrow"></div>
-      </article>
+  <section class="section">
+    <div class="section-head"><h2>5. Flow 1–10 · 自动跟进节奏</h2><p>自动主链共 8 步；Flow 5 与 Flow 9 只在符合条件时人工加入</p></div>
+    <div class="flow-sequence">
+      <div class="flow-step"><span class="flow-day">Day 0</span><b>Flow 1</b><span>Project Template</span></div>
+      <div class="flow-step"><span class="flow-day">Day 2</span><b>Flow 2</b><span>Layout</span></div>
+      <div class="flow-step"><span class="flow-day">Day 4</span><b>Flow 3</b><span>Location</span></div>
+      <div class="flow-step"><span class="flow-day">Day 6</span><b>Flow 4</b><span>Package</span></div>
+      <div class="flow-step"><span class="flow-day">Day 9</span><b>Flow 6</b><span>Price</span></div>
+      <div class="flow-step"><span class="flow-day">Day 12</span><b>Flow 7</b><span>Facilities</span></div>
+      <div class="flow-step"><span class="flow-day">Day 15</span><b>Flow 8</b><span>Invitation</span></div>
+      <div class="flow-step"><span class="flow-day">Day 18</span><b>Flow 10</b><span>Surrounding · End</span></div>
+    </div>
+    <div class="conditional">
+      <div><b>Conditional Flow 5</b>Furnished List — 只发送给适合且人工标记的客户。</div>
+      <div><b>Conditional Flow 9</b>Rental — 只发送给有出租 / 投资方向的客户。</div>
+    </div>
+  </section>
 
-      <article class="node-card chat-card">
-        <div class="node-head"><div class="node-no">02</div><h3>Customer Inbox</h3></div>
-        <div class="chat-stack">
-          <div class="bubble">你好，询问有价格表吗？<small>09:41</small></div>
-          <div class="bubble me">当然可以，我帮你 check 最新价格。<small>09:44</small></div>
-          <div class="bubble">我们预算有限，可以便宜点吗？<small>08:42</small></div>
-          <div class="bubble">正在输入...<small>now</small></div>
-        </div>
-        <div class="people"><div class="person">👤</div><div class="person">👤</div><div class="person">👤</div><div class="person">👤</div><div class="person">👤</div></div>
-        <div class="node-copy">
-          <b>客户回复汇集到系统</b>
-          实时抓取 · 去重 · 同步 latest reply
-        </div>
-        <div class="arrow"></div>
-      </article>
+  <section class="section">
+    <div class="section-head"><h2>6. Project Safety Rules · 不可以破坏的规则</h2><p>这些约束比 UI 名称或 Notion 字段更重要</p></div>
+    <div class="safety-grid">
+      <div class="rule"><b>① Account = 真实号码；Binding = Device::号码</b><span>`wa_01` 只是在本机使用的 instance 名，两台电脑可以重复。</span></div>
+      <div class="rule"><b>② STOP 属于 Contact</b><span>同一个号码在任何项目退订，所有项目都必须停止发送。</span></div>
+      <div class="rule"><b>③ Timeout 不自动重发</b><span>Provider 没确认时先查 WhatsApp，避免客户收到重复内容。</span></div>
+      <div class="rule"><b>④ Resume 只补未完成 Part</b><span>已完成 Part 和其他已处理客户永远不重发。</span></div>
+      <div class="rule"><b>⑤ SQLite 每台 Mac 独立</b><span>不要用 iCloud / Dropbox / Git 同步 `.sqlite` 文件。</span></div>
+      <div class="rule"><b>⑥ Notion 最终退出热路径</b><span>Notion 可以慢、可以重试，但不能阻塞 WhatsApp 收发。</span></div>
+    </div>
+    <div class="warning" id="mapWarning"></div>
+  </section>
+</main>
 
-      <article class="brain-card">
-        <div class="node-head" style="justify-content:center"><div class="node-no">03</div><h3>Mamba Brain</h3></div>
-        <div class="sub">Rule / AI 判断中枢</div>
-        <div class="brain-orb"><div class="brain-emoji">🧠</div></div>
-        <div class="trigger">✓ Trigger matched</div>
-        <div class="tags">
-          <span class="tag warm">Warm</span>
-          <span class="tag hot">Hot</span>
-          <span class="tag stop">STOP</span>
-          <span class="tag">Spam</span>
-          <span class="tag cold">Cold</span>
-        </div>
-        <div class="hint">根据预设规则判断意图与优先级<br>关键词触发 · 规则匹配 · 打分判断</div>
-      </article>
+<script>
+const $ = (id) => document.getElementById(id);
 
-      <div class="right-stack">
-        <div class="decision-col">
-          <div class="decision-card hot"><div class="decision-icon">🔥</div><div><b>Warm / Hot</b><span>高意向客户</span></div></div>
-          <div class="decision-card green"><div class="decision-icon">🕒</div><div><b>No reply</b><span>无回复 / 冷淡</span></div></div>
-          <div class="decision-card red"><div class="decision-icon">🛑</div><div><b>STOP</b><span>不相关 / 屏蔽</span></div></div>
-          <div class="decision-card purple"><div class="decision-icon">🛰️</div><div><b>Spam</b><span>垃圾 / 无效</span></div></div>
-        </div>
+function phoneLabel(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits ? "+" + digits : "No local sender";
+}
 
-        <article class="notion-card">
-          <div class="node-head"><div class="node-no">04</div><h3>Notion Update</h3></div>
-          <div class="notion-box">
-            <div class="notion-logo">N</div>
-            <h3 style="margin:0 0 10px">Notion</h3>
-            <div class="check-list">
-              <span>Leads 数据库更新</span>
-              <span>对话记录同步</span>
-              <span>标签 & 优先级更新</span>
-              <span>来源 Flow 记录</span>
-            </div>
-          </div>
-        </article>
+async function api(path) {
+  const response = await fetch(path, { headers: { "Accept": "application/json" } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
 
-        <article class="desk-card">
-          <div class="desk-row">
-            <div class="desk-icon">🎧</div>
-            <div>
-              <h3 style="margin:0">Follow-Up &amp; Appointments</h3>
-              <div class="sub">Push to agent · 推送到人工跟进队列</div>
-            </div>
-          </div>
-        </article>
-      </div>
-    </section>
+function setState(element, mode, label) {
+  element.className = "state " + mode;
+  element.textContent = label;
+}
 
-    <section class="bottom-grid">
-      <article class="loop-card">
-        <h2 class="section-title">Daily Operating Loop</h2>
-        <div class="timeline">
-          <div class="time-row"><div class="time"><span class="time-dot"></span> 09:00</div><div class="time-main"><b>Morning</b><span>刷新回复、同步缓存、检查需跟进</span></div><span class="static-pill">Follow-Up</span></div>
-          <div class="time-row"><div class="time"><span class="time-dot" style="background:var(--blue)"></span> 09:15</div><div class="time-main"><b>First Blast</b><span>Flow 1 群发已发送，计时开始</span></div><span class="static-pill">Blast</span></div>
-          <div class="time-row"><div class="time"><span class="time-dot" style="background:#a78bfa"></span> 09:30</div><div class="time-main"><b>Reply Intake</b><span>更新回复、分类、下一步动作、Stop 标记</span></div><span class="static-pill">Classify</span></div>
-          <div class="time-row"><div class="time"><span class="time-dot" style="background:var(--amber)"></span> 10:00</div><div class="time-main"><b>Next Round</b><span>无回复线索进入 Flow 2-10 序列</span></div><span class="static-pill">Next Flow</span></div>
-        </div>
-      </article>
+async function refreshArchitecture() {
+  const button = $("refreshMap");
+  const warning = $("mapWarning");
+  button.disabled = true;
+  button.textContent = "刷新中…";
+  warning.style.display = "none";
+  try {
+    const [controlResult, databaseResult] = await Promise.allSettled([
+      api("/api/control-center"),
+      api("/api/settings/local-database"),
+    ]);
+    if (controlResult.status === "fulfilled") {
+      const control = controlResult.value;
+      const sender = control.scope?.senders?.[0];
+      $("liveDevice").textContent = control.scope?.device?.name || control.scope?.device?.id || "Unknown device";
+      $("liveSender").textContent = sender ? `${sender.name} · ${phoneLabel(sender.number)} · ${sender.status}` : "No OPEN sender";
+      const localRecords = Number(control.scope?.localRecords || 0);
+      const remoteRecords = Number(control.scope?.remoteRecords || 0);
+      $("liveCustomers").textContent = remoteRecords > 0
+        ? `${localRecords} local · ${remoteRecords} other-device hidden`
+        : `${localRecords} local · device scoped`;
+      $("liveBrain").textContent = control.brain?.enabled ? `${control.brain.provider || "rules"} · ON` : "Manual / Tracker only · OFF";
+    } else {
+      throw controlResult.reason;
+    }
 
-    </section>
-  </main>
-</div>
+    if (databaseResult.status === "fulfilled") {
+      const db = databaseResult.value.database || {};
+      const primary = db.storageMode === "primary";
+      const customers = Number(db.counts?.customers || 0);
+      const healthy = db.initialized === true && db.health === "ready" && Number(db.schemaVersion) > 0;
+      if (!healthy) {
+        const issue = db.error || (db.initialized ? db.health : "not initialized");
+        $("liveSqlite").textContent = `Unavailable · ${issue || "status unknown"}`;
+        $("sqliteDetail").textContent = `Runtime database 未就绪：${issue || "请到 Settings 检查"}`;
+        setState($("sqliteState"), "alert", "Needs attention");
+        $("deskCurrent").textContent = "Fallback / check Settings";
+        setState($("deskState"), "alert", "Verify source");
+      } else {
+        $("liveSqlite").textContent = `v${db.schemaVersion} · ${db.storageMode} · ${customers} customers`;
+        $("sqliteDetail").textContent = primary
+          ? `v${db.schemaVersion} Primary · ${customers} customers · Desk reads SQLite`
+          : `v${db.schemaVersion} Shadow · ${customers} customers · 尚未接管客户读取`;
+        setState($("sqliteState"), primary ? "active" : "transition", primary ? "Primary" : "Shadow");
+        $("deskCurrent").textContent = primary ? "SQLite Primary" : "Notion cache";
+        setState($("deskState"), primary ? "active" : "transition", primary ? "Cut over" : "Waiting cutover");
+      }
+    } else {
+      throw databaseResult.reason;
+    }
+  } catch (error) {
+    warning.textContent = "实时状态读取失败：" + (error?.message || error) + "。架构图仍可阅读，但顶部状态不是实时值。";
+    warning.style.display = "block";
+  } finally {
+    button.disabled = false;
+    button.textContent = "↻ 刷新实时状态";
+  }
+}
+
+$("refreshMap").addEventListener("click", refreshArchitecture);
+refreshArchitecture();
+setInterval(refreshArchitecture, 60000);
+</script>
 </body>
 </html>

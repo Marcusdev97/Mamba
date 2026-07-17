@@ -1,6 +1,6 @@
 # Mamba Database Primary Key / Unique Key Map
 
-Updated: 2026-07-10
+Updated: 2026-07-17
 
 This document defines the stable keys for the full Mamba system. Notion page IDs are internal IDs; they are useful for code, but the business system should still keep readable key fields so humans and imports can deduplicate safely.
 
@@ -13,7 +13,7 @@ This document defines the stable keys for the full Mamba system. Notion page IDs
 | Foreign Key | A value used to connect one database to another. |
 | Phone format | Always normalized digits only, e.g. `601133698121`. |
 | Project code | Use stable lower snake code internally, e.g. `gen_starz`, `binastra`. Display name can remain `Gen Starz`. |
-| Sender key | Use `wa_01`, `wa_02`, etc. The WhatsApp phone number is not the unique key. |
+| Sender key | Use `device_key::normalized_phone`, e.g. `cici_macbook_pro::601133698121`. `wa_01` is only a local Evolution instance name. |
 | Device key | Use a stable computer/worker key, e.g. `cici_macbook_pro`, `office_pc_01`. |
 | Lock key | Use short-lived send locks to stop two PCs sending the same lead at the same time. |
 
@@ -33,8 +33,8 @@ This is acceptable for the current phase if every sender and every lead has stab
 
 The safety rules are:
 
-- Every WhatsApp connection must have a stable `Connection Key`, such as `wa_01`, `wa_02`, or `marcus_01`.
-- The WhatsApp phone number is display information only. It must not be the primary key.
+- Every WhatsApp connection must have a cross-device `Connection Key`: `device_key::normalized_phone`.
+- `wa_01` / `wa_02` is only the local Evolution instance name; different computers may use the same name.
 - Every PC should have a stable `Device Key`, such as `cici_macbook_pro`.
 - Before sending, the app should claim a lead with a short send lock.
 - After sending, the app should write which sender and which device actually sent the message.
@@ -133,8 +133,8 @@ This is the main customer state table.
 | `Contact Key` | Recommended formula/text | `601133698121` |
 | `Project Lead Key` | Recommended unique key | `gen_starz:601133698121` |
 | `Sender Instance` | Legacy/current sender FK | `wa_01` |
-| `Assigned Sender Key` | Preferred sender FK | `wa_01` |
-| `Last Sender Key` | Actual last sender FK | `wa_02` |
+| `Assigned Sender Key` | Preferred sender FK | `cici_macbook_pro::601133698121` |
+| `Last Sender Key` | Actual last sender FK | `cici_macbook_pro::601133698121` |
 | `Last Sender Phone` | Actual sender phone | `601133698121` |
 | `Last Sent By Device` | Device FK | `cici_macbook_pro` |
 | `Campaign Run` | Run FK | relation to Campaign Runs |
@@ -175,8 +175,8 @@ Best fields to add in Notion:
 | --- | --- | --- |
 | `Contact Key` | Formula or Text | normalized `Phone` |
 | `Project Lead Key` | Formula or Text | `project_code + ":" + Phone` |
-| `Assigned Sender Key` | Select or Text | `wa_01` |
-| `Last Sender Key` | Select or Text | `wa_01` |
+| `Assigned Sender Key` | Select or Text | `cici_macbook_pro::601133698121` |
+| `Last Sender Key` | Select or Text | `cici_macbook_pro::601133698121` |
 | `Last Sender Phone` | Phone or Text | `601133698121` |
 | `Last Sent By Device` | Text or Select | `cici_macbook_pro` |
 | `Campaign Run ID` | Text | `run_20260710_131500_gen_starz_flow01` |
@@ -426,7 +426,8 @@ This currently lives in Evolution / Settings, not a Notion database.
 
 | Field | Role | Example |
 | --- | --- | --- |
-| `Connection Key` | Primary unique key | `wa_01` |
+| `Connection Key` | Primary unique key | `cici_macbook_pro::601133698121` |
+| `Instance Name` | Local Evolution route/display | `wa_01` |
 | `WhatsApp Number` | Display / owner number | `+601133698121` |
 | `Owner` | Human owner | `Marcus` |
 | `Team` | Team / branch | `Sales Team A` |
@@ -438,21 +439,21 @@ This currently lives in Evolution / Settings, not a Notion database.
 Recommended unique key:
 
 ```text
-connection_key = wa_01
+connection_key = device_key + "::" + normalized_phone
 ```
 
 Important:
 
-The WhatsApp phone number must not be the unique key. A number can be relinked, renamed, or replaced. The app should route by `wa_01`, `wa_02`, etc.
+电话号码或 `wa_01` 单独使用都不够唯一。跨电脑归属使用 `device_key::normalized_phone`;真正调用 Evolution API 时才使用本机 `instance_name`(`wa_01` / `wa_02`)。
 
 Recommended registry:
 
-| Connection Key | WhatsApp Number | Owner | Device Key | Status |
-| --- | --- | --- | --- | --- |
-| `wa_01` | `601133698121` | `Marcus` | `cici_macbook_pro` | `OPEN` |
-| `wa_02` | `60123456789` | `Sales 2` | `office_pc_01` | `OPEN` |
+| Connection Key | Instance Name | WhatsApp Number | Owner | Device Key | Status |
+| --- | --- | --- | --- | --- | --- |
+| `cici_macbook_pro::601133698121` | `wa_01` | `601133698121` | `Marcus` | `cici_macbook_pro` | `OPEN` |
+| `office_pc_01::60123456789` | `wa_01` | `60123456789` | `Sales 2` | `office_pc_01` | `OPEN` |
 
-If the same WhatsApp account is linked on a second computer later, the app should update `Device Key` / `Last Seen At`, not create a new customer identity.
+If the same WhatsApp account is linked on a second computer later, it gets a second device-scoped connection row, but it must not create a new customer/contact identity.
 
 ## 12A. Devices / Workers
 

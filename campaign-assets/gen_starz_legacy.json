@@ -11,6 +11,7 @@
   },
   "delivery": {
     "partGapSeconds": 45,
+    "partGapMaxSeconds": 75,
     "contactGapSeconds": {
       "min": 45,
       "max": 75

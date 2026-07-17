@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Dashboard · Property 213</title>
+<!-- 本地机密(账号/appkey/token/userid)。此文件不进 git。 -->
+<script src="./market-dashboard.secret.js"></script>
+<style>
+  :root{--bg:#0f1830;--card:#fff;--ink:#1a2030;--mut:#6b7280;--line:#e5e7eb;--accent:#2f6df6;--warn:#b45309;--warnbg:#fef3c7;--ok:#0f7d55;--okbg:#e7f6ee;--brain:#7c3aed;--brainbg:#f1ebff;--new:#c2410c;--newbg:#ffedd5;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:#f4f5f7}
+  header{background:var(--bg);color:#fff;padding:16px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:18px;font-weight:600;margin:0}
+  header .sub{font-size:12px;color:#a9b4cc}
+  .grow{flex:1}
+  button{font:inherit;border:0;border-radius:8px;padding:9px 16px;cursor:pointer}
+  .btn-refresh{background:var(--accent);color:#fff;font-weight:600}
+  .btn-refresh:disabled{opacity:.6;cursor:default}
+  .btn-ghost{background:#26324f;color:#fff}
+  main{padding:18px 20px;max-width:1200px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .kpi .n{font-size:24px;font-weight:600}
+  .kpi .l{font-size:12px;color:var(--mut);margin-top:2px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+  input,select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:#fff}
+  #q{flex:1;min-width:180px}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
+  th{background:#fafafa;font-weight:600;position:sticky;top:0;cursor:pointer;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  .name{font-weight:600}
+  .dev{color:var(--mut);font-size:12px}
+  .price{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;padding:2px 7px;border-radius:20px;margin-left:6px}
+  .t-new{background:var(--newbg);color:var(--new)}
+  .t-brain{background:var(--brainbg);color:var(--brain)}
+  .t-chg{background:var(--warnbg);color:var(--warn)}
+  .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;background:#eef1f5;color:#374151}
+  .b-launch{background:#e0edff;color:#1e40af}
+  .b-uc{background:#fff4e5;color:#9a3412}
+  #status{font-size:12px;padding:8px 12px;border-radius:8px;margin-bottom:12px;display:none}
+  .s-warn{background:var(--warnbg);color:var(--warn);display:block!important}
+  .s-ok{background:var(--okbg);color:var(--ok);display:block!important}
+  .tokbox{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;display:none}
+  .tokbox textarea{width:100%;min-height:64px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px}
+  .muted{color:var(--mut);font-size:12px}
+  footer{padding:14px 20px;color:var(--mut);font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏢 Market Dashboard</h1>
+  <span class="sub" id="src">Property 213 · 只读镜像</span>
+  <span class="grow"></span>
+  <span class="sub" id="lastrun">—</span>
+  <button class="btn-ghost" id="tokBtn" title="更新登录 token">🔑 Token</button>
+  <button class="btn-refresh" id="refreshBtn">🔄 刷新</button>
+</header>
+
+<main>
+  <div id="status"></div>
+
+  <div class="tokbox" id="tokbox">
+    <div style="font-weight:600;margin-bottom:6px">🔑 更新连接 token(过期时用)</div>
+    <div class="muted" style="margin-bottom:8px">从公司 App 抓到的项目接口完整 URL 贴进来即可(含 token/userid),会自动解析并保存在本机浏览器。</div>
+    <textarea id="tokInput" placeholder="https://app_api.property213.com/v22/accounts/.../projects?...&token=...&userid=..."></textarea>
+    <div style="margin-top:8px"><button class="btn-refresh" id="tokSave">保存</button>
+    <button class="btn-ghost" id="tokClose" style="margin-left:6px">关闭</button></div>
+  </div>
+
+  <div class="cards">
+    <div class="kpi"><div class="n" id="kTotal">—</div><div class="l">公司在售项目</div></div>
+    <div class="kpi"><div class="n" id="kNew">—</div><div class="l">🆕 本次新增</div></div>
+    <div class="kpi"><div class="n" id="kChg">—</div><div class="l">✏️ 价格变动</div></div>
+    <div class="kpi"><div class="n" id="kBrain">—</div><div class="l">🧠 你 Brain 的项目</div></div>
+  </div>
+
+  <div class="controls">
+    <input id="q" placeholder="搜索项目名 / 发展商 / 地区…">
+    <select id="state"><option value="">全部州属</option></select>
+    <select id="sort">
+      <option value="new">🆕 新盘优先</option>
+      <option value="name">名称 A→Z</option>
+      <option value="price_desc">价格 高→低</option>
+      <option value="price_asc">价格 低→高</option>
+    </select>
+    <label class="muted"><input type="checkbox" id="onlyBrain"> 只看我 Brain 的</label>
+  </div>
+
+  <table id="tbl">
+    <thead><tr>
+      <th data-k="name">项目 / 发展商</th>
+      <th data-k="price">价格(List)</th>
+      <th data-k="sqft">面积 sqft</th>
+      <th data-k="ten">Tenure</th>
+      <th data-k="type">类型</th>
+      <th data-k="status">状态</th>
+      <th data-k="area">地区</th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="7" class="muted" style="padding:24px;text-align:center">加载中…</td></tr></tbody>
+  </table>
+</main>
+
+<footer>
+  数据来源:Property 213 官方接口(list price)。<b>这里只是镜像 + 提醒</b>,不是 Brain。卖点与 net price 请在 Project Editor 人工维护。
+</footer>
+
+<script>
+const BRAIN_KEYS = ["binastra","starz","enlace"]; // 你 Brain 里的项目关键词(仅高亮用)
+const LS_UIDS = "p213_known_uids", LS_PRICE = "p213_prices", LS_TOKEN = "p213_token_override";
+let RAW = [];        // 当前全部项目
+let VIEW = [];       // 过滤后
+
+function creds(){
+  const base = window.P213 || {};
+  const ov = JSON.parse(localStorage.getItem(LS_TOKEN) || "null");
+  return ov ? {...base, ...ov} : base;
+}
+function haveCreds(){ const c=creds(); return c.account&&c.appkey&&c.token&&c.userid; }
+function apiUrl(limit,offset){
+  const c=creds();
+  const p=new URLSearchParams({limit,offset,appkey:c.appkey,token:c.token,userid:c.userid,active:"true"});
+  return `https://app_api.property213.com/v22/accounts/${c.account}/projects?${p.toString()}`;
+}
+function rm(v){ return (v===null||v===undefined||v==="") ? null : "RM"+Number(v).toLocaleString("en-MY"); }
+function isBrain(name){ const n=(name||"").toLowerCase(); return BRAIN_KEYS.some(k=>n.includes(k)); }
+function status(msg,kind){ const el=document.getElementById("status"); el.textContent=msg; el.className=kind?("s-"+kind):""; }
+
+async function pull(){
+  if(!haveCreds()){ status("还没有连接 token。点右上「🔑 Token」贴一次公司接口 URL。","warn"); openTok(); return; }
+  const btn=document.getElementById("refreshBtn"); btn.disabled=true; btn.textContent="⏳ 拉取中…";
+  try{
+    const j=await fetch(apiUrl(500,0)).then(r=>r.json());
+    if(!j || j.Code!==200 || !j.Result) throw new Error("API 返回异常(可能 token 过期)");
+    const arr=JSON.parse(j.Result);
+    RAW=arr.map(p=>({uid:p.ProjectUID,name:p.Project,dev:p.DeveloperName,pf:p.PriceFrom,pt:p.PriceTo,
+      bf:p.BuiltUpFrom,bt:p.BuiltUpTo,ten:p.Tenure,type:p.PropertyType,status:p.ProjectStatus,state:p.State,area:p.Area}));
+    computeDeltas();
+    buildStateFilter();
+    render();
+    const now=new Date();
+    document.getElementById("lastrun").textContent="上次刷新 "+now.toLocaleString("zh-CN",{hour12:false});
+    status(`✅ 已拉取 ${RAW.length} 个项目。`,"ok");
+    setTimeout(()=>{document.getElementById("status").className="";},2500);
+  }catch(e){
+    status("⚠️ "+e.message+" —— 点「🔑 Token」更新一次登录 URL 再试。","warn");
+    openTok();
+  }finally{ btn.disabled=false; btn.textContent="🔄 刷新"; }
+}
+
+function computeDeltas(){
+  const known=new Set(JSON.parse(localStorage.getItem(LS_UIDS)||"[]"));
+  const prices=JSON.parse(localStorage.getItem(LS_PRICE)||"{}");
+  RAW.forEach(p=>{
+    p._new = known.size>0 && !known.has(p.uid);
+    const old=prices[p.uid];
+    p._chg = old && (old.pf!==p.pf || old.pt!==p.pt);
+    if(p._chg) p._old=old;
+  });
+  // 保存本次快照(供下次比对)
+  localStorage.setItem(LS_UIDS, JSON.stringify(RAW.map(p=>p.uid)));
+  const np={}; RAW.forEach(p=>np[p.uid]={pf:p.pf,pt:p.pt}); localStorage.setItem(LS_PRICE, JSON.stringify(np));
+}
+
+function buildStateFilter(){
+  const sel=document.getElementById("state"); const cur=sel.value;
+  const states=[...new Set(RAW.map(p=>p.state).filter(Boolean))].sort();
+  sel.innerHTML='<option value="">全部州属</option>'+states.map(s=>`<option>${s}</option>`).join("");
+  sel.value=cur;
+}
+
+function render(){
+  const q=document.getElementById("q").value.trim().toLowerCase();
+  const st=document.getElementById("state").value;
+  const onlyBrain=document.getElementById("onlyBrain").checked;
+  const sort=document.getElementById("sort").value;
+  VIEW=RAW.filter(p=>{
+    if(st && p.state!==st) return false;
+    if(onlyBrain && !isBrain(p.name)) return false;
+    if(q){ const hay=(p.name+" "+p.dev+" "+p.area+" "+p.state).toLowerCase(); if(!hay.includes(q)) return false; }
+    return true;
+  });
+  VIEW.sort((a,b)=>{
+    if(sort==="name") return (a.name||"").localeCompare(b.name||"");
+    if(sort==="price_desc") return (b.pf||0)-(a.pf||0);
+    if(sort==="price_asc") return (a.pf||1e15)-(b.pf||1e15);
+    // new first
+    return (b._new?1:0)-(a._new?1:0) || (a.name||"").localeCompare(b.name||"");
+  });
+  const rows=VIEW.map(p=>{
+    const price = p.pf ? `${rm(p.pf)}${p.pt&&p.pt!==p.pf?" – "+rm(p.pt):""}` : '<span class="muted">价单待更新</span>';
+    const chg = p._chg ? `<span class="tag t-chg" title="上次 ${rm(p._old.pf)}–${rm(p._old.pt)}">✏️ 价格变动</span>` : "";
+    const nw = p._new ? '<span class="tag t-new">🆕 新增</span>' : "";
+    const br = isBrain(p.name) ? '<span class="tag t-brain">🧠 Brain</span>' : "";
+    const sqft = p.bf ? `${p.bf}${p.bt&&p.bt!==p.bf?"–"+p.bt:""}` : "—";
+    let sb="badge"; const s=(p.status||"").toLowerCase();
+    if(s.includes("pre launch")||s.includes("launch")) sb="badge b-launch";
+    else if(s.includes("construction")) sb="badge b-uc";
+    return `<tr>
+      <td><div class="name">${esc(p.name)}${nw}${br}${chg}</div><div class="dev">${esc(p.dev||"")}</div></td>
+      <td class="price">${price}</td>
+      <td>${sqft}</td>
+      <td>${esc(p.ten||"—")}</td>
+      <td>${esc(p.type||"—")}</td>
+      <td>${p.status?`<span class="${sb}">${esc(p.status)}</span>`:"—"}</td>
+      <td>${esc(p.area||p.state||"—")}</td>
+    </tr>`;
+  }).join("");
+  document.getElementById("rows").innerHTML = rows || '<tr><td colspan="7" class="muted" style="padding:24px;text-align:center">没有匹配的项目</td></tr>';
+  document.getElementById("kTotal").textContent=RAW.length;
+  document.getElementById("kNew").textContent=RAW.filter(p=>p._new).length;
+  document.getElementById("kChg").textContent=RAW.filter(p=>p._chg).length;
+  document.getElementById("kBrain").textContent=RAW.filter(p=>isBrain(p.name)).length;
+}
+function esc(s){ return String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+// token 面板
+function openTok(){ document.getElementById("tokbox").style.display="block"; }
+document.getElementById("tokBtn").onclick=openTok;
+document.getElementById("tokClose").onclick=()=>document.getElementById("tokbox").style.display="none";
+document.getElementById("tokSave").onclick=()=>{
+  const v=document.getElementById("tokInput").value.trim();
+  try{
+    const u=new URL(v);
+    const token=u.searchParams.get("token"), userid=u.searchParams.get("userid"),
+          appkey=u.searchParams.get("appkey");
+    const m=u.pathname.match(/accounts\/([0-9a-f-]+)\/projects/i);
+    const account=m?m[1]:(creds().account);
+    if(!token||!userid) throw 0;
+    localStorage.setItem(LS_TOKEN, JSON.stringify({token,userid,appkey:appkey||creds().appkey,account}));
+    document.getElementById("tokbox").style.display="none";
+    status("✅ token 已更新。","ok"); pull();
+  }catch(e){ status("URL 解析失败,请贴完整的项目接口 URL(含 token 和 userid)。","warn"); }
+};
+
+["q","state","sort","onlyBrain"].forEach(id=>document.getElementById(id).addEventListener("input",render));
+document.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; const sel=document.getElementById("sort");
+  sel.value = k==="price" ? (sel.value==="price_desc"?"price_asc":"price_desc") : "name"; render();
+});
+document.getElementById("refreshBtn").onclick=pull;
+
+// 打开即拉一次
+pull();
+</script>
+</body>
+</html>

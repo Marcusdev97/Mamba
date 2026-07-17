@@ -107,11 +107,13 @@
   .health-state.warn { background: var(--amber-bg); color: var(--amber); }
   .health-state.bad { background: var(--red-bg); color: var(--red); }
   .health-text { color: var(--text); font-size: 13px; }
-  .database-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 14px 0; }
+  .database-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin: 14px 0; }
   .database-stat { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 10px 12px; }
   .database-stat span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
   .database-stat b { display: block; font-size: 15px; overflow-wrap: anywhere; }
   .database-note { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .database-report { margin-top: 12px; border: 1px solid #1d4ed8; border-radius: var(--radius); background: rgba(29,78,216,.08); padding: 12px 14px; color: var(--text); font-size: 12px; line-height: 1.65; white-space: pre-line; }
+  .database-report.hidden { display: none; }
   .save-card .save-copy { color: var(--muted); font-size: 13px; line-height: 1.6; }
   .save-card .actions { margin-top: auto; padding-top: 22px; }
   .save-card .primary { width: 100%; justify-content: center; }
@@ -174,7 +176,7 @@
     <div class="card database-card">
       <div class="card-head"><div>
         <h2 class="step-title"><span class="step-no">3</span> Local Database</h2>
-        <div class="card-kicker">SQLite · 每台 Mac 独立 · 今天只建立数据库壳</div>
+        <div class="card-kicker">SQLite · 每台 Mac 独立 · Dry Run → 正式导入 → Primary</div>
       </div></div>
       <div class="health" id="databaseHealth">
         <div class="chip">SQLite <b>查询中...</b></div>
@@ -183,6 +185,7 @@
         <div class="database-stat"><span>Schema</span><b id="databaseSchema">—</b></div>
         <div class="database-stat"><span>Customers</span><b id="databaseCustomers">0</b></div>
         <div class="database-stat"><span>Pending Sync</span><b id="databasePending">0</b></div>
+        <div class="database-stat"><span>Sync Worker</span><b id="databaseWorker">SHADOW</b></div>
       </div>
       <div class="status-line" id="databaseStatus">读取本机数据库状态...</div>
       <div class="status-line" id="databaseBinding">Device / Sender: 查询中...</div>
@@ -190,10 +193,13 @@
       <div class="actions">
         <button class="btn primary" id="btnInitDatabase">初始化 SQLite 数据库壳</button>
         <button class="btn" id="btnRefreshDatabase">刷新状态</button>
-        <button class="btn" id="btnImportNotion" disabled>Notion → SQLite（明天启用）</button>
+        <button class="btn" id="btnImportNotion" disabled>Notion → SQLite Dry Run</button>
+        <button class="btn" id="btnApplyNotion" disabled>正式导入本机客户</button>
+        <button class="btn" id="btnDatabaseMode" disabled>启用 SQLite Primary</button>
       </div>
+      <div class="database-report hidden" id="databaseDryRun"></div>
       <div class="database-note" style="margin-top:14px">
-        初始化只会在 <b>campaign-data/mamba.sqlite</b> 建立空表、Device 和 Sender 约束；不会读取 Notion 客户、不会发送 WhatsApp，也不会改变当前 Customer Desk。
+        <b>安全顺序：</b>Dry Run 只对账；正式导入会先备份再用单一事务写入本机 SQLite；Primary 才会让 Customer Desk、Follow-Up 和 Customer Search 从 SQLite 读取。任何一步都不会发送 WhatsApp，也不会修改 Notion。
       </div>
     </div>
 
@@ -349,7 +355,7 @@
       <div class="card-head">
         <div>
           <h2 class="step-title"><span class="step-no">1</span> Phone Setup</h2>
-          <div class="card-kicker">Connection Key = wa_01 / wa_02</div>
+          <div class="card-kicker">Evolution Instance Name = wa_01 / wa_02（只在本机使用）</div>
         </div>
         <div class="actions" style="margin-top:0">
           <button class="btn" id="btnRefreshInst">刷新</button>
@@ -504,10 +510,13 @@ function formatBytes(value) {
 
 function renderLocalDatabase(database) {
   const db = database || {};
+  const primary = db.storageMode === "primary";
+  const imported = Boolean(db.notionImport?.latestApply) && Number(db.counts?.projectLeads || 0) > 0;
   let state = "NOT INITIALIZED";
   let stateClass = "warn";
   if (!db.driverAvailable) { state = "DRIVER MISSING"; stateClass = "bad"; }
   else if (db.health === "ready") { state = "READY"; stateClass = "ok"; }
+  else if (db.health === "migration_required") { state = "MIGRATION REQUIRED"; stateClass = "warn"; }
   else if (db.health === "error") { state = "ERROR"; stateClass = "bad"; }
   $("databaseHealth").innerHTML =
     '<span class="health-state ' + stateClass + '">' + state + '</span>' +
@@ -517,16 +526,52 @@ function renderLocalDatabase(database) {
   $("databaseSchema").textContent = db.schemaVersion ? "v" + db.schemaVersion : "Not created";
   $("databaseCustomers").textContent = String(db.counts?.customers || 0);
   $("databasePending").textContent = String(db.counts?.pendingSyncJobs || 0);
+  $("databaseWorker").textContent = (db.syncWorker?.enabled ? (db.syncWorker.status || "IDLE") : "OFF") + " · " + (db.syncWorker?.mode || "SHADOW");
   $("databaseStatus").textContent = db.health === "ready"
-    ? "数据库壳已准备好。Notion 导入保持关闭，当前 Customer Desk 仍使用原来的资料来源。"
+    ? primary
+      ? "SQLite Primary 正在运行。本机客户读取来自 SQLite；Notion 仍保留作云端镜像和手动刷新来源。"
+      : imported
+        ? "本机客户已经安全导入 SQLite，目前仍是 Shadow。检查数量后可启用 Primary。"
+        : "SQLite 已准备好。先 Dry Run PASS，再正式导入本机客户。"
+    : db.health === "migration_required"
+      ? "检测到旧版 SQLite v" + (db.schemaVersion || "1") + "。为保护资料不会原地覆盖，请先运行 v2 → v3 Dry Run 与迁移。"
     : db.health === "error"
       ? "数据库健康检查失败 [" + (db.errorCode || "SQLITE_ERROR") + "]: " + (db.error || "请查看 System Logs")
       : db.driverAvailable
         ? "尚未初始化。可以安全建立空的 SQLite 数据库壳。"
         : "找不到 sqlite3 driver；请确认 macOS /usr/bin/sqlite3 存在。";
-  $("databaseBinding").textContent = "Device: " + (db.deviceId || "未建立") + " · Sender: " + (db.expectedSenderPhone || "尚未绑定");
+  $("databaseBinding").textContent = "Device: " + (db.deviceId || "未建立") + " · Sender Key: " + (db.expectedSenderKey || "尚未绑定") + " · Instance 名称（如 wa_01）不作唯一键";
   $("databasePath").textContent = "Path: " + (db.databasePath || "campaign-data/mamba.sqlite");
-  $("btnInitDatabase").textContent = db.initialized ? "检查并更新数据库壳" : "初始化 SQLite 数据库壳";
+  $("btnInitDatabase").textContent = db.health === "migration_required"
+    ? "旧库需要安全迁移"
+    : db.initialized ? "检查并更新 SQLite Schema" : "初始化 SQLite Shadow";
+  $("btnImportNotion").disabled = !(db.initialized && db.health === "ready" && db.expectedSenderPhone);
+  $("btnApplyNotion").disabled = !(db.initialized && db.health === "ready" && db.notionImport?.latestDryRun?.safeToApply);
+  $("btnApplyNotion").textContent = imported ? "重新同步本机客户" : "正式导入本机客户";
+  $("btnDatabaseMode").disabled = !(db.initialized && db.health === "ready" && imported);
+  $("btnDatabaseMode").textContent = primary ? "暂停 SQLite Primary" : "启用 SQLite Primary";
+  $("btnDatabaseMode").dataset.mode = primary ? "shadow" : "primary";
+  renderDatabaseDryRun(db.notionImport?.latestDryRun || null);
+}
+
+function renderDatabaseDryRun(report) {
+  const box = $("databaseDryRun");
+  if (!report) {
+    box.classList.add("hidden");
+    box.textContent = "";
+    return;
+  }
+  const scope = report.scope || {};
+  const result = report.safeToApply ? "PASS · 可以进入下一阶段审核" : "HOLD · 先处理阻塞问题";
+  const blockers = (report.blockedReasons || []).length ? "\n阻塞: " + report.blockedReasons.join("；") : "";
+  box.textContent =
+    "最近 Dry Run: " + result + "\n" +
+    "Notion 总数 " + (report.sourceCount || 0) + " · 本机候选 " + (report.scopedCount || 0) +
+    " · 其他电脑 " + (scope.remote || 0) + " · Legacy " + (scope.legacy || 0) + " · 未归属 " + (scope.unassigned || 0) + "\n" +
+    "预计新增 " + (report.inserts || 0) + " · 更新 " + (report.updates || 0) + " · 不变 " + (report.unchanged || 0) +
+    " · 本机 SQLite 独有 " + (report.localOnly || 0) + " · 无效 " + (report.invalid || 0) + " · 冲突 " + (report.collisions || 0) +
+    blockers;
+  box.classList.remove("hidden");
 }
 
 async function refreshLocalDatabase() {
@@ -807,9 +852,63 @@ $("btnInitDatabase").addEventListener("click", async () => {
 
 $("btnRefreshDatabase").addEventListener("click", refreshLocalDatabase);
 
+$("btnImportNotion").addEventListener("click", async () => {
+  if (!confirm("运行 Notion → SQLite Dry Run？只会读取 Notion 并保存本机对账报告；不会导入客户、不会修改 Notion、不会发送 WhatsApp。")) return;
+  const btn = $("btnImportNotion");
+  btn.disabled = true;
+  btn.textContent = "读取并对账中...";
+  try {
+    const data = await api("/api/settings/local-database/notion-import/preview", {});
+    renderLocalDatabase(data.database);
+    renderDatabaseDryRun(data.report);
+    message(data.message || "Dry Run 完成。", "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    btn.textContent = "Notion → SQLite Dry Run";
+    await refreshLocalDatabase();
+  }
+});
+
+$("btnApplyNotion").addEventListener("click", async () => {
+  if (!confirm("正式导入本机客户到 SQLite？程序会先建立完整备份，再用单一事务写入；失败会整批回滚。不会修改 Notion，也不会发送 WhatsApp。")) return;
+  const btn = $("btnApplyNotion");
+  btn.disabled = true;
+  btn.textContent = "备份并导入中...";
+  try {
+    const data = await api("/api/settings/local-database/notion-import/apply", {});
+    renderLocalDatabase(data.database);
+    message((data.message || "正式导入完成。") + " 备份：" + (data.report?.backupPath || "已建立"), "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    await refreshLocalDatabase();
+  }
+});
+
+$("btnDatabaseMode").addEventListener("click", async () => {
+  const btn = $("btnDatabaseMode");
+  const mode = btn.dataset.mode || "primary";
+  const promptText = mode === "primary"
+    ? "启用 SQLite Primary？Customer Desk、Follow-Up 和 Customer Search 会改从本机 SQLite 读取；Notion 仍保留且不会被删除。"
+    : "暂停 SQLite Primary 并回到原有 Notion/cache 读取？SQLite 内的资料不会删除。";
+  if (!confirm(promptText)) return;
+  btn.disabled = true;
+  btn.textContent = "切换中...";
+  try {
+    const data = await api("/api/settings/local-database/mode", { mode });
+    renderLocalDatabase(data.database);
+    message(data.message || "SQLite mode 已更新。", "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    await refreshLocalDatabase();
+  }
+});
+
 $("btnAddNumber").addEventListener("click", async () => {
   message("", "");
-  const label = (prompt("Connection Key（留空自动取下一个，如 wa_03）：", "") || "").trim();
+  const label = (prompt("Evolution Instance Name（留空自动生成，如 wa_03；这不是跨电脑唯一键）：", "") || "").trim();
   $("btnAddNumber").disabled = true;
   try {
     const r = await api("/api/instance/create", { name: label || undefined });

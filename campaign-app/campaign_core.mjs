@@ -5,7 +5,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { campaignSenderSummary } from "./lib/campaign-notification.mjs";
-import { AUTO_SCHEDULE, campaignPacing, estimateAutoEnd } from "./lib/campaign-schedule.mjs";
+import {
+  AUTO_SCHEDULE,
+  campaignPacing,
+  contactGapRange,
+  estimateAutoEnd,
+  partGapRange,
+  randomGapSeconds,
+} from "./lib/campaign-schedule.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
@@ -20,6 +27,16 @@ export const paths = {
 
 export const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 export const pick = (items) => items[Math.floor(Math.random() * items.length)];
+export function jobMessagePartCount(job = {}) {
+  const part2 = job.part2Text || job.part2Media ? 1 : 0;
+  const extras = (Array.isArray(job.extraParts) ? job.extraParts : [])
+    .filter((part) => part && (part.text || part.media)).length;
+  return 1 + part2 + extras;
+}
+export function isResumableJobStatus(status) {
+  const value = String(status || "");
+  return value === "QUEUED" || /^WAITING_PART\d+$/.test(value) || /^SENDING_PART\d+$/.test(value);
+}
 const DEFAULT_API_TIMEOUT_MS = 15000;
 const SEND_API_TIMEOUT_MS = 45000;
 
@@ -43,6 +60,67 @@ export class UnconfirmedSendError extends Error {
     this.name = "UnconfirmedSendError";
     this.code = "SEND_TIMEOUT_UNCONFIRMED";
   }
+}
+
+export class RecipientNotOnWhatsAppError extends Error {
+  constructor(message = "号码未注册 WhatsApp") {
+    super(message);
+    this.name = "RecipientNotOnWhatsAppError";
+    this.code = "RECIPIENT_NOT_ON_WHATSAPP";
+  }
+}
+
+export function isRecipientNotOnWhatsAppError(value) {
+  const code = String(value?.code ?? value?.errorCode ?? "");
+  const message = String(value?.message ?? value?.error ?? value ?? "");
+  return code === "RECIPIENT_NOT_ON_WHATSAPP"
+    || /"exists"\s*:\s*false/i.test(message)
+    || /not\s+(?:registered\s+)?on\s+whatsapp/i.test(message)
+    || /不是\s*WhatsApp\s*号码/i.test(message)
+    || /未注册\s*WhatsApp/i.test(message);
+}
+
+export function normalizeRecipientOutcome(job) {
+  if (!job || job.status !== "FAILED" || !isRecipientNotOnWhatsAppError(job)) return false;
+  job.status = "SKIPPED_NO_WHATSAPP";
+  job.error = "号码未注册 WhatsApp；本次未发送，也不会自动重试。";
+  job.outcomeCode = "RECIPIENT_NOT_ON_WHATSAPP";
+  return true;
+}
+
+export function campaignOutcomeSummary(assignments = []) {
+  const result = {
+    total: assignments.length,
+    processed: 0,
+    contacted: 0,
+    pending: 0,
+    skipped: 0,
+    noWhatsapp: 0,
+    failed: 0,
+    percent: 0,
+  };
+  for (const job of assignments) {
+    const status = String(job?.status || "");
+    if (isResumableJobStatus(status)) {
+      result.pending += 1;
+    } else if (status === "FAILED") {
+      result.failed += 1;
+    } else if (status === "SKIPPED_NO_WHATSAPP") {
+      result.skipped += 1;
+      result.noWhatsapp += 1;
+    } else if (status.startsWith("SKIPPED_")) {
+      result.skipped += 1;
+    } else if (job?.part1?.sentAt || job?.part1At || ["SENT", "REPLIED_WARM", "PART1_ONLY_END_TIME"].includes(status)) {
+      result.contacted += 1;
+    } else {
+      // Unknown terminal states are still processed, but are not presented as a
+      // successful contact or a retryable system failure.
+      result.skipped += 1;
+    }
+  }
+  result.processed = Math.max(0, result.total - result.pending);
+  result.percent = result.total ? Math.min(100, Math.round((result.processed / result.total) * 100)) : 0;
+  return result;
 }
 
 // A template becomes a WhatsApp POLL (tappable options) when its Message Text
@@ -518,7 +596,8 @@ export class CampaignRunner {
     // Sender quotas may leave some imported leads in overflow. AUTO estimates
     // from the assignments that will really send, not from the Excel row count.
     if (scheduleMode === AUTO_SCHEDULE) {
-      effectiveEndAt = estimateAutoEnd(startAt, built.assignments.length, this.config);
+      const maxPartCount = Math.max(...built.assignments.map(jobMessagePartCount), 1);
+      effectiveEndAt = estimateAutoEnd(startAt, built.assignments.length, this.config, maxPartCount);
       built = buildAssignments(leads, instances, startAt, effectiveEndAt, this.config);
     }
     this.state = {
@@ -551,11 +630,29 @@ export class CampaignRunner {
     }
     this.runPath = runPath;
     this.state = restored;
+    const normalized = this.state.assignments.reduce(
+      (count, job) => count + (normalizeRecipientOutcome(job) ? 1 : 0),
+      0,
+    );
     this.running = false;
     this.stopped = false;
     this.mirrorActiveState = true;
     this.log = [];
+    if (normalized) await this.saveState();
     return this.state;
+  }
+
+  refreshAutoScheduleEstimate() {
+    if (this.state?.scheduleMode !== AUTO_SCHEDULE) return;
+    const queued = this.state.assignments.filter((job) => isResumableJobStatus(job.status));
+    if (!queued.length) return;
+    const maxPartCount = Math.max(...queued.map(jobMessagePartCount), 1);
+    const startAt = new Date(this.state.startAt);
+    const { floorMs } = campaignPacing(this.config, maxPartCount);
+    this.state.endAt = estimateAutoEnd(startAt, queued.length, this.config, maxPartCount).toISOString();
+    queued.forEach((job, index) => {
+      job.scheduledAt = new Date(startAt.getTime() + floorMs * index).toISOString();
+    });
   }
 
   async loadMedia(relativeMediaPath) {
@@ -645,8 +742,8 @@ export class CampaignRunner {
       } catch (error) {
         lastError = error;
         // "exists":false -> the number is not on WhatsApp. Permanent, so don't retry.
-        if (/"exists"\s*:\s*false/.test(error.message) || /not.*whatsapp/i.test(error.message)) {
-          throw new Error("不是 WhatsApp 号码 (not on WhatsApp)");
+        if (isRecipientNotOnWhatsAppError(error)) {
+          throw new RecipientNotOnWhatsAppError();
         }
         // Timeout is dangerous to retry: Evolution/WhatsApp may have received the
         // send request but failed to answer in time. Retrying can duplicate the
@@ -771,11 +868,27 @@ export class CampaignRunner {
     }
   }
 
+  async waitBetweenParts(job, nextPartNumber) {
+    const seconds = randomGapSeconds(partGapRange(this.config));
+    job.status = `WAITING_PART${nextPartNumber}`;
+    job.waitingUntil = new Date(Date.now() + seconds * 1000).toISOString();
+    job.waitingGapSeconds = seconds;
+    await this.saveState();
+    await this.waitUntil(job.waitingUntil);
+    job.waitingUntil = null;
+    job.waitingGapSeconds = null;
+  }
+
+  pastFixedEnd() {
+    return this.state?.scheduleMode !== AUTO_SCHEDULE
+      && Date.now() > new Date(this.state.endAt).getTime();
+  }
+
   async processJob(job) {
     if (this.stopped) return;
     await this.waitUntil(job.scheduledAt);
     if (this.stopped) return;
-    if (Date.now() > new Date(this.state.endAt).getTime()) {
+    if (this.pastFixedEnd()) {
       job.status = "SKIPPED_END_TIME";
       await this.saveState();
       return;
@@ -832,51 +945,49 @@ export class CampaignRunner {
       } else {
         this.showProgress(`Part 1 already sent → ${job.lead.name}; resume from next unfinished part.`);
       }
-      job.status = "WAITING_PART2";
-      await this.saveState();
-
-      await wait(this.config.delivery.partGapSeconds * 1000);
-      if (this.stopped) return;
-
-      if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
-        job.status = "REPLIED_WARM";
-        await this.saveState();
-        this.showProgress(`Reply detected → ${job.lead.name}; Part 2 cancelled`);
-        return;
-      }
-
-      if (Date.now() > new Date(this.state.endAt).getTime()) {
-        job.status = "PART1_ONLY_END_TIME";
-        await this.saveState();
-        return;
-      }
-
-      // Single-message flow (no Part 2 template): finish after Part 1 instead of
-      // sending an empty message.
-      if (!job.part2Text && !job.part2Media) {
+      const extras = Array.isArray(job.extraParts) ? job.extraParts : [];
+      const hasPart2 = Boolean(job.part2Text || job.part2Media);
+      // Single-message flow: finish immediately. If an unusual template has no
+      // Part 2 but does have Part 3+, keep going through the extras below.
+      if (!hasPart2 && !extras.some((part) => part && (part.text || part.media))) {
         job.status = "SENT";
         this.consecutiveFailures = 0;
         await this.saveState();
         return;
       }
 
-      if (!job.part2?.sentAt) {
+      if (hasPart2 && !job.part2?.sentAt) {
+        await this.waitBetweenParts(job, 2);
+        if (this.stopped) return;
+
+        if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
+          job.status = "REPLIED_WARM";
+          await this.saveState();
+          this.showProgress(`Reply detected → ${job.lead.name}; Part 2 cancelled`);
+          return;
+        }
+
+        if (this.pastFixedEnd()) {
+          job.status = "PART1_ONLY_END_TIME";
+          await this.saveState();
+          return;
+        }
+
         job.status = "SENDING_PART2";
         await this.saveState();
         this.showProgress(`Part 2 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
         job.part2 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part2Text, job.part2Media);
         await this.saveState();
-      } else {
+      } else if (hasPart2) {
         this.showProgress(`Part 2 already sent → ${job.lead.name}; resume from next unfinished part.`);
       }
 
       // Dynamic extra parts (Part 3, 4, ...): same pacing + reply-cancel as Part 2.
-      const extras = Array.isArray(job.extraParts) ? job.extraParts : [];
       for (let k = 0; k < extras.length; k++) {
         const ep = extras[k];
         if (!ep || (!ep.text && !ep.media)) continue;
         if (ep.sentInfo?.sentAt) continue;
-        await wait(this.config.delivery.partGapSeconds * 1000);
+        await this.waitBetweenParts(job, k + 3);
         if (this.stopped) { await this.saveState(); return; }
         if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
           job.status = "REPLIED_WARM";
@@ -884,7 +995,7 @@ export class CampaignRunner {
           this.showProgress(`Reply detected → ${job.lead.name}; remaining parts cancelled`);
           return;
         }
-        if (Date.now() > new Date(this.state.endAt).getTime()) { job.status = "SENT"; await this.saveState(); return; }
+        if (this.pastFixedEnd()) { job.status = "SENT"; await this.saveState(); return; }
         job.status = `SENDING_PART${k + 3}`;
         this.showProgress(`Part ${k + 3} → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
         ep.sentInfo = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, ep.text, ep.media);
@@ -895,6 +1006,21 @@ export class CampaignRunner {
       this.consecutiveFailures = 0;
       await this.saveState();
     } catch (error) {
+      if (isRecipientNotOnWhatsAppError(error)) {
+        job.status = "SKIPPED_NO_WHATSAPP";
+        job.error = "号码未注册 WhatsApp；本次未发送，也不会自动重试。";
+        job.outcomeCode = "RECIPIENT_NOT_ON_WHATSAPP";
+        this.consecutiveFailures = 0;
+        await this.saveState();
+        this.showProgress(`NO WHATSAPP → ${job.lead.name}（不可送达，已跳过并继续下一个）`);
+        await this.systemLog("info", "recipient_not_on_whatsapp", "Recipient is not registered on WhatsApp; skipped without retry.", {
+          jobId: job.id,
+          name: job.lead.name,
+          phone: job.lead.phone,
+          instanceName: job.instanceName,
+        });
+        return;
+      }
       job.status = "FAILED";
       job.error = error.message;
       this.consecutiveFailures += 1;
@@ -923,6 +1049,7 @@ export class CampaignRunner {
     let count = 0;
     for (const job of this.state.assignments) {
       if (job.status !== "FAILED") continue;
+      if (normalizeRecipientOutcome(job)) continue;
       job.status = "QUEUED";
       job.error = null;
       job.retryCount = (job.retryCount ?? 0) + 1;
@@ -934,12 +1061,29 @@ export class CampaignRunner {
   async runQueue() {
     for (let index = 0; index < this.state.assignments.length; index += 1) {
       if (this.stopped) return;
-      // Resume-safe: only send leads still QUEUED; already SENT/FAILED/etc. are skipped.
-      if (this.state.assignments[index].status !== "QUEUED") continue;
+      // Resume-safe: continue both untouched QUEUED jobs and a job interrupted
+      // between Parts. SENT / FAILED / skipped jobs are never resent.
+      if (!isResumableJobStatus(this.state.assignments[index].status)) continue;
       await this.processJob(this.state.assignments[index]);
       if (this.stopped || index === this.state.assignments.length - 1) return;
-      const next = this.state.assignments.slice(index + 1).find((job) => job.status === "QUEUED");
+      const next = this.state.assignments.slice(index + 1).find((job) => isResumableJobStatus(job.status));
       if (!next) return;
+      // A lead with several Parts must fully finish, then receive its own
+      // human-like contact gap before the next customer starts. scheduledAt is
+      // still honored when it is later (fixed windows / min blast floor).
+      const contactGapSeconds = randomGapSeconds(contactGapRange(this.config));
+      const earliestAfterPrevious = Date.now() + contactGapSeconds * 1000;
+      const scheduled = Math.max(new Date(next.scheduledAt).getTime(), earliestAfterPrevious);
+      next.scheduledAt = new Date(scheduled).toISOString();
+      next.contactGapSeconds = contactGapSeconds;
+      if (this.state.scheduleMode === AUTO_SCHEDULE) {
+        const parts = Math.max(...this.state.assignments.filter((job) => isResumableJobStatus(job.status)).map(jobMessagePartCount), 1);
+        const { floorMs } = campaignPacing(this.config, parts);
+        if (scheduled + floorMs > new Date(this.state.endAt).getTime()) {
+          this.state.endAt = new Date(scheduled + floorMs).toISOString();
+        }
+      }
+      await this.saveState();
       // Pacing is enforced by processJob -> waitUntil(next.scheduledAt). The
       // schedule is rebased to real wall-clock time in rebaseSchedule(), so we
       // must NOT add an extra fixed wait here (that was collapsing the spread
@@ -957,11 +1101,12 @@ export class CampaignRunner {
   // returned instantly and every lead fired back-to-back at the 45-75s contact
   // gap. Rebasing from the real clock guarantees the spread always holds.
   rebaseSchedule() {
-    const queued = this.state.assignments.filter((job) => job.status === "QUEUED");
+    const queued = this.state.assignments.filter((job) => isResumableJobStatus(job.status));
     const n = queued.length;
     if (n === 0) return;
 
-    const { partGapMs, floorMs } = campaignPacing(this.config);
+    const maxPartCount = Math.max(...queued.map(jobMessagePartCount), 1);
+    const { partGapMaxMs, floorMs } = campaignPacing(this.config, maxPartCount);
     const minGapSec = this.config.delivery.contactGapSeconds?.min ?? 45;
     const maxGapSec = this.config.delivery.contactGapSeconds?.max ?? Math.max(minGapSec, 75);
 
@@ -973,7 +1118,7 @@ export class CampaignRunner {
     const endMs = new Date(this.state.endAt).getTime();
     // In a fixed window, the final Part 1 must leave room for Part 2 before the
     // requested finish time. AUTO has its own full-slot safety buffer below.
-    const latestPart1Ms = endMs - partGapMs;
+    const latestPart1Ms = endMs - Math.max(0, maxPartCount - 1) * partGapMaxMs;
     const windowMs = latestPart1Ms - startMs;
     const evenInterval = n > 1 ? windowMs / (n - 1) : 0;
     // TEST runs shouldn't be stretched across the whole window — pace the few
@@ -995,7 +1140,7 @@ export class CampaignRunner {
     // If the floor pushed the last send past the window, extend endAt so the
     // end-time cutoff doesn't skip those leads (safety beats the strict window).
     const lastScheduled = new Date(queued[n - 1].scheduledAt).getTime();
-    if (isAutoSchedule || lastScheduled + partGapMs > endMs) {
+    if (isAutoSchedule || lastScheduled + Math.max(0, maxPartCount - 1) * partGapMaxMs > endMs) {
       this.state.endAt = new Date(lastScheduled + floorMs).toISOString();
     }
 
@@ -1003,7 +1148,7 @@ export class CampaignRunner {
     const hhmm = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour12: false });
     const waitMin = Math.max(0, Math.round((startMs - now) / 60000));
     this.showProgress(
-      `${isAutoSchedule ? "AUTO pacing" : "Fixed-window pacing"} ${n} leads ~${perMin} min apart (floor ${Math.round(floorMs / 1000)}s), ` +
+      `${isAutoSchedule ? "AUTO pacing" : "Fixed-window pacing"} ${n} leads × ${maxPartCount} part(s) ~${perMin} min apart (floor ${Math.round(floorMs / 1000)}s), ` +
       `first at ${hhmm(startMs)}${waitMin > 0 ? ` (waiting ~${waitMin} min)` : ""}, ` +
       `last around ${hhmm(new Date(this.state.endAt).getTime())}.`
     );
@@ -1033,7 +1178,8 @@ export class CampaignRunner {
     await this.saveState();
     try {
       await this.runQueue();
-      this.state.status = this.stopped ? "STOPPED" : "COMPLETED";
+      const incomplete = this.state.assignments.some((job) => isResumableJobStatus(job.status));
+      this.state.status = this.stopped || incomplete ? "STOPPED" : "COMPLETED";
     } finally {
       await this.saveState();
       this.running = false;
@@ -1082,11 +1228,15 @@ export class CampaignRunner {
             project: this.state.project ?? null,
             mode: this.state.mode,
             status: this.state.status,
+            createdAt: this.state.createdAt ?? null,
+            updatedAt: this.state.updatedAt ?? null,
             startAt: this.state.startAt,
             endAt: this.state.endAt,
             scheduleMode: this.state.scheduleMode ?? "FIXED",
+            instances: this.state.instances ?? [],
             total: this.state.assignments.length,
             summary: this.summary(),
+            outcomes: campaignOutcomeSummary(this.state.assignments),
             perSender: this.state.perSender ?? null,
             overflow: this.state.overflow ?? [],
             flowLabel: this.state.flowLabel ?? null,

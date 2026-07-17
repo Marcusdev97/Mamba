@@ -104,6 +104,52 @@ export function registerSettingsRoutes(router) {
     }
   });
 
+  router.post("/api/settings/local-database/notion-import/preview", async (_req, res, runtime) => {
+    const localDatabase = requireLocalDatabase(runtime);
+    try {
+      const report = await localDatabase.previewNotionImport();
+      json(res, 200, {
+        ok: true,
+        report,
+        database: await localDatabase.snapshot(),
+        message: "Dry Run 完成：只读取 Notion 并写入本机对账报告；没有导入客户，也没有修改 Notion。",
+      });
+    } catch (error) {
+      throw httpError(400, `Notion → SQLite Dry Run 失败 [${error.code || "NOTION_IMPORT_PREVIEW_FAILED"}]：${error.message}`);
+    }
+  });
+
+  router.post("/api/settings/local-database/notion-import/apply", async (_req, res, runtime) => {
+    const localDatabase = requireLocalDatabase(runtime);
+    try {
+      const result = await localDatabase.applyNotionImport();
+      json(res, 200, {
+        ok: true,
+        ...result,
+        message: `已用单一事务导入 ${result.report.imported} 条本机客户到 SQLite。Notion 没有被修改；切换 Primary 前仍可检查一次。`,
+      });
+    } catch (error) {
+      throw httpError(400, `Notion → SQLite 正式导入失败 [${error.code || "NOTION_IMPORT_APPLY_FAILED"}]：${error.message}`);
+    }
+  });
+
+  router.post("/api/settings/local-database/mode", async (req, res, runtime) => {
+    const localDatabase = requireLocalDatabase(runtime);
+    const body = await readJson(req);
+    try {
+      const database = await localDatabase.setStorageMode(body.mode);
+      json(res, 200, {
+        ok: true,
+        database,
+        message: database.storageMode === "primary"
+          ? "SQLite Primary 已启用：Customer Desk、Follow-Up 和 Customer Search 的本机客户读取将使用 SQLite。Notion 保留作云端镜像。"
+          : "已安全回到 Shadow：客户读取暂时回到原有 Notion/cache 路径，SQLite 资料仍完整保留。",
+      });
+    } catch (error) {
+      throw httpError(400, `切换 SQLite mode 失败 [${error.code || "SQLITE_MODE_CHANGE_FAILED"}]：${error.message}`);
+    }
+  });
+
   router.get("/api/settings/telegram-filters", async (_req, res, runtime) => {
     const filters = requireTelegramFilters(runtime);
     json(res, 200, { ok: true, filters: await filters.snapshot({ forceConnected: true }) });

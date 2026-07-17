@@ -19,6 +19,7 @@ export function createBlastCacheService({
     const props = page.properties || {};
     return {
       id: page.id,
+      sourceUpdatedAt: page.last_edited_time || null,
       project: nfSelect(page, "Project") || "",
       name: nfTitle(page, "Name") || "",
       phone: props["Phone"]?.phone_number || "",

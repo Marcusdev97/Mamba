@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { httpError, json } from "../lib/http.mjs";
+import { httpError, json, readJson } from "../lib/http.mjs";
+import { createMarketDashboardService, isExcludedMarketProject } from "../lib/market-dashboard-service.mjs";
 import { listProjects, normalizeProjectKey } from "../knowledge_layer.mjs";
 
 const require = createRequire(import.meta.url);
@@ -10,8 +11,29 @@ const yaml = require("js-yaml");
 // contain long dashed separators which are content, not frontmatter endings.
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
 
+function jsonNoStore(res, status, data) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, max-age=0",
+    Pragma: "no-cache",
+  });
+  res.end(JSON.stringify(data));
+}
+
 function marketDir(runtime) {
   return path.join(runtime.paths.rootDir, "brain-vault-import", "市场库");
+}
+
+const fallbackServices = new WeakMap();
+function companyMarket(runtime) {
+  if (runtime.marketDashboard) return runtime.marketDashboard;
+  if (!fallbackServices.has(runtime)) {
+    fallbackServices.set(runtime, createMarketDashboardService({
+      rootDir: runtime.paths.rootDir,
+      env: runtime.env,
+    }));
+  }
+  return fallbackServices.get(runtime);
 }
 
 function numericRange(value) {
@@ -160,6 +182,42 @@ function countBy(items, key) {
 }
 
 async function loadMarket(runtime, includeBody = false) {
+  const company = companyMarket(runtime);
+  const cached = await company.readCache();
+  if (cached?.projects?.length) {
+    const activeProjects = listProjects();
+    const projects = cached.projects.map((project) => {
+      const safe = company.publicProject(project);
+      return {
+        ...safe,
+        detailKey: project.uid,
+        activeBrain: isActiveProject(project.name, activeProjects),
+        ...(includeBody ? {
+          body: [
+            `Official project status: ${project.status || "Not listed"}`,
+            `Official list price: ${project.priceMin || "Not listed"}${project.priceMax && project.priceMax !== project.priceMin ? ` - ${project.priceMax}` : ""}`,
+            "This is a read-only company mirror. Verify before quoting; it never updates Project Editor automatically.",
+          ].join("\n"),
+        } : {}),
+      };
+    });
+    return {
+      projects,
+      activeProjects,
+      parseErrors: [],
+      source: cached.source,
+      company: {
+        cached: true,
+        collectedAt: cached.collectedAt,
+        rawCount: cached.rawCount,
+        includedCount: cached.includedCount,
+        excludedCount: cached.excludedCount,
+        excluded: cached.excluded,
+        latestChanges: cached.latestChanges || [],
+      },
+    };
+  }
+
   const dir = marketDir(runtime);
   let files;
   try {
@@ -177,17 +235,24 @@ async function loadMarket(runtime, includeBody = false) {
   for (const file of files) {
     try {
       const raw = await fs.readFile(path.join(dir, file), "utf8");
-      projects.push(parseProject(file, raw, activeProjects, includeBody));
+      const project = parseProject(file, raw, activeProjects, includeBody);
+      if (!isExcludedMarketProject(project)) projects.push(project);
     } catch (error) {
       parseErrors.push({ file, error: error.message });
     }
   }
-  return { projects, activeProjects, parseErrors };
+  return {
+    projects,
+    activeProjects,
+    parseErrors,
+    source: "brain-vault-import/市场库 (尚未从公司刷新)",
+    company: { cached: false, collectedAt: null, rawCount: 0, includedCount: 0, excludedCount: 0, excluded: { Penang: 0, Johor: 0 }, latestChanges: [] },
+  };
 }
 
 export function registerProjectBrainRoutes(router) {
   router.get("/api/project-brain", async (_req, res, runtime) => {
-    const { projects, activeProjects, parseErrors } = await loadMarket(runtime);
+    const { projects, activeProjects, parseErrors, source, company } = await loadMarket(runtime);
     const qaReady = projects.filter((project) => project.qaReady).length;
     const verified = projects.filter((project) => project.verified).length;
     const activeMatches = projects.filter((project) => project.activeBrain).length;
@@ -195,7 +260,11 @@ export function registerProjectBrainRoutes(router) {
     json(res, 200, {
       ok: true,
       generatedAt: new Date().toISOString(),
-      source: "brain-vault-import/市场库",
+      source,
+      company: {
+        ...company,
+        ...await companyMarket(runtime).connectionStatus(),
+      },
       summary: {
         marketProjects: projects.length,
         activeBrainSheets: activeProjects.length,
@@ -221,6 +290,30 @@ export function registerProjectBrainRoutes(router) {
 
   router.get("/api/project-brain/detail", async (req, res, runtime) => {
     const url = new URL(req.url, "http://mamba.local");
+    const uid = url.searchParams.get("uid") ?? "";
+    if (uid) {
+      const company = companyMarket(runtime);
+      const project = await company.projectByUid(uid);
+      if (!project) throw httpError(404, "公司楼盘缓存里找不到这个项目。请按「从公司刷新」后再试。", "MARKET_PROJECT_NOT_FOUND");
+      const companyDetail = await company.projectDetails(uid, { force: url.searchParams.get("refresh") === "1" });
+      const activeProjects = listProjects();
+      const safe = company.publicProject(project);
+      json(res, 200, {
+        ok: true,
+        project: {
+          ...safe,
+          detailKey: project.uid,
+          activeBrain: isActiveProject(project.name, activeProjects),
+          body: [
+            `Official project status: ${project.status || "Not listed"}`,
+            `Official list price: ${project.priceMin || "Not listed"}${project.priceMax && project.priceMax !== project.priceMin ? ` - ${project.priceMax}` : ""}`,
+            "Read-only company mirror. List price is not net price; verify before quoting.",
+          ].join("\n"),
+          companyDetail,
+        },
+      });
+      return;
+    }
     const file = url.searchParams.get("file") ?? "";
     if (!file || path.basename(file) !== file || !file.endsWith(".md") || file.startsWith("_")) {
       throw httpError(400, "项目文件名不正确。", "INVALID_PROJECT_FILE");
@@ -234,5 +327,29 @@ export function registerProjectBrainRoutes(router) {
       throw error;
     }
     json(res, 200, { ok: true, project: parseProject(file, raw, listProjects(), true) });
+  });
+
+  router.post("/api/project-brain/sales-chart/reveal", async (req, res, runtime) => {
+    const body = await readJson(req);
+    const uid = String(body?.uid || "").trim();
+    if (!uid) throw httpError(400, "缺少楼盘 UID，无法读取 Sales Chart。", { code: "MARKET_PROJECT_UID_REQUIRED" });
+    const secret = await companyMarket(runtime).salesChartSecret(uid);
+    jsonNoStore(res, 200, { ok: true, salesChart: secret });
+  });
+
+  router.post("/api/project-brain/refresh", async (_req, res, runtime) => {
+    const result = await companyMarket(runtime).refresh();
+    await runtime.systemLogs?.write({
+      level: "info",
+      area: "market_dashboard",
+      event: "property213_refresh_completed",
+      message: `Company market refresh completed: ${result.includedCount} included, ${result.excludedCount} excluded.`,
+      context: result,
+    }).catch(() => {});
+    json(res, 200, {
+      ok: true,
+      message: `已从公司更新 ${result.includedCount} 个楼盘，并排除 Penang ${result.excluded.Penang} 个、Johor ${result.excluded.Johor} 个。`,
+      result,
+    });
   });
 }

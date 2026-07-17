@@ -93,19 +93,30 @@ export function campaignSummary(snapshot) {
   const sent = assignments.filter((job) => job.status === "SENT").length;
   const failed = assignments.filter((job) => job.status === "FAILED").length;
   const skipped = assignments.filter((job) => /^SKIPPED|PART1_ONLY/.test(job.status || "")).length;
+  const pending = assignments.filter((job) => job.status === "QUEUED" || /^WAITING_PART\d+$/.test(job.status || "") || /^SENDING_PART\d+$/.test(job.status || "")).length;
+  const processed = Math.max(0, assignments.length - pending);
+  const rawStatus = state.status || (snapshot.running ? "RUNNING" : "READY");
+  const status = !snapshot.running && rawStatus === "COMPLETED" && pending > 0 ? "INCOMPLETE" : rawStatus;
+  const instanceNames = [
+    ...(Array.isArray(state.instances) ? state.instances.map((item) => item?.name || item) : []),
+    ...assignments.map((job) => job.instanceName),
+    ...Object.keys(state.perSender || {}),
+  ].map((value) => String(value || "").trim()).filter(Boolean);
   return {
     runId: state.runId || "",
     project: state.project || state.campaignId || "Campaign",
-    status: state.status || (snapshot.running ? "RUNNING" : "READY"),
+    status,
     mode: state.mode || "",
     total: assignments.length,
     sent,
     failed,
     skipped,
+    pending,
+    processed,
     running: snapshot.running === true,
     stopped: snapshot.stopped === true,
     updatedAt: state.updatedAt || state.createdAt || null,
-    instances: (state.instances || []).map((item) => item.name || item).filter(Boolean),
+    instances: [...new Set(instanceNames)],
   };
 }
 
@@ -169,8 +180,10 @@ export function registerControlCenterRoutes(router) {
   router.get("/api/control-center", async (_req, res, runtime) => {
     const root = runtime.paths.rootDir;
     const today = dateKeyKL(new Date());
-    const cache = await runtime.followUp?.readCache?.().catch(() => ({ syncedAt: null, records: [] }))
-      ?? { syncedAt: null, records: [] };
+    const cache = (
+      await runtime.followUp?.syncCache?.({ force: false }).catch(() => null)
+      || await runtime.followUp?.readCache?.().catch(() => ({ syncedAt: null, records: [] }))
+    ) ?? { syncedAt: null, records: [] };
     const allRecords = Array.isArray(cache.records) ? cache.records : [];
     const whatsapp = await whatsappHealth(runtime);
     const device = runtime.device || { id: "this-device", name: "This device", hostname: "" };
@@ -179,16 +192,19 @@ export function registerControlCenterRoutes(router) {
     });
     const records = localScope.records;
     const metrics = summarizeRecords(records, today);
-    const pendingBrain = await readJson(path.join(root, "campaign-data", "brain", "pending.json"), { pending: {} });
-    const aiPending = Object.keys(pendingBrain.pending || {}).length;
     const settings = runtime.settings?.snapshot?.() || {};
+    const brainEnabled = settings.brain?.enabled === true;
+    const pendingBrain = await readJson(path.join(root, "campaign-data", "brain", "pending.json"), { pending: {} });
+    const storedBrainPending = Object.values(pendingBrain.pending || {}).filter((item) =>
+      item?.event?.instanceName !== "simulate" && Number(item?.tgMessageId || 0) > 0).length;
+    const aiPending = brainEnabled ? storedBrainPending : 0;
     const runner = runtime.campaign?.getRunner?.();
     const runnerSnapshot = runner?.snapshot?.() || runtime.campaign?.emptySnapshot?.() || null;
     const activeRun = runnerSnapshot?.state
       ? runnerSnapshot
       : { running: false, stopped: false, state: await readJson(path.join(root, "campaign-data", "active-run.json"), null) };
     const campaign = campaignSummary(activeRun);
-    const logs = await runtime.systemLogs?.list?.({ limit: 80, date: today }).catch(() => []) || [];
+    const logs = await runtime.systemLogs?.list?.({ limit: 1000, date: today }).catch(() => []) || [];
     const errorsToday = logs.filter((entry) => entry.level === "error").length;
     const warningsToday = logs.filter((entry) => entry.level === "warn").length;
     const cacheAgeMinutes = cache.syncedAt ? Math.max(0, Math.round((Date.now() - dateMs(cache.syncedAt)) / 60000)) : null;
@@ -199,7 +215,6 @@ export function registerControlCenterRoutes(router) {
       ? await runtime.replyServices?.trackerDetails?.().catch(() => null)
       : null;
     const notionReplyQueue = trackerDetails?.notionQueue || { pendingMessages: 0, manualReviewMessages: 0, pendingPhones: 0 };
-    const brainEnabled = settings.brain?.enabled === true;
     const learning = await learningQueueHealth(runtime, Boolean(settings.notion?.configured));
     const scheduler = await runtime.dailyCampaign?.snapshot?.().catch((error) => ({ error: error.message })) || null;
     const watchdog = await readJson(path.join(root, "campaign-data", "watchdog", "status.json"), null);
@@ -211,9 +226,11 @@ export function registerControlCenterRoutes(router) {
     const queue = [
       { id: "overdue", label: "Overdue follow-ups", count: metrics.overdue, tone: "red", href: "/follow-up?bucket=overdue" },
       { id: "today", label: "Follow up today", count: metrics.dueToday, tone: "amber", href: "/follow-up?bucket=today" },
-      { id: "brain", label: "AI replies awaiting approval", count: aiPending, tone: "purple", href: "/brain-learning" },
       { id: "appointments", label: "Active appointments", count: metrics.appointments, tone: "blue", href: "/follow-up?bucket=appointment" },
     ];
+    if (brainEnabled && aiPending) {
+      queue.splice(2, 0, { id: "brain", label: "AI replies awaiting approval", count: aiPending, tone: "purple", href: "/brain-learning" });
+    }
     if (notionReplyQueue.pendingMessages) {
       queue.splice(2, 0, {
         id: "notion-replies",
@@ -229,7 +246,7 @@ export function registerControlCenterRoutes(router) {
       queue.splice(2, 0, {
         id: "campaign",
         label: `${campaign.project} · ${campaign.status}`,
-        count: campaign.total ? `${campaign.sent}/${campaign.total}` : campaign.status,
+        count: campaign.pending ? `${campaign.sent} sent · ${campaign.pending} pending` : campaign.total ? `${campaign.sent}/${campaign.total}` : campaign.status,
         tone: campaign.failed ? "red" : campaign.running ? "green" : "blue",
         href: "/send",
       });
@@ -250,18 +267,18 @@ export function registerControlCenterRoutes(router) {
         unassignedRecords: localScope.counts.unassigned,
         telegram: runtime.telegramHub?.enabled ? "global" : "local-config",
       },
-      metrics: { ...metrics, aiPending },
+      metrics: { ...metrics, aiPending, storedBrainPending },
       cache: { syncedAt: cache.syncedAt || null, ageMinutes: cacheAgeMinutes, stale: cacheAgeMinutes === null || cacheAgeMinutes > 60 },
       campaign,
       queue,
       recent: recentActivity(records),
-      brain: { enabled: brainEnabled, activeProjects: activeBrain.length, provider: settings.brain?.provider || "rules" },
+      brain: { enabled: brainEnabled, activeProjects: activeBrain.length, provider: settings.brain?.provider || "rules", storedPending: storedBrainPending },
       health: [
         healthItem("server", "Mamba Server", "online", `Online · port ${runtime.port}`),
         healthItem("whatsapp", "WhatsApp (Evolution)", whatsapp.ok ? "online" : "offline", whatsapp.label, "/settings"),
         healthItem(
           "notion",
-          "Notion Customer Cache",
+          cache.source === "sqlite" ? "SQLite Customer Store" : "Notion Customer Cache",
           !settings.notion?.configured ? "offline" : cache.syncedAt && cacheAgeMinutes <= 60 ? "online" : "warning",
           !settings.notion?.configured ? "Notion token is not configured" : cache.syncedAt ? `Synced ${cacheAgeMinutes} min ago${cacheAgeMinutes > 60 ? " · refresh recommended" : ""}` : "Connected, but no customer snapshot is available",
           "/conversations",

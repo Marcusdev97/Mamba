@@ -67,6 +67,27 @@ assert.equal(campaign.failed, 1);
 assert.equal(campaign.skipped, 1);
 assert.deepEqual(campaign.instances, ["wa_01"]);
 
+const interrupted = campaignSummary({
+  running: false,
+  stopped: false,
+  state: {
+    runId: "run_interrupted",
+    project: "Binastra",
+    status: "COMPLETED",
+    mode: "LIVE",
+    perSender: { wa_01: 70 },
+    assignments: [
+      ...Array.from({ length: 65 }, () => ({ status: "SENT", instanceName: "wa_01" })),
+      ...Array.from({ length: 4 }, () => ({ status: "FAILED", instanceName: "wa_01" })),
+      { status: "WAITING_PART3", instanceName: "wa_01" },
+    ],
+  },
+});
+assert.equal(interrupted.status, "INCOMPLETE", "a persisted partial Part must never be presented as completed");
+assert.equal(interrupted.pending, 1);
+assert.equal(interrupted.processed, 69);
+assert.deepEqual(interrupted.instances, ["wa_01"], "sender must fall back to assignments/perSender when compact snapshot omits instances");
+
 const scope = { device: { id: "upstairs-mac", name: "Upstairs Mac" } };
 assert.equal(recordDeviceScope({ lastSentByDevice: "upstairs-mac", lastSenderPhone: "60111111111" }, scope), "local");
 assert.equal(recordDeviceScope({ lastSentByDevice: "upstairs-mac", senderInstance: "wa_01" }, scope), "legacy");

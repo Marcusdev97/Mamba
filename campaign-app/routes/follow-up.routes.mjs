@@ -423,7 +423,7 @@ export function registerFollowUpRoutes(router) {
     };
 
     let cache = await followUp.readCache();
-    let source = "cache";
+    let source = cache.source || "cache";
     if (!cache.records.length && followUp.hasBlastDatabase) {
       const records = await followUp.queryNotionRows(undefined);
       cache = await followUp.writeCache(records);

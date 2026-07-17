@@ -932,7 +932,7 @@ export function registerConversationsRoutes(router) {
         ? await conversations.syncCache({ force: false })
         : { records: await conversations.queryNotionRows(undefined), reused: false };
       records = synced.records;
-      source = synced.reused ? "cache" : "notion";
+      source = synced.source || (synced.reused ? "cache" : "notion");
     } catch (error) {
       const cache = await conversations.readCache();
       records = cache.records;

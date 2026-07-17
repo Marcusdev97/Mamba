@@ -1,4 +1,5 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
+import { isRecipientNotOnWhatsAppError, isResumableJobStatus } from "../campaign_core.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
 import {
   AUTO_SCHEDULE,
@@ -178,11 +179,15 @@ function campaignRunners(campaign) {
     : [campaign.getRunner()].filter(Boolean);
 }
 
-function conflictingRunner(campaign, instanceNames, excludeRunId = null, { force = false } = {}) {
+export function conflictingRunner(campaign, instanceNames, excludeRunId = null, {
+  force = false,
+  ignoreReadyPreviews = false,
+} = {}) {
   return campaignRunners(campaign).find((candidate) => {
     if (!candidate?.state || candidate.state.runId === excludeRunId) return false;
     if (!instanceSetsOverlap(instanceNames, runnerInstanceNames(candidate))) return false;
     if (candidate.running) return true;
+    if (ignoreReadyPreviews && ["READY", "READY_TEST"].includes(candidate.state.status)) return false;
     return !force && Boolean(campaignQueueBlockReason(candidate));
   }) || null;
 }
@@ -320,6 +325,7 @@ export function registerCampaignRoutes(router) {
         markFlowRun: false,
         credit: false,
       });
+      runner.refreshAutoScheduleEstimate();
     } catch (error) {
       throw httpError(502, `读取或套用 Notion Flow 1 模板失败: ${error.message}`);
     }
@@ -370,6 +376,7 @@ export function registerCampaignRoutes(router) {
           markFlowRun: false,
           credit: false,
         });
+        runner.refreshAutoScheduleEstimate();
       } catch (error) {
         throw httpError(502, `开始发送前读取或套用 Notion 模板失败: ${error.message}`);
       }
@@ -426,10 +433,14 @@ export function registerCampaignRoutes(router) {
     if (!runner || !runner.state) throw httpError(400, "没有可继续的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
-    const remaining = runner.state.assignments.filter((job) => job.status === "QUEUED").length;
+    const remaining = runner.state.assignments.filter((job) => isResumableJobStatus(job.status)).length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
 
-    const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId);
+    const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
+      // An unsent preview owns no sender lane. Resume is an explicit action;
+      // once it starts, that preview will in turn be blocked by this RUNNING run.
+      ignoreReadyPreviews: true,
+    });
     if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 
     markNotionSyncWaiting(runner);
@@ -447,16 +458,18 @@ export function registerCampaignRoutes(router) {
     if (!runner || !runner.state) throw httpError(400, "没有可补发的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
-    const failed = runner.state.assignments.filter((job) => job.status === "FAILED").length;
-    if (!failed) throw httpError(400, "没有失败客户需要补发。");
+    const failed = runner.state.assignments.filter((job) =>
+      job.status === "FAILED" && !isRecipientNotOnWhatsAppError(job)
+    ).length;
+    if (!failed) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId);
     if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 
     const queued = runner.retryFailedOnly();
-    if (!queued) throw httpError(400, "没有失败客户需要补发。");
-    runner.pushLog(`Retry Failed only: ${queued} 个失败客户已重新排队；已成功/手动跳过的客户不会重发。`);
-    await writeCampaignLog(runtime, "info", "retry_failed_only", "Failed recipients queued for retry.", {
+    if (!queued) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
+    runner.pushLog(`Retry errors only: ${queued} 个发送异常已重新排队；无 WhatsApp/已触达/已跳过的客户不会重发。`);
+    await writeCampaignLog(runtime, "info", "retry_failed_only", "Recipients with retryable send errors queued for retry.", {
       runId: runner.state?.runId ?? null,
       project: runner.state?.project ?? null,
       mode: runner.state?.mode ?? null,
