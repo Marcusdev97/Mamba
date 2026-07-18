@@ -127,6 +127,40 @@ assert.equal((await service.readLeadCache()).records.length, 2, "Rejected Apply 
 
 assert.equal((await service.setStorageMode("shadow")).storageMode, "shadow");
 
+// Flow 1 客户群保存在 SQLite，可选择、改名和编辑成员；作用域必须绑定 device + 真实号码。
+const group = await service.createLeadGroup({
+  projectCode: "binastra",
+  projectName: "Binastra",
+  name: "July Website Leads",
+  sourceType: "file",
+  sourceName: "july.xlsx",
+  leads: [
+    { id: "lead_1", name: "Alice", phone: "60111111111", sourceRow: 2 },
+    { id: "lead_2", name: "Bob", phone: "0122222222", sourceRow: 3 },
+    { id: "lead_dup", name: "Bob duplicate", phone: "60122222222", sourceRow: 4 },
+  ],
+});
+assert.equal(group.name, "July Website Leads");
+assert.equal(group.memberCount, 2, "customer group must deduplicate normalized phones");
+assert.equal((await service.listLeadGroups({ projectCode: "binastra" })).length, 1);
+const renamedGroup = await service.renameLeadGroup({ groupId: group.id, projectCode: "binastra", name: "July Web Leads · Batch A" });
+assert.equal(renamedGroup.name, "July Web Leads · Batch A");
+await service.updateLeadGroupMembers({
+  groupId: group.id,
+  projectCode: "binastra",
+  edits: [{ id: "lead_1", name: "Alice Tan" }],
+});
+assert.equal((await service.readLeadGroup({ groupId: group.id, projectCode: "binastra" })).leads[0].name, "Alice Tan");
+await assert.rejects(
+  service.createLeadGroup({
+    projectCode: "binastra",
+    projectName: "Binastra",
+    name: "July Web Leads · Batch A",
+    leads: [{ name: "New", phone: "60133333333" }],
+  }),
+  (error) => error.code === "LEAD_GROUP_NAME_EXISTS",
+);
+
 // 两台电脑可以都叫 wa_01；真正唯一的是 device::phone。
 const otherDevice = createLocalDatabaseService({
   dataDir,
@@ -134,6 +168,11 @@ const otherDevice = createLocalDatabaseService({
   senderPolicy: { configured: true, expectedSenderPhone: "60168568756" },
 });
 await otherDevice.initialize();
+assert.deepEqual(await otherDevice.listLeadGroups({ projectCode: "binastra" }), [], "other device must not see this device's Flow 1 customer groups");
+await assert.rejects(
+  otherDevice.readLeadGroup({ groupId: group.id, projectCode: "binastra" }),
+  (error) => error.code === "LEAD_GROUP_NOT_LOCAL",
+);
 const crossDeviceBindings = JSON.parse(execFileSync(detected.binary, [
   "-batch", "-json", service.databasePath,
   "SELECT connection_key AS connectionKey FROM whatsapp_connections ORDER BY connection_key;",

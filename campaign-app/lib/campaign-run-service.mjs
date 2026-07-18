@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
+import { isResumableJobStatus } from "../campaign_core.mjs";
 import { buildSenderKey, senderPhoneForInstance } from "./device-identity.mjs";
 
 function pageId(id) {
@@ -157,9 +158,14 @@ export function createCampaignRunService({
     return runner.state.notionSync;
   }
 
-  async function autoNotionUpload(runner) {
+  async function autoNotionUpload(runner, { allowPartial = false } = {}) {
     if (!runner?.runPath || runner?.state?.mode !== "LIVE" || runner.state.flowLabel) {
       return null;
+    }
+    const pending = (runner.state.assignments || []).filter((job) => isResumableJobStatus(job.status)).length;
+    if (pending && !allowPartial) {
+      runner.pushLog?.(`Notion 收尾已暂停：本轮仍有 ${pending} 个客户未处理。先恢复发送，避免把半完成批次当成已结束。`);
+      return { status: "BLOCKED", reason: "unfinished-campaign", pending };
     }
 
     const startedAt = new Date().toISOString();
@@ -206,7 +212,7 @@ export function createCampaignRunService({
       const detail = String(error.uploadDetail || error.message || "Unknown Notion upload error").trim().slice(0, 500);
       await saveNotionSync(runner, {
         status: "FAILED",
-        message: "Notion 更新失败。发送结果仍保留在本机，请查看错误后手动补跑。",
+        message: "Notion 没有收到本轮更新，但 WhatsApp 发送结果已安全保留在本机。",
         finishedAt: new Date().toISOString(),
         error: detail,
       });
@@ -221,9 +227,11 @@ export function createCampaignRunService({
 
   async function recoverPendingUpdates(runner) {
     const state = runner?.state;
-    if (!state || state.mode !== "LIVE" || !["COMPLETED", "STOPPED"].includes(state.status)) {
+    if (!state || state.mode !== "LIVE" || state.status !== "COMPLETED") {
       return { recovered: false, reason: "not-a-finished-live-run" };
     }
+    const pending = (state.assignments || []).filter((job) => isResumableJobStatus(job.status)).length;
+    if (pending) return { recovered: false, reason: "unfinished-campaign", pending };
     if (state.flowLabel) {
       if (state.advanceStatus === "SUCCEEDED") return { recovered: false, reason: "flow-already-synced" };
       await autoAdvanceFlow(runner);

@@ -14,6 +14,7 @@ const HTML_ROUTES = {
   "/follow-up": "follow-up.html",
   "/bot-rules": "bot-rules.html",
   "/brain-learning": "brain-learning.html",
+  "/golden-ledger": "golden-ledger.html",
   "/flow-map": "flow-map.html",
   "/knowledge": "knowledge.html",
   "/project-brain": "project-brain.html",

@@ -57,6 +57,7 @@ assert.equal((await restoredQueue.peek()).runId, "run_flow1");
 const state = (overrides = {}, running = false) => ({ running, state: { status: "COMPLETED", mode: "LIVE", ...overrides } });
 assert.match(campaignQueueBlockReason(state({}, true)), /仍在发送/);
 assert.match(campaignQueueBlockReason(state({ status: "STOPPED" })), /手动停止/);
+assert.match(campaignQueueBlockReason(state({ status: "INTERRUPTED" })), /安全暂停/);
 assert.match(campaignQueueBlockReason(state({ flowLabel: "Flow 2 - Layout", advanceStatus: "WAITING" })), /更新 Notion/);
 assert.match(campaignQueueBlockReason(state({ flowLabel: "Flow 2 - Layout", advanceStatus: "PARTIAL" })), /PARTIAL/);
 assert.equal(campaignQueueBlockReason(state({ flowLabel: "Flow 2 - Layout", advanceStatus: "SUCCEEDED" })), null);

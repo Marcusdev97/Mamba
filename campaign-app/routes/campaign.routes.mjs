@@ -79,7 +79,14 @@ function selectLeads(campaign, project, mode, body) {
 
   const leadsCache = campaign.getLeadsCache();
   if (!leadsCache || leadsCache.projectId !== project.id || !leadsCache.leads.length) {
-    throw httpError(400, `还没有导入 ${project.name} 的 leads，请先导入它的 Excel。`);
+    throw httpError(400, `还没有选择 ${project.name} 的可发送客户群。请先在步骤 1 选择客户群并完成安全检查。`);
+  }
+  if (!leadsCache.leadGroupId) {
+    throw httpError(400, "当前名单不是已保存的本机客户群。请重新建立或选择客户群，避免使用来历不明的旧缓存。");
+  }
+  const requestedGroupId = String(body.leadGroupId || "").trim();
+  if (!requestedGroupId || requestedGroupId !== leadsCache.leadGroupId) {
+    throw httpError(409, "页面选择的客户群与 Server 当前客户群不一致。请重新点击「使用这个客户群」后再生成预览。");
   }
 
   const limit = Number(body.leadCount);
@@ -157,6 +164,7 @@ export function campaignQueueBlockReason(runner) {
   if (!state) return null;
   if (runner.running) return "当前 Campaign 仍在发送。";
   if (state.status === "STOPPED") return "当前 Campaign 已手动停止；请确认后再启动下一批。";
+  if (state.status === "INTERRUPTED") return "当前 Campaign 因连接异常安全暂停；请恢复或结束这批后再启动下一批。";
   if (["READY", "READY_TEST"].includes(state.status)) return "当前还有一个尚未启动的预览。";
   if (state.mode === "LIVE" && state.flowLabel && ["WAITING", "RUNNING"].includes(state.advanceStatus)) {
     return `当前 ${state.flowLabel} 仍在更新 Notion（${state.advanceStatus}）；完成后 Queue 会自动继续。`;
@@ -211,6 +219,11 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
   (async () => {
     try {
       await runner.run();
+      if (runner.state?.status !== "COMPLETED") {
+        const pending = (runner.state?.assignments || []).filter((job) => isResumableJobStatus(job.status)).length;
+        runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；已保留本机进度，不执行 Notion 收尾。`);
+        return;
+      }
       if (autoAdvance) await campaign.autoAdvanceFlow(runner);
       if (autoAdvance) await campaign.creditSentCounts(runner);
       await campaign.autoNotionUpload(runner);
@@ -315,6 +328,11 @@ export function registerCampaignRoutes(router) {
       runner.state.projectId = project.id;
       runner.state.deviceId = campaign.device?.id || "";
       runner.state.deviceName = campaign.device?.name || "";
+      if (mode === "LIVE") {
+        const cache = campaign.getLeadsCache();
+        runner.state.leadGroupId = cache?.leadGroupId || "";
+        runner.state.leadGroupName = cache?.leadGroupName || "";
+      }
     } catch (error) {
       throw httpError(500, `生成 campaign 预览失败: ${error.message}`);
     }
@@ -463,7 +481,11 @@ export function registerCampaignRoutes(router) {
     ).length;
     if (!failed) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
 
-    const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId);
+    const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
+      // An old preview has never used the sender. Explicit recovery of an
+      // interrupted LIVE batch takes priority over that unsent preview.
+      ignoreReadyPreviews: true,
+    });
     if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 
     const queued = runner.retryFailedOnly();
@@ -481,6 +503,29 @@ export function registerCampaignRoutes(router) {
 
     runCampaignInBackground(runtime, runner, autoAdvance, "campaign_retry_failed_error");
     json(res, 200, { ok: true, retried: queued, snapshot: runner.snapshot() });
+  });
+
+  router.post("/api/notion-sync/retry", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    const runner = campaign.getRunner(body.runId);
+    if (!runner || !runner.state) throw httpError(400, "找不到要补同步的 Campaign。请先打开发送详情确认 run。");
+    if (runner.running) throw httpError(409, "Campaign 仍在发送，完成后会自动同步 Notion。");
+    if (runner.state.mode !== "LIVE" || runner.state.flowLabel) {
+      throw httpError(400, "这个按钮只用于 Flow 1 LIVE 的 Notion 补同步。");
+    }
+
+    const pending = runner.state.assignments.filter((job) => isResumableJobStatus(job.status)).length;
+    if (pending && body.finalizePartial !== true) {
+      throw httpError(409, `这批仍有 ${pending} 个客户未发送。请先恢复这批；系统不会把半完成批次误当成已结束。`);
+    }
+
+    const result = await campaign.autoNotionUpload(runner, { allowPartial: body.finalizePartial === true });
+    await campaign.persistRunners?.().catch(() => {});
+    if (result?.status !== "SUCCEEDED") {
+      throw httpError(502, result?.error || "Notion 补同步失败；本机记录没有丢失，请检查网络后再试。");
+    }
+    json(res, 200, { ok: true, notionSync: result, snapshot: runner.snapshot() });
   });
 
   router.post("/api/stop", async (req, res, runtime) => {

@@ -42,6 +42,120 @@ async function loadSuppressedPhones() {
   }
 }
 
+function defaultGroupName(project, sourcePath) {
+  const source = path.basename(String(sourcePath || ""), path.extname(String(sourcePath || "")))
+    .replace(/^\d+_/, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  if (source && source.toLowerCase() !== "untitled spreadsheet") return source.slice(0, 80);
+  const stamp = new Date().toLocaleString("en-MY", {
+    timeZone: "Asia/Kuala_Lumpur",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${project.name} · ${stamp}`.slice(0, 80);
+}
+
+function manualCell(value) {
+  return String(value || "").trim().replace(/^['"]|['"]$/g, "").trim();
+}
+
+function phoneLike(value) {
+  return /^[+\d][\d\s().-]{6,}$/.test(manualCell(value));
+}
+
+export function parsePastedLeads(text, normalizePhone) {
+  const raw = String(text || "");
+  if (raw.length > 2_000_000) {
+    const error = new Error("粘贴名单太大（最多约 2 MB）。请分成几个客户群导入。");
+    error.code = "PASTED_LEADS_TOO_LARGE";
+    throw error;
+  }
+  const leads = [];
+  const rejected = [];
+  const seen = new Set();
+  const lines = raw.replace(/\r/g, "").split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const original = lines[index].trim();
+    if (!original) continue;
+    const lower = original.toLowerCase();
+    if (/(?:\b(?:name|customer)\b|姓名|客户)/.test(lower) && /(?:\b(?:phone|mobile|tel)\b|电话|号码)/.test(lower)) continue;
+
+    let name = "";
+    let phone = "";
+    const cells = original.includes("\t") || /[,;|]/.test(original)
+      ? original.split(original.includes("\t") ? "\t" : /[,;|]/).map(manualCell).filter(Boolean)
+      : [];
+    if (cells.length >= 2) {
+      const phoneIndex = cells.findLastIndex((cell) => phoneLike(cell) && normalizePhone(cell));
+      if (phoneIndex >= 0) {
+        phone = normalizePhone(cells[phoneIndex]) || "";
+        name = cells.filter((_, cellIndex) => cellIndex !== phoneIndex).join(" ").trim();
+      }
+    }
+    if (!phone) {
+      const match = original.match(/(?:^|\s)(\+?[\d][\d\s().-]{6,})$/);
+      if (match && phoneLike(match[1])) {
+        phone = normalizePhone(match[1]) || "";
+        name = original.slice(0, match.index).replace(/[,;|:-]+$/g, "").trim();
+      }
+    }
+    if (!phone && phoneLike(original)) phone = normalizePhone(original) || "";
+    name = manualCell(name) || "there";
+    if (!phone) {
+      rejected.push({ row: index + 1, value: original.slice(0, 120), reason: "找不到有效电话号码" });
+      continue;
+    }
+    if (seen.has(phone)) {
+      rejected.push({ row: index + 1, value: original.slice(0, 120), reason: "重复号码" });
+      continue;
+    }
+    seen.add(phone);
+    leads.push({ id: `manual_${String(index + 1).padStart(5, "0")}`, name, phone, sourceRow: index + 1 });
+  }
+  return { leads, rejected, sourceRows: lines.filter((line) => line.trim()).length };
+}
+
+async function eligibleLeads(imports, project, sourceLeads, { includeBlasted = false } = {}) {
+  let skippedAlreadyBlasted = 0;
+  let leads = Array.isArray(sourceLeads) ? [...sourceLeads] : [];
+  if (imports.hasBlastDatabase && !includeBlasted) {
+    try {
+      const blasted = await imports.fetchBlastedPhones(project.name);
+      leads = leads.filter((lead) => {
+        const phone = imports.normalizePhone(lead.phone);
+        if (phone && blasted.has(phone)) {
+          skippedAlreadyBlasted += 1;
+          return false;
+        }
+        return true;
+      });
+    } catch (error) {
+      console.warn(`[import] already-blasted check unavailable: ${error?.message}`);
+    }
+  }
+
+  let skippedSuppressed = 0;
+  try {
+    const suppressed = await loadSuppressedPhones();
+    leads = leads.filter((lead) => {
+      const phone = imports.normalizePhone(lead.phone);
+      if (phone && suppressed.has(phone)) {
+        skippedSuppressed += 1;
+        return false;
+      }
+      return true;
+    });
+  } catch (error) {
+    console.warn(`[suppression] gate unavailable: ${error?.message}`);
+  }
+  return { leads, skippedAlreadyBlasted, skippedSuppressed };
+}
+
 export function registerImportRoutes(router) {
   router.post("/api/import", async (req, res, runtime) => {
     const imports = requireImport(runtime);
@@ -62,51 +176,164 @@ export function registerImportRoutes(router) {
       throw httpError(400, readableImportError(error));
     }
 
-    let skippedAlreadyBlasted = 0;
-    let leads = result.leads;
-    if (imports.hasBlastDatabase && !body.includeBlasted) {
-      try {
-        const blasted = await imports.fetchBlastedPhones(project.name);
-        leads = result.leads.filter((lead) => {
-          const phone = imports.normalizePhone(lead.phone);
-          if (phone && blasted.has(phone)) {
-            skippedAlreadyBlasted += 1;
-            return false;
-          }
-          return true;
-        });
-      } catch (error) {
-        console.warn(`[import] already-blasted check unavailable: ${error?.message}`);
-      }
-    }
-
-    let skippedSuppressed = 0;
+    let group;
     try {
-      const suppressed = await loadSuppressedPhones();
-      leads = leads.filter((lead) => {
-        const phone = imports.normalizePhone(lead.phone);
-        if (phone && suppressed.has(phone)) {
-          skippedSuppressed += 1;
-          return false;
-        }
-        return true;
+      group = await imports.createLeadGroup({
+        projectCode: project.id,
+        projectName: project.name,
+        name: String(body.groupName || "").trim() || defaultGroupName(project, result.sourcePath),
+        sourceType: "file",
+        sourceName: path.basename(result.sourcePath),
+        leads: result.leads,
       });
     } catch (error) {
-      console.warn(`[suppression] gate unavailable: ${error?.message}`);
+      throw httpError(400, `建立客户群失败: ${error.message}`);
     }
 
-    imports.setLeadsCache({ projectId: project.id, ...result, leads });
-    console.log(`[import] loaded project=${project.id} leads=${leads.length} rejected=${result.rejected.length} skippedBlasted=${skippedAlreadyBlasted} skippedSuppressed=${skippedSuppressed}`);
+    const eligibility = await eligibleLeads(imports, project, group.leads, { includeBlasted: body.includeBlasted === true });
+    imports.setLeadsCache({
+      projectId: project.id,
+      ...result,
+      leads: eligibility.leads,
+      leadGroupId: group.id,
+      leadGroupName: group.name,
+      groupMemberCount: group.memberCount,
+    });
+    console.log(`[import] customer group=${group.id} project=${project.id} members=${group.memberCount} eligible=${eligibility.leads.length} rejected=${result.rejected.length} skippedBlasted=${eligibility.skippedAlreadyBlasted} skippedSuppressed=${eligibility.skippedSuppressed}`);
     json(res, 200, {
       ok: true,
       project: project.id,
-      imported: leads.length,
-      skippedAlreadyBlasted,
-      skippedSuppressed,
+      group: { id: group.id, name: group.name, memberCount: group.memberCount },
+      imported: eligibility.leads.length,
+      skippedAlreadyBlasted: eligibility.skippedAlreadyBlasted,
+      skippedSuppressed: eligibility.skippedSuppressed,
       rejected: result.rejected.length,
       sourcePath: result.sourcePath,
-      sample: leads.slice(0, 8).map((lead) => ({ name: lead.name, phone: lead.phone })),
+      sample: eligibility.leads.slice(0, 8).map((lead) => ({ name: lead.name, phone: lead.phone })),
     });
+  });
+
+  router.post("/api/lead-groups/create-manual", async (req, res, runtime) => {
+    const imports = requireImport(runtime);
+    const body = await readJson(req);
+    let project;
+    try {
+      ({ project } = await imports.getProject(body.project));
+    } catch (error) {
+      throw httpError(500, `读取 project 失败: ${error.message}`);
+    }
+    let parsed;
+    try {
+      parsed = parsePastedLeads(body.text, imports.normalizePhone);
+    } catch (error) {
+      throw httpError(400, `整理粘贴名单失败: ${error.message}`);
+    }
+    if (!parsed.leads.length) {
+      const examples = parsed.rejected.slice(0, 3).map((item) => `第 ${item.row} 行：${item.reason}`).join("；");
+      throw httpError(400, `没有找到可用客户。每行请放“名字, 电话号码”。${examples ? ` ${examples}` : ""}`);
+    }
+
+    let group;
+    try {
+      group = await imports.createLeadGroup({
+        projectCode: project.id,
+        projectName: project.name,
+        name: body.groupName,
+        sourceType: "manual",
+        sourceName: "Flow 1 pasted list",
+        leads: parsed.leads,
+      });
+    } catch (error) {
+      throw httpError(400, `建立客户群失败: ${error.message}`);
+    }
+    const eligibility = await eligibleLeads(imports, project, group.leads);
+    imports.setLeadsCache({
+      projectId: project.id,
+      sourcePath: "manual-paste",
+      importedAt: group.createdAt,
+      rejected: parsed.rejected,
+      leads: eligibility.leads,
+      leadGroupId: group.id,
+      leadGroupName: group.name,
+      groupMemberCount: group.memberCount,
+    });
+    console.log(`[import] pasted customer group=${group.id} project=${project.id} rows=${parsed.sourceRows} members=${group.memberCount} eligible=${eligibility.leads.length} rejected=${parsed.rejected.length}`);
+    json(res, 200, {
+      ok: true,
+      project: project.id,
+      group: { id: group.id, name: group.name, memberCount: group.memberCount },
+      imported: eligibility.leads.length,
+      skippedAlreadyBlasted: eligibility.skippedAlreadyBlasted,
+      skippedSuppressed: eligibility.skippedSuppressed,
+      rejected: parsed.rejected.length,
+      rejectedSample: parsed.rejected.slice(0, 5),
+      sample: eligibility.leads.slice(0, 8).map((lead) => ({ name: lead.name, phone: lead.phone })),
+    });
+  });
+
+  router.get("/api/lead-groups", async (req, res, runtime) => {
+    const imports = requireImport(runtime);
+    const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
+    let project;
+    try {
+      ({ project } = await imports.getProject(url.searchParams.get("project") ?? undefined));
+      const groups = await imports.listLeadGroups({ projectCode: project.id });
+      const cache = imports.getLeadsCache();
+      json(res, 200, {
+        ok: true,
+        project: project.id,
+        selectedGroupId: cache?.projectId === project.id ? cache?.leadGroupId || null : null,
+        groups,
+      });
+    } catch (error) {
+      throw httpError(400, `读取客户群失败: ${error.message}`);
+    }
+  });
+
+  router.post("/api/lead-groups/select", async (req, res, runtime) => {
+    const imports = requireImport(runtime);
+    const body = await readJson(req);
+    let project;
+    try {
+      ({ project } = await imports.getProject(body.project));
+      const group = await imports.readLeadGroup({ groupId: body.groupId, projectCode: project.id });
+      const eligibility = await eligibleLeads(imports, project, group.leads);
+      imports.setLeadsCache({
+        projectId: project.id,
+        sourcePath: group.sourceName,
+        importedAt: group.createdAt,
+        rejected: [],
+        leads: eligibility.leads,
+        leadGroupId: group.id,
+        leadGroupName: group.name,
+        groupMemberCount: group.memberCount,
+      });
+      json(res, 200, {
+        ok: true,
+        project: project.id,
+        group: { id: group.id, name: group.name, memberCount: group.memberCount },
+        eligible: eligibility.leads.length,
+        skippedAlreadyBlasted: eligibility.skippedAlreadyBlasted,
+        skippedSuppressed: eligibility.skippedSuppressed,
+      });
+    } catch (error) {
+      throw httpError(400, `选择客户群失败: ${error.message}`);
+    }
+  });
+
+  router.post("/api/lead-groups/rename", async (req, res, runtime) => {
+    const imports = requireImport(runtime);
+    const body = await readJson(req);
+    let project;
+    try {
+      ({ project } = await imports.getProject(body.project));
+      const group = await imports.renameLeadGroup({ groupId: body.groupId, projectCode: project.id, name: body.name });
+      const cache = imports.getLeadsCache();
+      if (cache?.leadGroupId === group.id) cache.leadGroupName = group.name;
+      json(res, 200, { ok: true, group: { id: group.id, name: group.name, memberCount: group.memberCount } });
+    } catch (error) {
+      throw httpError(400, `修改客户群名称失败: ${error.message}`);
+    }
   });
 
   router.post("/api/import/upload-excel", async (req, res, runtime) => {
@@ -148,6 +375,11 @@ export function registerImportRoutes(router) {
     json(res, 200, {
       ok: true,
       project: project.id,
+      group: leadsCache.leadGroupId ? {
+        id: leadsCache.leadGroupId,
+        name: leadsCache.leadGroupName || "",
+        memberCount: Number(leadsCache.groupMemberCount || leadsCache.leads.length),
+      } : null,
       leads: leadsCache.leads.map((lead) => ({ id: lead.id, name: lead.name, phone: lead.phone })),
     });
   });
@@ -169,6 +401,17 @@ export function registerImportRoutes(router) {
     const edits = Array.isArray(body.edits) ? body.edits : [];
     const byId = new Map(leadsCache.leads.map((lead) => [lead.id, lead]));
     let updated = 0;
+    if (leadsCache.leadGroupId) {
+      try {
+        await imports.updateLeadGroupMembers({
+          groupId: leadsCache.leadGroupId,
+          projectCode: project.id,
+          edits,
+        });
+      } catch (error) {
+        throw httpError(400, `客户名字未能保存到客户群: ${error.message}`);
+      }
+    }
     for (const edit of edits) {
       const lead = byId.get(String(edit.id));
       if (!lead) continue;

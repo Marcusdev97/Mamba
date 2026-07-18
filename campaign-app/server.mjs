@@ -15,6 +15,7 @@ import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
+import { createGoldenConversationLedgerService } from "./lib/golden-conversation-ledger-service.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
@@ -107,6 +108,10 @@ const localDatabaseService = createLocalDatabaseService({
   device: deviceIdentity,
   senderPolicy: deviceSenderPolicy,
 });
+const goldenLedgerService = createGoldenConversationLedgerService({
+  localDatabase: localDatabaseService,
+  dataDir: paths.dataDir,
+});
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
@@ -158,6 +163,16 @@ await localDatabaseService.initialize().catch(async (error) => {
     event: "sqlite_startup_initialization_failed",
     message: "SQLite Shadow could not initialize or migrate at Mamba startup.",
     context: { code: error.code || "SQLITE_STARTUP_FAILED", error: error.message },
+  }).catch(() => {});
+});
+await goldenLedgerService.initialize().catch(async (error) => {
+  console.log(`[golden-ledger] startup initialization held: ${error.code || "GC_STARTUP_FAILED"} ${error.message}`);
+  await systemLogService.write({
+    level: "error",
+    area: "golden_conversations",
+    event: "golden_ledger_startup_failed",
+    message: "Golden Conversation Ledger could not initialize safely.",
+    context: { code: error.code || "GC_STARTUP_FAILED", error: error.message },
   }).catch(() => {});
 });
 
@@ -325,6 +340,7 @@ const runtime = await loadRuntime({
   systemLogs: systemLogService,
   settings: settingsService,
   localDatabase: localDatabaseService,
+  goldenLedger: goldenLedgerService,
   device: deviceIdentity,
   telegramHub,
   telegramFilters: telegramFilterService,
@@ -356,6 +372,11 @@ const runtime = await loadRuntime({
     normalizePhone: nfNormalizePhone,
     getLeadsCache: () => leadsCache,
     setLeadsCache: (value) => { leadsCache = value; },
+    listLeadGroups: (options) => localDatabaseService.listLeadGroups(options),
+    readLeadGroup: (options) => localDatabaseService.readLeadGroup(options),
+    createLeadGroup: (options) => localDatabaseService.createLeadGroup(options),
+    renameLeadGroup: (options) => localDatabaseService.renameLeadGroup(options),
+    updateLeadGroupMembers: (options) => localDatabaseService.updateLeadGroupMembers(options),
   },
   lookup: {
     rootDir: paths.rootDir,
@@ -483,6 +504,8 @@ const runtime = await loadRuntime({
   },
   nextFlow: {
     blastDatabaseId: blastDsId,
+    device: deviceIdentity,
+    senderPolicy: deviceSenderPolicy,
     api,
     notion,
     normalizePhone: nfNormalizePhone,
@@ -608,6 +631,7 @@ server.listen(PORT, HOST, () => {
   replyServiceManager.startMonitoring();
   outboundFollowUpService.start();
   dailyCampaignService.start();
+  goldenLedgerService.start();
   restoreActiveCampaign().catch((error) => console.log(`Campaign recovery failed: ${error.message}`));
   replyServiceManager.ensureStarted()
     .then((status) => console.log(
@@ -624,6 +648,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     replyServiceManager.stopManaged();
     outboundFollowUpService.stop();
     dailyCampaignService.stop();
+    goldenLedgerService.stop();
     remoteMambaService.stop();
     server.close(() => process.exit(0));
   });

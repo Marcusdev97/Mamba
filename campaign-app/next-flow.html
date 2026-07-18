@@ -89,6 +89,7 @@
     <input id="endTime" class="tinp" placeholder="留空=自动完成" title="留空会按安全速度尽早完成；填写 21:00 才会铺到晚上 9 点">
   </div>
 
+  <div id="deviceScopePanel" class="statusbox" style="display:none;"></div>
   <div id="scanPanel" class="statusbox" style="display:none;"></div>
   <div id="statusPanel" class="statusbox" style="display:none;"></div>
   <div id="replyPanel" class="statusbox" style="display:none;"></div>
@@ -551,6 +552,10 @@ async function refreshWhatsApp() {
 
 async function load(manualCheck = false) {
   const refreshBtn = document.getElementById("refreshBtn");
+  REPLY_SAFETY_OK = false;
+  const liveButtonAtLoad = document.getElementById("btnNextLive");
+  if (liveButtonAtLoad) liveButtonAtLoad.disabled = true;
+  document.getElementById("deviceScopePanel").style.display = "none";
   if (manualCheck && refreshBtn) {
     refreshBtn.disabled = true;
     refreshBtn.textContent = "正在检查 WhatsApp…";
@@ -566,6 +571,14 @@ async function load(manualCheck = false) {
     PROJECTS = proj.projects || [];
     PROJECT_ALIAS = proj.alias || {};
     ALL = data.leads || [];
+    const deviceScope = data.deviceScope || {};
+    const hiddenOtherDevices = Number(deviceScope.remote || 0) + Number(deviceScope.legacy || 0) + Number(deviceScope.unassigned || 0);
+    const scopePanel = document.getElementById("deviceScopePanel");
+    scopePanel.style.display = "";
+    scopePanel.innerHTML = '<div class="statushead" style="color:#4ade80">🔒 本机客户隔离已启用</div>' +
+      '<div style="color:#cbd5e1;font-size:13px;margin-top:5px">只显示 Device <b>' + esc(deviceScope.deviceId || "-") +
+      '</b> · WhatsApp 尾号 <b>' + esc((deviceScope.senderSuffixes || []).map((x) => "…" + x).join(" / ") || "-") +
+      '</b> 的客户。当前本机 <b>' + esc(deviceScope.local || 0) + '</b> 人；已隔离其他电脑/旧归属 <b>' + esc(hiddenOtherDevices) + '</b> 人。</div>';
     // project dropdown from the projects that actually have due leads
     const present = [...new Set(ALL.map((l) => l.project))];
     const sel = document.getElementById("projectSel");
@@ -576,11 +589,12 @@ async function load(manualCheck = false) {
     document.getElementById("setFlowSel").innerHTML = Object.keys(FLOW_DAY).map((f) => `<option>${esc(f)}</option>`).join("");
     // instances
     const iw = document.getElementById("instWrap");
-    if (inst.online && (inst.instances || []).length) {
-      iw.innerHTML = '<span class="pill">号码</span>' + inst.instances.map((i) =>
-        `<label><input type="checkbox" class="instchk" value="${esc(i.name)}" checked> ${esc(i.name)}</label>`).join("");
+    const allowedInstances = (inst.instances || []).filter((i) => i.status === "OPEN" && i.allowedOnThisDevice !== false);
+    if (inst.online && allowedInstances.length) {
+      iw.innerHTML = '<span class="pill">本机号码</span>' + allowedInstances.map((i) =>
+        `<label><input type="checkbox" class="instchk" value="${esc(i.name)}" checked> ${esc(i.name)} · ${esc(i.number || "")}</label>`).join("");
     } else {
-      iw.innerHTML = '<span class="pill" style="color:#f87171">WhatsApp 未在线</span>';
+      iw.innerHTML = '<span class="pill" style="color:#f87171">本机绑定的 WhatsApp 未在线</span>';
     }
     document.getElementById("dueInfo").textContent = `共 ${ALL.length} 人到期 · ${data.today || ""}`;
     // 🛡 开单前回复检测结果

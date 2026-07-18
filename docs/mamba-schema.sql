@@ -187,6 +187,50 @@ CREATE TABLE IF NOT EXISTS recycle_leads (
   FOREIGN KEY (contact_key) REFERENCES contacts(contact_key) ON DELETE RESTRICT
 );
 
+-- B5. Flow 1 客户群。Excel/CSV 只是其中一种导入来源；名单导入后长期保留在本机，
+--     操作者可直接选择、改名和再次预览，不需要每次重新上传文件。
+--     客户群严格绑定 device_key + sender_phone，避免两台电脑都叫 wa_01 时混用名单。
+CREATE TABLE IF NOT EXISTS lead_groups (
+  group_id        TEXT PRIMARY KEY,
+  project_code    TEXT NOT NULL,
+  group_name      TEXT NOT NULL,
+  source_type     TEXT NOT NULL DEFAULT 'file'
+                    CHECK (source_type IN ('file','manual','database')),
+  source_name     TEXT NOT NULL DEFAULT '',
+  device_key      TEXT NOT NULL,
+  sender_phone    TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'ACTIVE'
+                    CHECK (status IN ('ACTIVE','ARCHIVED')),
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  FOREIGN KEY (project_code) REFERENCES projects(project_code) ON DELETE RESTRICT,
+  FOREIGN KEY (device_key) REFERENCES devices(device_key) ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_groups_scope_name
+  ON lead_groups(device_key, sender_phone, project_code, lower(group_name))
+  WHERE status = 'ACTIVE';
+
+CREATE INDEX IF NOT EXISTS idx_lead_groups_scope
+  ON lead_groups(device_key, sender_phone, project_code, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS lead_group_members (
+  group_id        TEXT NOT NULL,
+  member_id       TEXT NOT NULL,
+  phone           TEXT NOT NULL,
+  name            TEXT NOT NULL DEFAULT '',
+  language        TEXT NOT NULL DEFAULT '',
+  source_row      INTEGER,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  PRIMARY KEY (group_id, member_id),
+  UNIQUE (group_id, phone),
+  FOREIGN KEY (group_id) REFERENCES lead_groups(group_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_group_members_phone
+  ON lead_group_members(phone);
+
 -- =============================================================================
 -- C. 对话与消息(按"人"归档,不按项目)
 -- =============================================================================
@@ -346,18 +390,48 @@ CREATE TABLE IF NOT EXISTS project_knowledge (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_project ON project_knowledge(project_code, verified);
 
--- golden_key = project_code:scenario_slug:hash8
+-- Golden Conversation Ledger。这里保存的是「如何判断和推进约看」，不是楼盘事实。
+-- 一行 = 一个匿名 lead 的完整对话；PII 必须在写入前清洗。
 CREATE TABLE IF NOT EXISTS golden_conversations (
-  golden_key        TEXT PRIMARY KEY,
-  notion_page_id    TEXT UNIQUE,
-  project_code      TEXT NOT NULL,
-  scenario          TEXT NOT NULL DEFAULT '',
-  conversation_text TEXT NOT NULL DEFAULT '',
-  conversation_hash TEXT NOT NULL DEFAULT '',
-  created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL,
-  FOREIGN KEY (project_code) REFERENCES projects(project_code) ON DELETE RESTRICT
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_code            TEXT NOT NULL UNIQUE,
+  project_code         TEXT NOT NULL,
+  origin_project_code  TEXT,
+  source_channel       TEXT,
+  blast_version        TEXT,
+  language             TEXT,
+  customer_role        TEXT,
+  primary_purpose      TEXT,
+  first_reply_type     TEXT,
+  outcome              TEXT NOT NULL
+                         CHECK (outcome IN ('Viewing Booked','Active','Dormant','Dead')),
+  outcome_updated_at   TEXT NOT NULL,
+  death_turn           INTEGER,
+  death_message_type   TEXT
+                         CHECK (death_message_type IS NULL OR death_message_type IN (
+                           'ab_slot_template','price_probe','budget_probe','bulk_info_dump',
+                           'reassurance_push','festival_greeting','open_question','other'
+                         )),
+  death_note           TEXT,
+  trigger_message      TEXT,
+  customer_next_move   TEXT,
+  friction_removers    TEXT NOT NULL DEFAULT '[]',
+  reconfirmed          INTEGER NOT NULL DEFAULT 0 CHECK (reconfirmed IN (0,1)),
+  decision_trace       TEXT NOT NULL DEFAULT '[]',
+  conversation_text    TEXT NOT NULL,
+  do_not_copy          TEXT NOT NULL DEFAULT '[]',
+  pk_conflicts         TEXT NOT NULL DEFAULT '[]',
+  created_at           TEXT NOT NULL,
+  source_hash          TEXT NOT NULL UNIQUE,
+
+  -- GC v1 的安全延伸：只用客户最后回复时间判断 Active → Dormant。
+  -- 不用 created_at/outcome_updated_at，避免把新导入的旧对话误当成刚回复。
+  last_customer_reply_at TEXT
 );
+
+-- followup_log 与 GC indexes 由 golden-conversation-ledger-service 安装。
+-- 原因：旧 v3 也有同名 golden_conversations，但没有 lead_code/outcome；必须先
+-- 识别并无损搬迁旧表，才能建立外键与新索引，否则旧电脑会在启动时失败。
 
 -- objection_key = scenario_slug:customer_says_slug
 CREATE TABLE IF NOT EXISTS objection_bank (

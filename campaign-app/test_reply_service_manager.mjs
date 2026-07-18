@@ -99,5 +99,42 @@ assert.equal(persistedIssues[0].event, "NOTION_AUTH_FAILED");
 assert.match(persistedIssues[0].message, /影响.*处理/);
 issueManager.stopManaged();
 
+// A healthy-looking but wrong HTTP service on the preferred port must not be
+// accepted as Reply Tracker. The manager should move to the next free dynamic
+// port and report the conflict to the Dashboard.
+const dynamicStarted = [];
+const dynamicTracker = new Map([[8798, false], [8800, false], [8801, false]]);
+const dynamicOccupied = new Map([[8798, true], [8800, false], [8801, false]]);
+const portFromUrl = (url) => Number(new URL(url).port);
+const dynamicManager = createReplyServiceManager({
+  rootDir: "/tmp/mamba-test",
+  trackerPorts: [8798, 8800, 8801],
+  probe: async (url) => dynamicTracker.get(portFromUrl(url)) === true,
+  portProbe: async (url) => dynamicOccupied.get(portFromUrl(url)) === true,
+  spawnProcess: (_node, args, options) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.killed = false;
+    child.kill = () => { child.killed = true; };
+    const port = Number(options.env.TRACKER_PORT);
+    dynamicTracker.set(port, true);
+    dynamicOccupied.set(port, true);
+    dynamicStarted.push({ args, port, webhook: options.env.TRACKER_WEBHOOK_URL });
+    return child;
+  },
+  onLog: () => {},
+  downConfirmDelayMs: 0,
+  brainEnabled: false,
+});
+const dynamicStatus = await dynamicManager.ensureStarted();
+assert.equal(dynamicStatus.tracker, true);
+assert.equal(dynamicStatus.trackerPort, 8800, "tracker must skip a wrong service on preferred port 8798");
+assert.deepEqual(dynamicStatus.portConflicts, [8798]);
+assert.equal(dynamicStarted.length, 1);
+assert.equal(dynamicStarted[0].port, 8800);
+assert.match(dynamicStarted[0].webhook, /:8800\/webhook\/evolution$/);
+dynamicManager.stopManaged();
+
 live.manager.stopManaged();
 console.log("✅ all reply-service manager tests passed");
