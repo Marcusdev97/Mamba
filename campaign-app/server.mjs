@@ -183,9 +183,35 @@ async function readLeadStore() {
   return blastCacheService.read();
 }
 
+const LEAD_STORE_AUTO_REFRESH_MS = Math.max(
+  0,
+  Number(process.env.MAMBA_LEAD_AUTO_REFRESH_MINUTES ?? 15) * 60_000,
+);
+
+async function pullNotionIntoLocal(reason) {
+  const payload = await blastCacheService.sync({ force: true });
+  await localDatabaseService.syncNotionRecords(payload.records, { reason });
+  return localDatabaseService.readLeadCache();
+}
+
 async function syncLeadStore(options = {}) {
   const primary = await localDatabaseService.isPrimary().catch(() => false);
-  if (primary && options.force !== true) return localDatabaseService.readLeadCache();
+  if (primary && options.force !== true) {
+    const current = await localDatabaseService.readLeadCache();
+    // Auto-refresh: if the local snapshot is stale, pull the latest from Notion so
+    // the dashboard reflects today's blasts without a manual "重新同步". Never let a
+    // Notion hiccup break the read — fall back to the snapshot we already have.
+    const ageMs = current?.syncedAt ? Date.now() - new Date(current.syncedAt).getTime() : Infinity;
+    if (LEAD_STORE_AUTO_REFRESH_MS > 0 && (!Number.isFinite(ageMs) || ageMs >= LEAD_STORE_AUTO_REFRESH_MS)) {
+      try {
+        return await pullNotionIntoLocal("auto_dashboard_refresh");
+      } catch (error) {
+        console.warn(`[lead-store] auto refresh failed, serving cached snapshot: ${error?.message}`);
+        return current;
+      }
+    }
+    return current;
+  }
   const payload = await blastCacheService.sync(options);
   if (!primary) return payload;
   await localDatabaseService.syncNotionRecords(payload.records, { reason: "manual_notion_refresh" });

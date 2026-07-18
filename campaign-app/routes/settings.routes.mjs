@@ -133,6 +133,23 @@ export function registerSettingsRoutes(router) {
     }
   });
 
+  router.post("/api/settings/local-database/refresh", async (_req, res, runtime) => {
+    const localDatabase = requireLocalDatabase(runtime);
+    try {
+      const cache = await runtime.followUp?.syncCache?.({ force: true });
+      const count = cache?.count ?? (Array.isArray(cache?.records) ? cache.records.length : 0);
+      json(res, 200, {
+        ok: true,
+        database: await localDatabase.snapshot(),
+        syncedAt: cache?.syncedAt || null,
+        count,
+        message: `已从 Notion 刷新本机客户到 SQLite（${count} 条）。Notion 没有被修改，也没有发送 WhatsApp。`,
+      });
+    } catch (error) {
+      throw httpError(400, `从 Notion 刷新本机客户失败 [${error.code || "LOCAL_DB_REFRESH_FAILED"}]：${error.message}`);
+    }
+  });
+
   router.post("/api/settings/local-database/mode", async (req, res, runtime) => {
     const localDatabase = requireLocalDatabase(runtime);
     const body = await readJson(req);
