@@ -153,6 +153,11 @@ const lateReadiness = await lateService.check();
 assert.equal(lateReadiness.ready, false, "after-hours start must wait for the next shift");
 assert.equal(lateReadiness.shift.status, "off-shift");
 assert.equal(lateReadiness.shift.remainingLabel, "明天 10:00");
+assert.equal(lateReadiness.workPreview.title, "明天开工");
+assert.equal(lateReadiness.workPreview.employeeLabel, "wa_01");
+assert.equal(lateReadiness.workPreview.startLabel, "明天 10:00");
+assert.equal(lateReadiness.workPreview.finishLabel, "明天 10:01");
+assert.equal(lateReadiness.workPreview.sendCount, 1);
 lateService.stop();
 
 await fs.rm(rootDir, { recursive: true, force: true });

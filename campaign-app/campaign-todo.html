@@ -30,8 +30,10 @@
   .data-cell b { display:block; margin-top:var(--sp-1); font-size:16px; overflow-wrap:anywhere; }
   .shift-track { height:10px; border:1px solid var(--line); border-radius:var(--radius-full); background:var(--panel-2); overflow:hidden; margin-top:var(--sp-4); }
   .shift-track i { display:block; width:0%; height:100%; background:var(--green); transition:width var(--t-slow) var(--ease); }
-  .batch-title { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2); }
-  .batch-title strong { font-size:20px; overflow-wrap:anywhere; }
+  .work-person { margin-top:var(--sp-6); }
+  .work-person strong { display:block; font-size:24px; line-height:1.15; overflow-wrap:anywhere; }
+  .work-person span { display:block; margin-top:var(--sp-1); color:var(--muted); font-family:var(--mono); font-size:var(--fs-tiny); overflow-wrap:anywhere; }
+  .work-flow { margin-top:var(--sp-4); color:var(--muted); font-size:var(--fs-sub); overflow-wrap:anywhere; }
   .progress-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); margin-top:var(--sp-4); }
   .lifecycle { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--sp-2); }
   .life-item { min-height:76px; padding:var(--sp-3); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
@@ -99,11 +101,19 @@
     </div>
 
     <div class="card tight">
-      <div class="card-head"><h2>Today Flow</h2><span class="badge b-go" id="batchCount">0 due</span></div>
-      <div id="batchEmpty" class="empty">没有到期 Flow。</div>
-      <div id="batchDetails" hidden>
-        <div class="batch-title"><strong id="batchProject">-</strong></div>
-        <div id="batchFlow" class="muted" style="margin-top:var(--sp-2)">-</div>
+      <div class="card-head"><h2 id="workTitle">排班预览</h2><span class="badge b-go" id="workBadge">0 due</span></div>
+      <div id="workEmpty" class="empty">还没有排班。</div>
+      <div id="workDetails" hidden>
+        <div class="work-person">
+          <strong id="workEmployee">-</strong>
+          <span id="workPhone">-</span>
+        </div>
+        <div id="workFlow" class="work-flow">-</div>
+        <div class="data-row">
+          <div class="data-cell"><span>开工</span><b id="workStart">-</b></div>
+          <div class="data-cell"><span>预计发完</span><b id="workFinish">-</b></div>
+          <div class="data-cell"><span>数量</span><b id="workCount">0</b></div>
+        </div>
       </div>
     </div>
   </section>
@@ -181,13 +191,23 @@ function renderSnapshot(data) {
 }
 
 function renderBatch(data) {
-  const batch = data.batch;
-  el("batchEmpty").hidden = Boolean(batch);
-  el("batchDetails").hidden = !batch;
-  if (!batch) return;
-  el("batchProject").textContent = batch.project;
-  el("batchFlow").textContent = batch.flow;
-  el("batchCount").textContent = `${batch.totalDue} due`;
+  const preview = data.workPreview || {};
+  const hasWork = Boolean(preview.project || preview.flow || preview.sendCount);
+  el("workTitle").textContent = preview.title || "排班预览";
+  el("workBadge").className = `badge ${preview.status === "working" ? "b-go" : preview.status === "queued" ? "b-warm" : "b-queued"}`;
+  el("workBadge").textContent = `${preview.totalDue || 0} due`;
+  el("workEmpty").hidden = hasWork;
+  el("workDetails").hidden = !hasWork;
+  if (!hasWork) {
+    el("workEmpty").textContent = preview.detail || "还没有排班。";
+    return;
+  }
+  el("workEmployee").textContent = preview.employeeLabel || "没有员工在线";
+  el("workPhone").textContent = preview.primaryEmployee?.phone || `${preview.senderCount || 0} 个员工在线`;
+  el("workFlow").textContent = preview.detail || "-";
+  el("workStart").textContent = preview.startLabel || "-";
+  el("workFinish").textContent = preview.overflow ? `${preview.offAtLabel || "21:00"}+` : (preview.finishLabel || "-");
+  el("workCount").textContent = String(preview.sendCount || 0);
 }
 
 function renderLifecycle(cohort = {}) {

@@ -74,6 +74,19 @@ function minutesUntilLabel(minutes) {
   return `${mins}m`;
 }
 
+function timeLabelFromMinutes(minutes) {
+  const safe = Math.max(0, Number(minutes) || 0);
+  const hour = String(Math.floor(safe / 60) % 24).padStart(2, "0");
+  const minute = String(safe % 60).padStart(2, "0");
+  return `${hour}:${minute}`;
+}
+
+function relativeDateLabel(today, dateKey) {
+  if (!dateKey || dateKey === today) return "今天";
+  if (dateKey === addDaysKL(today, 1)) return "明天";
+  return dateKey;
+}
+
 function flowRank(label, sequence = []) {
   const index = sequence.findIndex((flow) => flow.label === label);
   return index < 0 ? Number.MAX_SAFE_INTEGER : index;
@@ -200,6 +213,50 @@ function scheduleSlots({ count, shift, random = Math.random } = {}) {
     cursorSeconds += Math.max(SEND_FLOOR_SECONDS, averageSeconds + jitter);
   }
   return slots;
+}
+
+function workPreview({ mode, shift, batch, automationPlan, instances = [] } = {}) {
+  const employees = (Array.isArray(instances) ? instances : []).map((item, index) => ({
+    name: String(item.name || `员工 ${index + 1}`),
+    phone: String(item.number || item.owner || ""),
+  }));
+  const planned = Number(automationPlan?.plannedCount || batch?.leads?.length || 0);
+  const senderCount = Math.max(1, employees.length);
+  const isWorkingNow = shift?.status === "on-shift";
+  const startDate = isWorkingNow ? shift.today : shift?.nextStartDate || shift?.today;
+  const startMinutes = isWorkingNow
+    ? Math.max(WORK_START_MINUTES, Math.min(Number(shift?.minutes || WORK_START_MINUTES), WORK_END_MINUTES))
+    : WORK_START_MINUTES;
+  const sendMinutes = planned > 0 ? Math.ceil((planned * SEND_FLOOR_SECONDS) / 60 / senderCount) : 0;
+  const finishMinutes = Math.min(WORK_END_MINUTES, startMinutes + sendMinutes);
+  const overflow = startMinutes + sendMinutes > WORK_END_MINUTES;
+  const dayLabel = relativeDateLabel(shift?.today, startDate);
+  const startTime = timeLabelFromMinutes(startMinutes);
+  const finishTime = planned > 0 ? timeLabelFromMinutes(finishMinutes) : "-";
+  const primaryEmployee = employees[0] || null;
+  return {
+    mode,
+    status: mode === "OFF" ? "off" : isWorkingNow ? "working" : "queued",
+    title: mode === "OFF" ? "未开工" : isWorkingNow ? "正在做工" : `${dayLabel}开工`,
+    employeeLabel: employees.length > 1
+      ? `${employees[0].name} +${employees.length - 1}`
+      : primaryEmployee?.name || "没有员工在线",
+    primaryEmployee,
+    employees,
+    senderCount: employees.length,
+    startDate,
+    startLabel: mode === "OFF" ? "-" : `${dayLabel} ${startTime}`,
+    finishLabel: planned > 0 ? `${dayLabel} ${finishTime}` : "-",
+    offAtLabel: `${dayLabel} ${WORK_END}`,
+    sendCount: planned,
+    project: batch?.project || "",
+    flow: batch?.flow || "",
+    totalDue: Number(batch?.totalDue || planned || 0),
+    overflow,
+    detail: batch
+      ? `${batch.project} · ${batch.flow}`
+      : "没有到期 Flow。",
+  };
 }
 
 function groupFirstBatch(leads, limit, config, flowSequence) {
@@ -449,8 +506,10 @@ export function createDailyCampaignService({
       : open
         ? "on-shift"
         : "off-shift";
-    const nextStartDate = now.minutes > WORK_END_MINUTES ? addDaysKL(now.date, 1) : now.date;
-    const minutesUntilStart = now.minutes < WORK_START_MINUTES
+    const nextStartDate = stoppedToday || now.minutes > WORK_END_MINUTES ? addDaysKL(now.date, 1) : now.date;
+    const minutesUntilStart = stoppedToday
+      ? (24 * 60) - now.minutes + WORK_START_MINUTES
+      : now.minutes < WORK_START_MINUTES
       ? WORK_START_MINUTES - now.minutes
       : now.minutes > WORK_END_MINUTES
         ? (24 * 60) - now.minutes + WORK_START_MINUTES
@@ -647,6 +706,7 @@ export function createDailyCampaignService({
       testCohort,
       testRecipients: recipients,
       progress: progressSummary({ automationPlan, batch, today: shift.today }),
+      workPreview: workPreview({ mode, shift, batch, automationPlan, instances }),
       repliesToHandle: repliesToHandleSummary(tracker, cohortSummary(planningLeads)),
       source: plan?.whatsappCheck?.scanSource || (deep ? "evolution-deep" : "tracker"),
     };
