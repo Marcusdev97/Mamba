@@ -15,6 +15,7 @@ import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
+import { createGoldenConversationLedgerService } from "./lib/golden-conversation-ledger-service.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
@@ -107,6 +108,10 @@ const localDatabaseService = createLocalDatabaseService({
   device: deviceIdentity,
   senderPolicy: deviceSenderPolicy,
 });
+const goldenLedgerService = createGoldenConversationLedgerService({
+  localDatabase: localDatabaseService,
+  dataDir: paths.dataDir,
+});
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
@@ -160,6 +165,16 @@ await localDatabaseService.initialize().catch(async (error) => {
     context: { code: error.code || "SQLITE_STARTUP_FAILED", error: error.message },
   }).catch(() => {});
 });
+await goldenLedgerService.initialize().catch(async (error) => {
+  console.log(`[golden-ledger] startup initialization held: ${error.code || "GC_STARTUP_FAILED"} ${error.message}`);
+  await systemLogService.write({
+    level: "error",
+    area: "golden_conversations",
+    event: "golden_ledger_startup_failed",
+    message: "Golden Conversation Ledger could not initialize safely.",
+    context: { code: error.code || "GC_STARTUP_FAILED", error: error.message },
+  }).catch(() => {});
+});
 
 async function readLeadStore() {
   if (await localDatabaseService.isPrimary().catch(() => false)) {
@@ -168,9 +183,35 @@ async function readLeadStore() {
   return blastCacheService.read();
 }
 
+const LEAD_STORE_AUTO_REFRESH_MS = Math.max(
+  0,
+  Number(process.env.MAMBA_LEAD_AUTO_REFRESH_MINUTES ?? 15) * 60_000,
+);
+
+async function pullNotionIntoLocal(reason) {
+  const payload = await blastCacheService.sync({ force: true });
+  await localDatabaseService.syncNotionRecords(payload.records, { reason });
+  return localDatabaseService.readLeadCache();
+}
+
 async function syncLeadStore(options = {}) {
   const primary = await localDatabaseService.isPrimary().catch(() => false);
-  if (primary && options.force !== true) return localDatabaseService.readLeadCache();
+  if (primary && options.force !== true) {
+    const current = await localDatabaseService.readLeadCache();
+    // Auto-refresh: if the local snapshot is stale, pull the latest from Notion so
+    // the dashboard reflects today's blasts without a manual "重新同步". Never let a
+    // Notion hiccup break the read — fall back to the snapshot we already have.
+    const ageMs = current?.syncedAt ? Date.now() - new Date(current.syncedAt).getTime() : Infinity;
+    if (LEAD_STORE_AUTO_REFRESH_MS > 0 && (!Number.isFinite(ageMs) || ageMs >= LEAD_STORE_AUTO_REFRESH_MS)) {
+      try {
+        return await pullNotionIntoLocal("auto_dashboard_refresh");
+      } catch (error) {
+        console.warn(`[lead-store] auto refresh failed, serving cached snapshot: ${error?.message}`);
+        return current;
+      }
+    }
+    return current;
+  }
   const payload = await blastCacheService.sync(options);
   if (!primary) return payload;
   await localDatabaseService.syncNotionRecords(payload.records, { reason: "manual_notion_refresh" });
@@ -325,6 +366,7 @@ const runtime = await loadRuntime({
   systemLogs: systemLogService,
   settings: settingsService,
   localDatabase: localDatabaseService,
+  goldenLedger: goldenLedgerService,
   device: deviceIdentity,
   telegramHub,
   telegramFilters: telegramFilterService,
@@ -356,6 +398,11 @@ const runtime = await loadRuntime({
     normalizePhone: nfNormalizePhone,
     getLeadsCache: () => leadsCache,
     setLeadsCache: (value) => { leadsCache = value; },
+    listLeadGroups: (options) => localDatabaseService.listLeadGroups(options),
+    readLeadGroup: (options) => localDatabaseService.readLeadGroup(options),
+    createLeadGroup: (options) => localDatabaseService.createLeadGroup(options),
+    renameLeadGroup: (options) => localDatabaseService.renameLeadGroup(options),
+    updateLeadGroupMembers: (options) => localDatabaseService.updateLeadGroupMembers(options),
   },
   lookup: {
     rootDir: paths.rootDir,
@@ -483,6 +530,8 @@ const runtime = await loadRuntime({
   },
   nextFlow: {
     blastDatabaseId: blastDsId,
+    device: deviceIdentity,
+    senderPolicy: deviceSenderPolicy,
     api,
     notion,
     normalizePhone: nfNormalizePhone,
@@ -608,6 +657,7 @@ server.listen(PORT, HOST, () => {
   replyServiceManager.startMonitoring();
   outboundFollowUpService.start();
   dailyCampaignService.start();
+  goldenLedgerService.start();
   restoreActiveCampaign().catch((error) => console.log(`Campaign recovery failed: ${error.message}`));
   replyServiceManager.ensureStarted()
     .then((status) => console.log(
@@ -624,6 +674,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     replyServiceManager.stopManaged();
     outboundFollowUpService.stop();
     dailyCampaignService.stop();
+    goldenLedgerService.stop();
     remoteMambaService.stop();
     server.close(() => process.exit(0));
   });

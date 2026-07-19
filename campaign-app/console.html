@@ -28,9 +28,22 @@
   .result-table-head h3 { margin:0; font-size:14px; }
   .result-table-head span { color:var(--muted); font-size:12px; }
   .b-skip { background:var(--amber-bg); color:var(--amber); }
+  .group-picker { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
+  .group-picker .fld { margin:0; }
+  .active-group { margin:14px 0 0; padding:14px; border:1px solid rgba(34,197,94,.45); border-radius:var(--radius); background:rgba(34,197,94,.07); }
+  .active-group-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+  .active-group-name { color:var(--text); font-size:16px; font-weight:750; }
+  .active-group-meta { margin-top:4px; color:var(--muted); font-size:12px; line-height:1.5; }
+  .rename-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin-top:12px; }
+  .section-divider { display:flex; align-items:center; gap:10px; margin:18px 0 14px; color:var(--muted); font-size:11px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+  .section-divider::before, .section-divider::after { content:""; height:1px; flex:1; background:var(--line); }
+  .source-advanced { margin:10px 0; border:1px solid var(--line); border-radius:9px; background:var(--panel-2); }
+  .source-advanced summary { padding:9px 11px; color:var(--muted); cursor:pointer; font-size:12px; }
+  .source-advanced .fld { padding:0 11px 10px; margin:0; }
   @media (max-width:780px) {
     .outcome-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .progress-head, .progress-caption { align-items:flex-start; flex-direction:column; }
+    .group-picker, .rename-row { grid-template-columns:1fr; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
@@ -56,22 +69,67 @@
   </div>
 
   <div class="grid">
-    <!-- Step 1: import -->
+    <!-- Step 1: customer groups -->
     <div class="card">
-      <h2><span class="step-no">1</span>导入 Leads</h2>
+      <h2><span class="step-no">1</span>客户群</h2>
+      <div class="muted" style="font-size:12.5px;line-height:1.6;margin:-4px 0 12px">选择以前建立的客户群即可继续，不需要重新上传 Excel。客户群只保存在本机，并绑定本机真实 WhatsApp 号码。</div>
+      <div class="group-picker">
+        <label class="fld">
+          <span>现有客户群</span>
+          <select id="leadGroupSel" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px">
+            <option value="">还没有客户群</option>
+          </select>
+        </label>
+        <button class="btn primary" id="btnSelectGroup">使用这个客户群</button>
+      </div>
+      <div class="err" id="groupErr"></div>
+
+      <div class="active-group hidden" id="activeGroupPanel">
+        <div class="active-group-head">
+          <div><div class="active-group-name" id="activeGroupName">—</div><div class="active-group-meta" id="activeGroupMeta"></div></div>
+          <span class="badge b-sent">使用中</span>
+        </div>
+        <div class="rename-row">
+          <input type="text" id="renameGroupName" maxlength="80" placeholder="修改客户群名称" />
+          <button class="btn" id="btnRenameGroup">保存群名</button>
+        </div>
+        <div class="ok" id="renameMsg"></div>
+      </div>
+
+      <div class="section-divider">建立新客户群</div>
       <label class="fld">
-        <span>Excel 路径（留空用默认 Untitled spreadsheet.xlsx）</span>
-        <input type="text" id="sourcePath" placeholder="默认：根目录的 Untitled spreadsheet.xlsx" />
+        <span>客户群名称</span>
+        <input type="text" id="newGroupName" maxlength="80" placeholder="例如：Binastra · July Website Leads" />
       </label>
-      <input type="file" id="excelFile" class="hidden" accept=".xlsx,.xlsm,.xls,.csv,.tsv" />
-      <div id="excelDrop" class="dropzone" tabindex="0" role="button">
-        <div><b>拖 Excel 到这里</b><span class="muted"> 或点击选择文件</span></div>
-        <div class="muted" id="excelFileLabel">支持 .xlsx / .xlsm / .xls / .csv / .tsv</div>
+      <div class="seg" id="leadInputMode" style="margin-bottom:12px">
+        <button data-input-mode="paste" class="active">粘贴名字和号码</button>
+        <button data-input-mode="file">上传 Excel / CSV</button>
+      </div>
+      <div id="pasteLeadPanel">
+        <label class="fld">
+          <span>客户名单（一行一个客户）</span>
+          <textarea id="pastedLeads" rows="9" placeholder="Marcus, 60123456789&#10;Chloe Choo&#9;01154515334&#10;陈小姐 012-345 6789" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:14px;line-height:1.6;resize:vertical"></textarea>
+        </label>
+        <div class="muted" style="font-size:12px;margin:-4px 0 10px;line-height:1.55">可以直接从 WhatsApp、Notes 或 Excel 两列复制过来。支持逗号、Tab 或空格分隔；只有号码也可以，名字会先用 “there”。</div>
+      </div>
+      <div id="fileLeadPanel" class="hidden">
+        <input type="file" id="excelFile" class="hidden" accept=".xlsx,.xlsm,.xls,.csv,.tsv" />
+        <div id="excelDrop" class="dropzone" tabindex="0" role="button">
+          <div><b>把 Excel / CSV 拖到这里</b><span class="muted"> 或点击选择文件</span></div>
+          <div class="muted" id="excelFileLabel">支持 .xlsx / .xlsm / .xls / .csv / .tsv</div>
+        </div>
+        <details class="source-advanced">
+          <summary>高级：使用电脑里的文件路径</summary>
+          <label class="fld">
+            <span>文件路径（通常不需要填写）</span>
+            <input type="text" id="sourcePath" placeholder="默认：该 Project 配置的文件" />
+          </label>
+        </details>
       </div>
       <div class="muted" style="font-size:12px;margin:-2px 0 10px;line-height:1.55">
-        🛡 <b>自动跳过已 blast 的客户</b>:导入时会对比 Notion「Blast Leads」里<b>本项目已存在的号码</b>,已在序列里的自动剔除,不会重复轰炸;同一个 Excel 内的重复号码、无效号码也会剔掉。剩下的才是这次要发的新客户。
+        🛡 建立后会保留完整客户群；每次使用时重新排除本项目已发送、STOP、重复和无效号码，避免旧客户群造成重复发送。
       </div>
-      <button class="btn" id="btnImport">导入 Excel</button>
+      <button class="btn" id="btnImport">整理并使用客户群</button>
       <div class="ok" id="importMsg"></div>
       <div class="err" id="importErr"></div>
 
@@ -188,6 +246,9 @@ let templateFlow = "";
 let selectedExcelFile = null;
 let preparedRunId = null;
 let preparedCanQueue = false;
+let LEAD_GROUPS = [];
+let currentLeadGroupId = null;
+let leadInputMode = "paste";
 
 function applyProjectSenders() {
   document.querySelectorAll(".sender").forEach((c) => {
@@ -211,13 +272,54 @@ async function loadProjectConfig() {
   TEMPLATES = c.templates || [];
   templateSource = c.templateSource || "";
   templateFlow = c.templateFlow || "";
-  $("campaignSub").textContent = c.projectName + " · 导入名单 → 设定时间 → 群发第一轮";
+  $("campaignSub").textContent = c.projectName + " · 选择客户群 → 安全检查 → 群发第一轮";
   $("sourcePath").placeholder = "默认：" + (c.excel || "该 project 的 Excel");
   const sourceLabel = templateSource === "notion"
     ? "Templates：Notion · " + (templateFlow || "Flow 1")
     : "Templates：本地 fallback" + (c.templateError ? "（" + c.templateError.slice(0, 80) + "）" : "");
-  $("projectInfo").textContent = "Excel：" + (c.excel || "—") + " · " + sourceLabel + " · 所有已连接的号一起发";
+  $("projectInfo").textContent = "客户群：本机 SQLite · " + sourceLabel + " · 只使用本机绑定号码";
+  await loadLeadGroups();
   await loadLeadsForEdit();
+}
+
+function groupDate(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("zh-MY", { timeZone:"Asia/Kuala_Lumpur", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false });
+}
+
+function renderActiveGroup(group, detail = {}) {
+  currentLeadGroupId = group?.id || null;
+  $("activeGroupPanel").classList.toggle("hidden", !group);
+  if (!group) return;
+  $("activeGroupName").textContent = group.name;
+  $("renameGroupName").value = group.name;
+  const eligible = detail.eligible ?? null;
+  const skipped = Number(detail.skippedAlreadyBlasted || 0) + Number(detail.skippedSuppressed || 0);
+  $("activeGroupMeta").textContent = group.memberCount + " 位客户" +
+    (eligible === null ? "" : " · 本次可发送 " + eligible + " 位") +
+    (skipped ? " · 安全排除 " + skipped + " 位" : "") +
+    (group.updatedAt ? " · 更新 " + groupDate(group.updatedAt) : "");
+}
+
+async function loadLeadGroups() {
+  const r = await get("/api/lead-groups?project=" + encodeURIComponent(currentProject)).catch((error) => ({ ok:false, error:error.message }));
+  if (!r?.ok) {
+    LEAD_GROUPS = [];
+    currentLeadGroupId = null;
+    $("leadGroupSel").innerHTML = '<option value="">客户群暂时无法读取</option>';
+    $("groupErr").textContent = r?.error || "客户群暂时无法读取。";
+    renderActiveGroup(null);
+    return;
+  }
+  $("groupErr").textContent = "";
+  LEAD_GROUPS = r.groups || [];
+  currentLeadGroupId = r.selectedGroupId || null;
+  $("leadGroupSel").innerHTML = LEAD_GROUPS.length
+    ? LEAD_GROUPS.map((group) => '<option value="' + escapeAttr(group.id) + '"' + (group.id === currentLeadGroupId ? " selected" : "") + '>' + escapeAttr(group.name) + " · " + group.memberCount + " 位</option>").join("")
+    : '<option value="">还没有客户群 · 请在下面建立</option>';
+  const active = LEAD_GROUPS.find((group) => group.id === currentLeadGroupId);
+  renderActiveGroup(active || null);
+  $("btnSelectGroup").disabled = !LEAD_GROUPS.length;
 }
 
 function tplLabel(t) {
@@ -338,7 +440,7 @@ async function refreshInstances() {
   const data = await get("/api/instances").catch(() => ({ online: false, instances: [] }));
   $("apiDot").className = "dot " + (data.online ? "on" : "off");
   $("apiLabel").textContent = data.online ? "API 在线" : "API 离线（先启动 Evolution）";
-  openSenderItems = data.instances.filter((i) => i.status === "OPEN");
+  openSenderItems = data.instances.filter((i) => i.status === "OPEN" && i.allowedOnThisDevice !== false);
   openSenders = openSenderItems.map((i) => i.name);
   const sc = $("senderChecks");
   if (!openSenders.length) {
@@ -369,16 +471,94 @@ $("modeSeg").addEventListener("click", (e) => {
 });
 
 // ---- import ----
+function invalidatePreparedPreview() {
+  preparedRunId = null;
+  preparedCanQueue = false;
+  $("previewCard").classList.add("hidden");
+  $("prepErr").textContent = "";
+}
+
+$("leadInputMode").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  leadInputMode = button.dataset.inputMode === "file" ? "file" : "paste";
+  [...$("leadInputMode").children].forEach((item) => item.classList.toggle("active", item === button));
+  $("pasteLeadPanel").classList.toggle("hidden", leadInputMode !== "paste");
+  $("fileLeadPanel").classList.toggle("hidden", leadInputMode !== "file");
+  $("btnImport").textContent = leadInputMode === "paste" ? "整理并使用客户群" : "建立并使用客户群";
+  $("importErr").textContent = "";
+});
+
+async function finishCreatedGroup(r) {
+  invalidatePreparedPreview();
+  currentLeadGroupId = r.group.id;
+  $("newGroupName").value = "";
+  if (leadInputMode === "paste") $("pastedLeads").value = "";
+  $("importMsg").textContent = "✓ 已建立「" + r.group.name + "」· 共 " + r.group.memberCount + " 位，本次可发送 " + r.imported + " 位（跳过已发送 " + (r.skippedAlreadyBlasted || 0) + " · STOP " + (r.skippedSuppressed || 0) + " · 重复/无效 " + r.rejected + "）";
+  await loadLeadGroups();
+  renderActiveGroup({ ...LEAD_GROUPS.find((group) => group.id === r.group.id), ...r.group }, { eligible:r.imported, skippedAlreadyBlasted:r.skippedAlreadyBlasted, skippedSuppressed:r.skippedSuppressed });
+  await loadLeadsForEdit();
+}
+
+$("btnSelectGroup").addEventListener("click", async () => {
+  const groupId = $("leadGroupSel").value;
+  if (!groupId) { $("groupErr").textContent = "请先选择一个客户群。"; return; }
+  $("groupErr").textContent = "";
+  $("btnSelectGroup").disabled = true;
+  $("btnSelectGroup").textContent = "安全检查中…";
+  const r = await post("/api/lead-groups/select", { project: currentProject, groupId });
+  $("btnSelectGroup").disabled = false;
+  $("btnSelectGroup").textContent = "使用这个客户群";
+  if (!r.ok) { $("groupErr").textContent = r.error; return; }
+  invalidatePreparedPreview();
+  currentLeadGroupId = r.group.id;
+  await loadLeadGroups();
+  renderActiveGroup({ ...LEAD_GROUPS.find((group) => group.id === r.group.id), ...r.group }, r);
+  await loadLeadsForEdit();
+});
+
+$("btnRenameGroup").addEventListener("click", async () => {
+  if (!currentLeadGroupId) { $("groupErr").textContent = "请先使用一个客户群。"; return; }
+  const name = $("renameGroupName").value.trim();
+  if (!name) { $("groupErr").textContent = "客户群名称不能为空。"; return; }
+  $("renameMsg").textContent = "保存中…";
+  $("groupErr").textContent = "";
+  const r = await post("/api/lead-groups/rename", { project: currentProject, groupId: currentLeadGroupId, name });
+  if (!r.ok) { $("renameMsg").textContent = ""; $("groupErr").textContent = r.error; return; }
+  $("renameMsg").textContent = "✓ 客户群名称已保存";
+  await loadLeadGroups();
+});
+
 $("btnImport").addEventListener("click", async () => {
-  $("importErr").textContent = ""; $("importMsg").textContent = selectedExcelFile ? "上传 Excel 中…" : "导入中…";
+  const groupName = $("newGroupName").value.trim();
+  if (!groupName) { $("importErr").textContent = "请先填写客户群名称，例如：Binastra · July Website Leads。"; return; }
+  if (leadInputMode === "paste" && !$("pastedLeads").value.trim()) {
+    $("importErr").textContent = "请把客户名字和电话号码贴进名单框里。";
+    return;
+  }
+  $("importErr").textContent = "";
+  $("importMsg").textContent = leadInputMode === "paste" ? "正在整理、去重并存入 SQLite…" : (selectedExcelFile ? "上传 Excel 中…" : "导入中…");
   try {
+    if (leadInputMode === "paste") {
+      const manual = await post("/api/lead-groups/create-manual", {
+        project: currentProject,
+        groupName,
+        text: $("pastedLeads").value,
+      });
+      if (!manual.ok) { $("importMsg").textContent = ""; $("importErr").textContent = manual.error; return; }
+      await finishCreatedGroup(manual);
+      return;
+    }
     const uploadedPath = await uploadSelectedExcelIfNeeded();
     if (uploadedPath) $("sourcePath").value = uploadedPath;
     $("importMsg").textContent = "导入中…";
-    const r = await post("/api/import", { project: currentProject, sourcePath: $("sourcePath").value.trim() || undefined });
+    const r = await post("/api/import", {
+      project: currentProject,
+      groupName,
+      sourcePath: $("sourcePath").value.trim() || undefined,
+    });
     if (!r.ok) { $("importMsg").textContent = ""; $("importErr").textContent = r.error; return; }
-    $("importMsg").textContent = "✓ 导入 " + r.imported + " 个新 leads（🛡 跳过已 blast " + (r.skippedAlreadyBlasted || 0) + " 个 · 剔除重复/无效 " + r.rejected + "）";
-    await loadLeadsForEdit();
+    await finishCreatedGroup(r);
   } catch (error) {
     $("importMsg").textContent = "";
     $("importErr").textContent = error.message;
@@ -419,6 +599,10 @@ function escapeAttr(s) {
 async function loadLeadsForEdit() {
   const r = await get("/api/leads?project=" + encodeURIComponent(currentProject)).catch(() => null);
   if (!r || !r.ok || !r.leads.length) { $("leadsEditWrap").classList.add("hidden"); return; }
+  if (r.group) {
+    const stored = LEAD_GROUPS.find((group) => group.id === r.group.id) || {};
+    renderActiveGroup({ ...stored, ...r.group }, { eligible:r.leads.length });
+  }
   $("leadsEditWrap").classList.remove("hidden");
   $("leadsEditCount").textContent = r.leads.length + " 个 leads";
   $("namesMsg").textContent = "";
@@ -446,6 +630,7 @@ $("btnPrepare").addEventListener("click", async () => {
   });
   const r = await post("/api/prepare", {
     project: currentProject,
+    leadGroupId: mode === "LIVE" ? currentLeadGroupId : undefined,
     mode,
     startTime: $("startTime").value.trim(),
     endTime: $("endTime").value.trim(),
@@ -480,6 +665,7 @@ function renderPreview(r) {
     '<div class="chip">模式 <b>' + s.mode + "</b></div>" +
     scheduleChip +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
+    (s.leadGroupName ? '<div class="chip">客户群 <b>' + escapeAttr(s.leadGroupName) + "</b></div>" : "") +
     senderChips + overflowChip +
     '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>" +
     (preparedCanQueue ? '<div class="chip" style="border-color:#f59e0b;color:#fbbf24">当前 Batch 正在发送 · 本预览可排下一批</div>' : "");
@@ -627,6 +813,8 @@ $("projectSel").addEventListener("change", async () => {
   const p = PROJECTS.find((item) => item.id === currentProject);
   currentProjectSenders = p?.senders || [];
   applyProjectSenders();
+  invalidatePreparedPreview();
+  currentLeadGroupId = null;
   $("importMsg").textContent = ""; $("importErr").textContent = "";
   await loadProjectConfig();
 });

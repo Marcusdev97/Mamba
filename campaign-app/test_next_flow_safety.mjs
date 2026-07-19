@@ -3,6 +3,7 @@ import {
   fetchInstanceMessagesDeep,
   isTransientConnectionError,
   nextFlowBlockReason,
+  nextFlowPageDeviceScope,
   replySafetyStatus,
   retryTransientConnection,
 } from "./routes/next-flow.routes.mjs";
@@ -67,6 +68,38 @@ assert.equal(recovered, "connected");
 assert.equal(transientAttempts, 3);
 assert.equal(isTransientConnectionError(new Error("HTTP 503 unavailable")), true);
 assert.equal(isTransientConnectionError(new Error("HTTP 400 invalid instance")), false);
+
+const scopeRuntime = {
+  device: {
+    id: "device-a",
+    name: "Device A",
+    hostname: "device-a.local",
+    configured: true,
+    senderPolicyConfigured: true,
+    senderPhones: ["60111111111"],
+  },
+  nfSelect: (row, name) => row?.properties?.[name]?.select?.name || "",
+  nfText: (row, name) => row?.properties?.[name]?.rich_text?.[0]?.plain_text || "",
+};
+const ownedPage = page({
+  "Last Sent By Device": reply("device-a"),
+  "Last Sender Phone": { phone_number: "60111111111" },
+  "Sender Instance": choice("wa_01"),
+});
+const remotePage = page({
+  "Last Sent By Device": reply("device-b"),
+  "Last Sender Phone": { phone_number: "60222222222" },
+  "Sender Instance": choice("wa_01"),
+});
+const keyOwnedPage = page({
+  "Assigned Sender Key": reply("device-a::60111111111"),
+  "Sender Instance": choice("wa_01"),
+});
+const legacySameNamePage = page({ "Sender Instance": choice("wa_01") });
+assert.equal(nextFlowPageDeviceScope(scopeRuntime, ownedPage), "local");
+assert.equal(nextFlowPageDeviceScope(scopeRuntime, keyOwnedPage), "local");
+assert.equal(nextFlowPageDeviceScope(scopeRuntime, remotePage), "remote");
+assert.equal(nextFlowPageDeviceScope(scopeRuntime, legacySameNamePage), "legacy", "wa_01 alone must never grant device ownership");
 
 const safetyNow = Date.parse("2026-07-13T04:00:00.000Z");
 assert.equal(replySafetyStatus({ trackerUpdatedAt: "2026-07-13T03:55:00.000Z", now: safetyNow }).safeToSend, true);

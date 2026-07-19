@@ -533,6 +533,7 @@ export class CampaignRunner {
     this.log = [];
     this.mediaCache = new Map();
     this.consecutiveFailures = 0;
+    this.interrupted = false;
   }
 
   pushLog(message) {
@@ -1039,6 +1040,14 @@ export class CampaignRunner {
         await this.systemLog("error", "campaign_auto_stop", "Campaign stopped after 3 consecutive failures.", {
           consecutiveFailures: this.consecutiveFailures,
         });
+        this.interrupted = true;
+        this.state.interruption = {
+          code: "CONSECUTIVE_SEND_FAILURES",
+          message: "连续 3 个发送异常，系统已安全暂停。请检查电脑网络、Evolution 与 WhatsApp 连接后再恢复。",
+          failedJobId: job.id,
+          failedAt: new Date().toISOString(),
+          consecutiveFailures: this.consecutiveFailures,
+        };
         this.stopped = true;
       }
     }
@@ -1172,14 +1181,18 @@ export class CampaignRunner {
     }
     this.running = true;
     this.stopped = false;
+    this.interrupted = false;
     this.consecutiveFailures = 0;
+    this.state.interruption = null;
     this.state.status = "RUNNING";
     this.rebaseSchedule();
     await this.saveState();
     try {
       await this.runQueue();
       const incomplete = this.state.assignments.some((job) => isResumableJobStatus(job.status));
-      this.state.status = this.stopped || incomplete ? "STOPPED" : "COMPLETED";
+      this.state.status = this.interrupted
+        ? "INTERRUPTED"
+        : this.stopped || incomplete ? "STOPPED" : "COMPLETED";
     } finally {
       await this.saveState();
       this.running = false;
@@ -1248,6 +1261,7 @@ export class CampaignRunner {
             advanceError: this.state.advanceError ?? null,
             advanceSummary: this.state.advanceSummary ?? null,
             notionSync: this.state.notionSync ?? null,
+            interruption: this.state.interruption ?? null,
             assignments: this.state.assignments.map((job) => ({
               id: job.id,
               name: job.lead.name,

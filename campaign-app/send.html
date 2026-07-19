@@ -159,11 +159,13 @@
   .sync-track { height: 5px; margin-top: 20px; overflow: hidden; border-radius: 3px; background: #263244; }
   .sync-track span { display: block; width: 38%; height: 100%; background: #2dd36f; animation: loading 1.25s ease-in-out infinite; }
   @keyframes loading { from { transform: translateX(-105%); } to { transform: translateX(365%); } }
-  .sync-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
+  .sync-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; margin-top: 20px; }
   .sync-actions button {
     border: 1px solid #475569; border-radius: 7px; padding: 9px 14px;
     background: #1f2937; color: #e5e7eb; font: inherit; font-weight: 700; cursor: pointer;
   }
+  .sync-actions button.primary { border-color: #16a34a; background: #16a34a; color: #04130a; }
+  .sync-actions button:disabled { opacity: .55; cursor: wait; }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
 </head>
@@ -206,6 +208,8 @@
       <p class="sync-detail" id="syncDetail"></p>
       <div class="sync-track" id="syncTrack"><span></span></div>
       <div class="sync-actions hidden" id="syncActions">
+        <button type="button" class="primary hidden" id="syncRecover">安全恢复未完成发送</button>
+        <button type="button" class="primary hidden" id="syncRetry">只重试 Notion</button>
         <button type="button" id="syncClose">查看发送详情</button>
       </div>
     </div>
@@ -230,6 +234,7 @@ let successTimer = null;
 let firstQueuedRunId = null;
 let latestCampaignStatus = null;
 let latestCampaignQueue = null;
+let activeSyncContext = null;
 let monitorDisplayChoice = sessionStorage.getItem("mamba-send-monitor-display");
 const dismissedRunsKey = "mamba-send-dismissed-runs-v1";
 let dismissedCampaignRuns = loadDismissedCampaignRuns();
@@ -421,7 +426,7 @@ function hideSyncOverlay() {
   document.getElementById("syncOverlay").classList.add("hidden");
 }
 
-function renderNotionSync(sync, runId) {
+function renderNotionSync(sync, runId, state = null) {
   const overlay = document.getElementById("syncOverlay");
   const icon = document.getElementById("syncIcon");
   const title = document.getElementById("syncTitle");
@@ -429,12 +434,21 @@ function renderNotionSync(sync, runId) {
   const detail = document.getElementById("syncDetail");
   const track = document.getElementById("syncTrack");
   const actions = document.getElementById("syncActions");
+  const recoverButton = document.getElementById("syncRecover");
+  const retryButton = document.getElementById("syncRetry");
   const status = String(sync?.status || "").toUpperCase();
+  const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
+  const pending = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "")).length;
+  const failed = assignments.filter((item) => item.status === "FAILED").length;
+  const partial = assignments.filter((item) => item.part1At && item.status !== "SENT").length;
+  activeSyncContext = { runId, sync, state, pending, failed, partial };
   syncBusy = status === "RUNNING";
 
   if (!status) return;
   overlay.classList.remove("failed", "succeeded");
   actions.classList.add("hidden");
+  recoverButton.classList.add("hidden");
+  retryButton.classList.add("hidden");
 
   if (status === "WAITING") {
     hideSyncOverlay();
@@ -456,12 +470,24 @@ function renderNotionSync(sync, runId) {
   icon.classList.remove("spinning");
   track.classList.add("hidden");
   if (status === "FAILED") {
+    const dismissedKey = `mamba-notion-sync-dismissed:${runId || "latest"}:${sync.updatedAt || sync.finishedAt || "failed"}`;
+    if (sessionStorage.getItem(dismissedKey)) return;
     overlay.classList.add("failed");
     overlay.classList.remove("hidden");
     icon.textContent = "!";
     title.textContent = "Notion 更新失败";
-    message.textContent = sync.message || "发送记录仍保留在本机。";
-    detail.textContent = sync.error || "请到发送详情查看错误，再手动补跑 Notion 上传。";
+    if (pending || failed) {
+      message.textContent = `发送在中途安全暂停：${pending} 个未发送，${failed} 个连接异常${partial ? `，其中 ${partial} 个已发送部分内容` : ""}。`;
+      detail.textContent = "先检查网络、Evolution 与 WhatsApp 都恢复 ONLINE，再按「安全恢复」。已成功的客户和已经成功的 Part 都不会重发；整批真正完成后才更新 Notion。";
+      recoverButton.textContent = `安全恢复 ${pending + failed} 个未完成客户`;
+      recoverButton.classList.remove("hidden");
+    } else {
+      message.textContent = sync.message || "发送记录仍保留在本机。";
+      detail.textContent = sync.error === "fetch failed"
+        ? "Mamba 当时无法连接 Notion（通常是电脑关机或网络断开）。这只影响云端同步，不会重发 WhatsApp。"
+        : (sync.error || "请检查网络后只重试 Notion，不会发送 WhatsApp。");
+      retryButton.classList.remove("hidden");
+    }
     actions.classList.remove("hidden");
     return;
   }
@@ -481,8 +507,55 @@ function renderNotionSync(sync, runId) {
 }
 
 document.getElementById("syncClose").addEventListener("click", () => {
+  const context = activeSyncContext;
+  if (context?.sync?.status === "FAILED") {
+    const key = `mamba-notion-sync-dismissed:${context.runId || "latest"}:${context.sync.updatedAt || context.sync.finishedAt || "failed"}`;
+    sessionStorage.setItem(key, "1");
+  }
   hideSyncOverlay();
   show("flow1");
+});
+
+async function postSyncRecovery(path, body, button) {
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "处理中…";
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    hideSyncOverlay();
+    show("flow1");
+    return data;
+  } catch (error) {
+    document.getElementById("syncDetail").textContent = `恢复失败：${error.message}。本机发送记录仍然安全，请检查 Phone Health 后再试。`;
+    return null;
+  } finally {
+    button.disabled = false;
+    button.textContent = previous;
+  }
+}
+
+document.getElementById("syncRecover").addEventListener("click", async () => {
+  const context = activeSyncContext;
+  if (!context?.runId) return;
+  const wording = context.failed
+    ? `会继续 ${context.pending} 个未发送客户，并重试 ${context.failed} 个连接异常。已成功的客户及已成功的 Part 不会重发。确认连接已恢复并继续？`
+    : `会继续 ${context.pending} 个未发送客户；已成功的客户不会重发。确认连接已恢复并继续？`;
+  if (!confirm(wording)) return;
+  const endpoint = context.failed ? "/api/retry-failed" : "/api/resume";
+  await postSyncRecovery(endpoint, { runId: context.runId }, document.getElementById("syncRecover"));
+});
+
+document.getElementById("syncRetry").addEventListener("click", async () => {
+  const context = activeSyncContext;
+  if (!context?.runId) return;
+  if (!confirm("只把本机已经保存的发送结果补同步到 Notion；不会发送任何 WhatsApp。继续？")) return;
+  await postSyncRecovery("/api/notion-sync/retry", { runId: context.runId }, document.getElementById("syncRetry"));
 });
 
 window.addEventListener("beforeunload", (event) => {
@@ -502,7 +575,7 @@ async function pollRunning() {
     const runningNext = runs.some((item) => item?.running && item?.state?.flowLabel);
     document.getElementById("tab-flow1").classList.toggle("running", runningFlow1);
     document.getElementById("tab-next").classList.toggle("running", runningNext);
-    renderNotionSync(d?.state?.notionSync, d?.state?.runId);
+    renderNotionSync(d?.state?.notionSync, d?.state?.runId, d?.state);
   } catch { /* console 自己会显示, 这里只是点缀 */ }
   await refreshCampaignQueue();
   renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);

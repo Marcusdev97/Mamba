@@ -59,6 +59,8 @@ let startedAt = new Date().toISOString();
 let leadIndex = new Map();
 let lastEvents = [];
 let allowedInstanceNames = new Set();
+let lastWebhookRefreshAt = null;
+let lastWebhookError = null;
 const pushedPhones = new Set(); // unknown numbers manually pushed to Notion this session
 const reliability = createTrackerReliabilityService({ trackerDir });
 const trackerSystemLogs = createSystemLogService({ rootDir: paths.rootDir });
@@ -440,6 +442,27 @@ async function configureWebhookForOpenInstances() {
   return open;
 }
 
+async function refreshWebhookConnection() {
+  if (skipWebhookSetup) {
+    const instances = await listInstances(api);
+    const open = filterInstancesForDevice(instances.filter((item) => item.status === "OPEN"), deviceSenderPolicy);
+    allowedInstanceNames = new Set(open.map((item) => item.name));
+    lastWebhookRefreshAt = new Date().toISOString();
+    lastWebhookError = null;
+    return { mode: "forwarded", connected: open.length, instances: open.map((item) => item.name) };
+  }
+  try {
+    const open = await configureWebhookForOpenInstances();
+    lastWebhookRefreshAt = new Date().toISOString();
+    lastWebhookError = null;
+    return { mode: "direct", connected: open.length, instances: open.map((item) => item.name) };
+  } catch (error) {
+    lastWebhookRefreshAt = new Date().toISOString();
+    lastWebhookError = error.message;
+    throw error;
+  }
+}
+
 function htmlPage() {
   return `<!doctype html>
 <html lang="en">
@@ -728,6 +751,13 @@ const server = http.createServer(async (req, res) => {
       const notionQueue = notionReplyQueue.snapshot();
       json(res, 200, {
         ok: true,
+        service: "reply-tracker",
+        port: PORT,
+        webhookUrl: PUBLIC_URL,
+        webhookMode: skipWebhookSetup ? "forwarded" : "direct",
+        webhookRefreshAt: lastWebhookRefreshAt,
+        webhookError: lastWebhookError,
+        connectedInstances: [...allowedInstanceNames],
         startedAt,
         stats,
         leadsIndexed: leadIndex.size,
@@ -748,6 +778,24 @@ const server = http.createServer(async (req, res) => {
         heartbeat: reliabilityState.heartbeat,
         events,
       });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/refresh") {
+      try {
+        const webhook = await refreshWebhookConnection();
+        await reliability.heartbeat({
+          startedAt,
+          webhookMode: skipWebhookSetup ? "forwarded" : "direct",
+        });
+        json(res, 200, { ok: true, service: "reply-tracker", port: PORT, webhook });
+      } catch (error) {
+        json(res, 503, {
+          ok: false,
+          service: "reply-tracker",
+          port: PORT,
+          error: `WhatsApp webhook 刷新失败：${error.message}`,
+        });
+      }
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/push") {
@@ -842,11 +890,11 @@ server.listen(PORT, HOST, async () => {
       return;
     }
 
-    const open = await configureWebhookForOpenInstances();
-    if (open.length === 0) {
+    const webhook = await refreshWebhookConnection();
+    if (webhook.connected === 0) {
       console.log("No OPEN WhatsApp numbers found. Start/scan a number, then restart this tracker.");
     } else {
-      console.log(`Listening on: ${open.map((item) => `${item.name} (${item.number})`).join(", ")}`);
+      console.log(`Listening on: ${webhook.instances.join(", ")} · dynamic port ${PORT}`);
     }
   } catch (error) {
     console.log(`Could not auto-connect webhook: ${error.message}`);

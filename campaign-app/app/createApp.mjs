@@ -6,6 +6,7 @@ import { registerConversationsRoutes } from "../routes/conversations.routes.mjs"
 import { registerControlCenterRoutes } from "../routes/control-center.routes.mjs";
 import { registerDailyCampaignRoutes } from "../routes/daily-campaign.routes.mjs";
 import { registerFollowUpRoutes } from "../routes/follow-up.routes.mjs";
+import { registerGoldenConversationRoutes } from "../routes/golden-conversations.routes.mjs";
 import { registerImportRoutes } from "../routes/import.routes.mjs";
 import { registerInstancesRoutes } from "../routes/instances.routes.mjs";
 import { registerKnowledgeRoutes } from "../routes/knowledge.routes.mjs";
@@ -39,6 +40,7 @@ export function createApp(runtime) {
   registerNextFlowRoutes(router);
   registerConversationsRoutes(router);
   registerFollowUpRoutes(router);
+  registerGoldenConversationRoutes(router);
   registerSystemLogsRoutes(router);
 
   return async function app(req, res) {

@@ -16,6 +16,24 @@
   .scope-pill strong { color:var(--text); margin-left:4px; }
   .scope-pill.global { border-color:rgba(37,211,102,.4); color:var(--green); }
   .head-tools { display:grid; gap:9px; }
+  .campaign-pet { position:relative; display:grid; grid-template-columns:48px minmax(0,1fr); gap:10px; align-items:center; min-height:76px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:linear-gradient(145deg,var(--panel),var(--panel-2)); color:var(--text); text-decoration:none; overflow:hidden; box-shadow:0 12px 30px rgba(0,0,0,.16); }
+  .campaign-pet::after { content:""; position:absolute; inset:auto 0 0; height:3px; background:var(--panel-3); }
+  .campaign-pet.running { border-color:rgba(37,211,102,.42); }
+  .campaign-pet.running::after { background:linear-gradient(90deg,var(--green) var(--pet-progress,0%),var(--panel-3) var(--pet-progress,0%)); }
+  .campaign-pet.warning { border-color:rgba(245,179,66,.42); }
+  .pet-visual { position:relative; width:46px; height:46px; display:grid; place-items:center; border-radius:14px; background:var(--green-bg); font-size:29px; transform-origin:50% 80%; }
+  .campaign-pet.idle .pet-visual { background:var(--panel-3); filter:saturate(.55); }
+  .campaign-pet.running .pet-visual { animation:pet-working 1.25s ease-in-out infinite; }
+  .campaign-pet.complete .pet-visual { animation:pet-celebrate .85s ease-in-out 3; }
+  .pet-live { position:absolute; right:-2px; top:-2px; width:11px; height:11px; border:2px solid var(--panel); border-radius:50%; background:var(--muted); }
+  .campaign-pet.running .pet-live { background:var(--green); box-shadow:0 0 0 4px var(--green-bg); }
+  .campaign-pet.warning .pet-live { background:var(--amber); }
+  .pet-copy { min-width:0; }
+  .pet-copy strong { display:block; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pet-copy small { display:block; margin-top:3px; color:var(--muted); font-size:10px; line-height:1.35; }
+  .pet-label { color:var(--green); font-size:8.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+  @keyframes pet-working { 0%,100% { transform:translateY(0) rotate(-3deg); } 50% { transform:translateY(-4px) rotate(4deg); } }
+  @keyframes pet-celebrate { 0%,100% { transform:scale(1) rotate(0); } 40% { transform:scale(1.14) rotate(-8deg); } 70% { transform:scale(1.08) rotate(8deg); } }
   .global-search { position:relative; }
   .global-search input { height:42px; padding-left:38px; }
   .global-search::before { content:"⌕"; position:absolute; left:13px; top:7px; color:var(--muted); font-size:21px; z-index:1; }
@@ -40,6 +58,11 @@
   .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
   .panel-head h2 { margin:0; font-size:14px; text-transform:none; letter-spacing:0; color:var(--text); }
   .panel-head a { color:var(--green); text-decoration:none; font-size:11.5px; }
+  .panel-actions { display:flex; align-items:center; gap:8px; }
+  .tracker-refresh { min-height:30px; padding:5px 9px; border:1px solid var(--line-2); border-radius:7px; background:var(--panel-2); color:var(--text); font:inherit; font-size:10.5px; cursor:pointer; }
+  .tracker-refresh:hover { border-color:var(--green); color:var(--green); }
+  .tracker-refresh:disabled { opacity:.55; cursor:wait; }
+  .tracker-action-status { color:var(--muted); font-size:9.5px; }
   .queue-list,.health-list,.activity-list { display:grid; }
   .queue-item,.health-item,.activity-item { min-height:48px; display:grid; align-items:center; border-top:1px solid var(--line); }
   .queue-item:first-child,.health-item:first-child,.activity-item:first-child { border-top:0; }
@@ -79,6 +102,13 @@
   .activity-meta span.stop { background:var(--red-bg); color:var(--red); }.activity-meta span.appointment { background:rgba(168,85,247,.16); color:#b794f6; }
   .cache-line { color:var(--muted); font-size:10.5px; margin-top:10px; }
   .error-text { color:var(--red); }
+  @media (min-width:1700px) {
+    .cc-head { grid-template-columns:minmax(0,1fr) 570px; }
+    .head-tools { grid-template-columns:330px 230px; align-items:start; }
+    .campaign-pet { grid-column:2; grid-row:1 / span 2; width:230px; min-height:93px; }
+    .global-search { grid-column:1; grid-row:1; }
+    .health-banner { grid-column:1; grid-row:2; }
+  }
   @media (max-width:1050px) { .kpi-grid { grid-template-columns:repeat(2,1fr); } .split,.bottom-grid { grid-template-columns:1fr; } .quick-grid { grid-template-columns:repeat(3,1fr); } }
   @media (max-width:720px) { .cc-wrap { padding:16px 12px 48px; } .cc-head { grid-template-columns:1fr; } .cc-head h1 { font-size:23px; } .kpi-grid { gap:8px; } .kpi { min-height:102px; padding:12px; } .kpi strong { font-size:25px; } .quick-grid { grid-template-columns:repeat(2,1fr); } }
   @media (max-width:440px) { .quick-grid { grid-template-columns:1fr; } .campaign-stats { grid-template-columns:repeat(2,1fr); } }
@@ -89,6 +119,10 @@
   <header class="cc-head">
     <div><h1 id="greeting">Mamba Control Center</h1><p>这台电脑的客户、Campaign 与系统状态都在这里。</p><div class="scope-strip" id="scopeStrip"><span class="scope-pill">Checking device...</span></div></div>
     <div class="head-tools">
+      <a class="campaign-pet idle" id="campaignPet" href="/send" style="--pet-progress:0%" aria-label="Open current campaign">
+        <span class="pet-visual"><span id="petEmoji">🐍</span><i class="pet-live"></i></span>
+        <span class="pet-copy"><span class="pet-label">Mamba Pet</span><strong id="petTitle">正在检查 Campaign</strong><small id="petDetail">读取本机发送状态…</small></span>
+      </a>
       <form class="global-search" id="searchForm"><input id="globalSearch" type="search" placeholder="Search customer name or phone" aria-label="Search customer" /></form>
       <div class="health-banner" id="healthBanner"><span class="health-dot"></span><div><strong>Checking system status</strong><small>Reading local services...</small></div></div>
     </div>
@@ -103,7 +137,7 @@
 
   <section class="split">
     <div class="panel"><div class="panel-head"><h2>Today Action Queue</h2><a href="/follow-up">View work desk →</a></div><div class="queue-list" id="queue"><div class="empty">Loading action queue...</div></div></div>
-    <div class="panel"><div class="panel-head"><h2>System Health</h2><a href="/settings">Settings →</a></div><div class="health-list" id="health"><div class="empty">Checking services...</div></div><div class="cache-line" id="cacheLine"></div></div>
+    <div class="panel"><div class="panel-head"><h2>System Health</h2><div class="panel-actions"><span class="tracker-action-status" id="trackerActionStatus"></span><button class="tracker-refresh" id="trackerRefresh" type="button">刷新 Tracker</button><a href="/settings">Settings →</a></div></div><div class="health-list" id="health"><div class="empty">Checking services...</div></div><div class="cache-line" id="cacheLine"></div></div>
   </section>
 
   <section class="panel quick-panel">
@@ -164,7 +198,10 @@ function renderHealth(items, logs) {
     const state = item.state || (item.ok ? "online" : "offline");
     const tag = item.href ? "a" : "div";
     const href = item.href ? ` href="${esc(item.href)}"` : "";
-    return `<${tag} class="health-item"${href}><div><div class="health-name">${esc(item.label)}</div><div class="health-detail">${esc(item.detail)}</div></div><div class="health-state ${esc(state)}"><span>${labels[state] || "Offline"}</span><i></i></div></${tag}>`;
+    const stateLabel = item.id === "tracker"
+      ? (state === "online" ? "已开启" : state === "warning" ? "需检查" : "已关闭")
+      : (labels[state] || "Offline");
+    return `<${tag} class="health-item"${href}><div><div class="health-name">${esc(item.label)}</div><div class="health-detail">${esc(item.detail)}</div></div><div class="health-state ${esc(state)}"><span>${stateLabel}</span><i></i></div></${tag}>`;
   }).join("");
   const offline = items.filter((item) => (item.state || (item.ok ? "online" : "offline")) === "offline").length;
   const warnings = items.filter((item) => item.state === "warning").length;
@@ -186,6 +223,51 @@ function renderCampaign(campaign) {
     <div class="campaign-title"><div><h3>${esc(campaign.project)}</h3><p>${esc(campaign.mode || "")} · ${esc(campaign.instances.join(", ") || "No sender")}</p></div><span class="badge ${campaign.failed ? "b-fail" : campaign.running ? "b-go" : "b-queued"}">${esc(campaign.status)}</span></div>
     <div class="campaign-stats"><div class="campaign-stat"><span>Total</span><b>${campaign.total}</b></div><div class="campaign-stat"><span>Fully sent</span><b>${campaign.sent}</b></div><div class="campaign-stat"><span>Failed</span><b>${campaign.failed}</b></div><div class="campaign-stat"><span>Pending</span><b>${campaign.pending || 0}</b></div></div>
     <div class="campaign-progress"><i style="width:${percent}%"></i></div><div class="cache-line">${percent}% processed · ${campaign.sent} fully sent${esc(pendingText)} · updated ${esc(relative(campaign.updatedAt))}</div>`;
+}
+
+function renderCampaignPet(campaign) {
+  const pet = $("campaignPet");
+  const title = $("petTitle");
+  const detail = $("petDetail");
+  const emoji = $("petEmoji");
+  pet.className = "campaign-pet";
+  if (!campaign) {
+    pet.classList.add("idle");
+    pet.style.setProperty("--pet-progress", "0%");
+    emoji.textContent = "🐍";
+    title.textContent = "Mamba 正在休息";
+    detail.textContent = "目前没有 Campaign";
+    return;
+  }
+  const percent = campaign.total ? Math.min(100, Math.round((campaign.processed || 0) / campaign.total * 100)) : 0;
+  pet.style.setProperty("--pet-progress", `${percent}%`);
+  if (campaign.running) {
+    pet.classList.add("running");
+    emoji.textContent = "🐍";
+    title.textContent = `${campaign.project} 正在发送`;
+    const nextMs = campaign.nextAt ? new Date(campaign.nextAt).getTime() - Date.now() : 0;
+    const nextText = nextMs > 0 ? ` · 下一位约 ${Math.max(1, Math.ceil(nextMs / 60000))} 分钟` : "";
+    detail.textContent = `${campaign.sent} 完成 · ${campaign.pending || 0} 等待 · ${percent}%${nextText}`;
+    return;
+  }
+  if (campaign.stopped || campaign.status === "STOPPED") {
+    pet.classList.add("warning");
+    emoji.textContent = "🐍";
+    title.textContent = `${campaign.project} 已暂停`;
+    detail.textContent = `${campaign.sent} 完成 · ${campaign.pending || 0} 等待继续`;
+    return;
+  }
+  if (campaign.status === "COMPLETED" && !campaign.pending) {
+    pet.classList.add("complete");
+    emoji.textContent = "🐍";
+    title.textContent = `${campaign.project} 完成啦`;
+    detail.textContent = `${campaign.sent}/${campaign.total} 已发送 · 点击查看报告`;
+    return;
+  }
+  pet.classList.add("idle");
+  emoji.textContent = "🐍";
+  title.textContent = `${campaign.project} · ${campaign.status}`;
+  detail.textContent = `${campaign.sent} 完成 · ${campaign.pending || 0} 等待`;
 }
 
 function renderRecent(items) {
@@ -213,6 +295,7 @@ async function loadDashboard() {
     renderQueue(data.queue || []);
     renderHealth(data.health || [], data.logs || { errorsToday:0, warningsToday:0 });
     renderCampaign(data.campaign);
+    renderCampaignPet(data.campaign);
     renderRecent(data.recent || []);
   } catch (error) {
     $("healthBanner").classList.add("warn");
@@ -223,11 +306,34 @@ async function loadDashboard() {
   }
 }
 
+async function refreshTracker() {
+  const button = $("trackerRefresh");
+  const status = $("trackerActionStatus");
+  button.disabled = true;
+  button.textContent = "检查中…";
+  status.textContent = "正在检查端口与 webhook";
+  try {
+    const response = await fetch("/api/reply-tracker/refresh", { method:"POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || "Tracker 刷新失败");
+    const connected = Number(data.webhook?.connected || 0);
+    status.textContent = `已开启 · 端口 ${data.trackerPort}${connected ? ` · ${connected} 个号码` : ""}`;
+    await loadDashboard();
+  } catch (error) {
+    status.textContent = error.message;
+    await loadDashboard();
+  } finally {
+    button.disabled = false;
+    button.textContent = "刷新 Tracker";
+  }
+}
+
 $("searchForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const query = $("globalSearch").value.trim();
   if (query) window.location.href = `/lookup?q=${encodeURIComponent(query)}`;
 });
+$("trackerRefresh").addEventListener("click", refreshTracker);
 setGreeting();
 loadDashboard();
 setInterval(loadDashboard, 60000);

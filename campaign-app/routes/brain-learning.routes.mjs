@@ -5,6 +5,10 @@ import { httpError, json, readJson } from "../lib/http.mjs";
 const ACTIONS_ALLOWED = new Set(["Edited", "Sent As-Is"]);
 const LEARNING_STATUSES = ["Pending", "Approved", "Rejected"];
 const LEARNING_TYPES = ["Golden", "Objection"];
+const GOLDEN_SCENARIOS = ["Price Objection", "Hesitation", "Comparing", "Loan Question", "Viewing Push", "Cold Reopen", "Angry", "Other"];
+const CUSTOMER_TYPES = ["Own Stay", "Investor", "First Timer", "Unknown"];
+const GOLDEN_OUTCOMES = ["Viewing Booked", "Booking", "Warm", "Lost"];
+const LANGUAGES = ["EN", "ZH", "BM", "Mixed"];
 
 const LOG_SCHEMA = {
   "Learning Status": { select: { options: LEARNING_STATUSES.map((name) => ({ name })) } },
@@ -18,6 +22,8 @@ const LOG_SCHEMA = {
 
 const GOLDEN_SCHEMA = {
   "Golden Key": { rich_text: {} },
+  "Customer Type": { select: { options: CUSTOMER_TYPES.map((name) => ({ name })) } },
+  Outcome: { select: { options: GOLDEN_OUTCOMES.map((name) => ({ name })) } },
 };
 
 const OBJECTION_SCHEMA = {
@@ -137,7 +143,166 @@ export function goldenProperties(item, key) {
     "Conversation Text": contextRichText(clean(item.conversationText) || `Customer: ${clean(item.customerText)}\nSales: ${clean(item.responseText)}`),
     "Why It Worked": richText(clean(item.note) || `Human approved for reuse. Source action: ${clean(item.action) || "reviewed"}.`),
     Language: select(clean(item.language) || "EN"),
+    "Customer Type": select(CUSTOMER_TYPES.includes(clean(item.customerType)) ? clean(item.customerType) : "Unknown"),
+    Outcome: select(GOLDEN_OUTCOMES.includes(clean(item.outcome)) ? clean(item.outcome) : "Warm"),
     "Golden Key": richText(key),
+  };
+}
+
+function redactPrivateText(value, privateNames = []) {
+  let result = String(value ?? "")
+    .replace(/[\u200e\u200f\u202a-\u202e]/g, "")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[EMAIL]")
+    .replace(/https?:\/\/\S+|www\.\S+/gi, "[LINK]")
+    .replace(/\+?\d[\d\s().-]{7,}\d/g, (matched) => {
+      const digits = matched.replace(/\D/g, "");
+      return digits.length >= 9 && digits.length <= 15 ? "[PHONE]" : matched;
+    });
+  for (const rawName of privateNames) {
+    const name = clean(rawName);
+    if (name.length < 2) continue;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    result = result.replace(new RegExp(escaped, "gi"), "[NAME]");
+  }
+  return result.trim();
+}
+
+function canonicalSpeaker(value, salesNames) {
+  const speaker = clean(value).toLowerCase().replace(/\s+/g, " ");
+  if (/^(customer|client|buyer|prospect|lead|客户|顾客|买家)$/.test(speaker)) return "CUSTOMER";
+  if (/^(sales|agent|advisor|consultant|me|我|销售|顾问)$/.test(speaker)) return "SALES";
+  if (salesNames.has(speaker)) return "SALES";
+  return "";
+}
+
+function stripWhatsappTimestamp(value) {
+  return String(value ?? "").replace(
+    /^\s*\[?\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]m)?\]?\s*(?:[-–—]\s*)?/i,
+    "",
+  );
+}
+
+function inferLanguage(text) {
+  const value = clean(text).toLowerCase();
+  const hasZh = /[\u3400-\u9fff]/.test(value);
+  const hasBm = /\b(saya|awak|anda|boleh|nak|mahu|harga|rumah|bilik|pinjaman|temujanji|terima kasih)\b/.test(value);
+  const hasEn = /\b(the|this|can|price|project|unit|loan|viewing|available|thank|interested)\b/.test(value);
+  const kinds = [hasZh, hasBm, hasEn].filter(Boolean).length;
+  if (kinds > 1) return "Mixed";
+  if (hasZh) return "ZH";
+  if (hasBm) return "BM";
+  return "EN";
+}
+
+function inferScenario(text) {
+  const value = clean(text).toLowerCase();
+  if (/angry|complain|投诉|生气|骗|scam|marah|tipu/.test(value)) return "Angry";
+  if (/loan|bank|installment|monthly|贷款|供期|银行|pinjaman|ansuran/.test(value)) return "Loan Question";
+  if (/viewing|appointment|site visit|看房|预约|参观|temujanji|lawatan/.test(value)) return "Viewing Push";
+  if (/compare|versus| vs |比较|对比|banding/.test(value)) return "Comparing";
+  if (/price|discount|rebate|package|贵|价格|折扣|优惠|harga|diskaun/.test(value)) return "Price Objection";
+  if (/follow up|long time|still looking|之前|还在找|lama|masih cari/.test(value)) return "Cold Reopen";
+  if (/think|consider|later|not sure|考虑|迟点|再看看|fikir|nanti/.test(value)) return "Hesitation";
+  return "Other";
+}
+
+function inferCustomerType(text) {
+  const value = clean(text).toLowerCase();
+  if (/invest|rental|rent out|roi|投资|出租|回报|pelaburan|sewa/.test(value)) return "Investor";
+  if (/own stay|own use|stay myself|自住|自己住|duduk sendiri/.test(value)) return "Own Stay";
+  if (/first home|first house|first property|首套|第一次买|rumah pertama/.test(value)) return "First Timer";
+  return "Unknown";
+}
+
+function suggestedWhy(scenario, outcome) {
+  const strategy = {
+    "Price Objection": "没有急着降价，而是先确认客户真正关注的预算、户型和配套，再把话题带回下一步。",
+    Hesitation: "先接住客户的犹豫，再用一个容易回答的问题降低回复门槛，让对话继续。",
+    Comparing: "先理解客户的比较标准，再围绕适合度解释差异，没有直接贬低其他项目。",
+    "Loan Question": "先确认贷款条件和预算范围，没有承诺审批结果，并给出清楚的下一步。",
+    "Viewing Push": "把兴趣自然推进到明确的看房行动，同时让客户容易选择日期或时间。",
+    "Cold Reopen": "重新打开旧对话时保持自然、简短，并提供了一个具体且容易回应的新信息。",
+    Angry: "先承认客户感受和问题，没有争辩，再明确转人工处理。",
+    Other: "回复紧贴客户的问题，语气自然，并用明确的下一步推动对话。",
+  }[scenario] || "回复紧贴客户的问题，并用明确的下一步推动对话。";
+  const result = {
+    "Viewing Booked": "最终成功约到看房。",
+    Booking: "最终推进到订购阶段。",
+    Warm: "客户保持明确兴趣并愿意继续沟通。",
+    Lost: "虽然没有成交，但这段处理方式仍有值得保留的部分。",
+  }[outcome] || "";
+  return `${strategy}${result}`;
+}
+
+export function prepareGoldenImport(input = {}) {
+  const raw = String(input.rawConversation ?? input.conversationText ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!raw) throw new Error("请贴上成功案例的 WhatsApp 对话。");
+  const salesNames = new Set(String(input.salesName || "").split(/[,，\n]/).map((name) => clean(name).toLowerCase()).filter(Boolean));
+  const privateNames = String(input.privateNames || "").split(/[,，\n]/).map(clean).filter(Boolean);
+  const ignored = /messages and calls are end-to-end encrypted|security code changed|created group|added you|您与此商家的对话|信息和通话均经过端到端加密/i;
+  const messages = [];
+  const unresolved = new Set();
+  for (const originalLine of raw.split("\n")) {
+    const line = stripWhatsappTimestamp(originalLine).trim();
+    if (!line || ignored.test(line)) continue;
+    const matched = line.match(/^([^:：]{1,60})[:：]\s*(.*)$/);
+    if (matched) {
+      const speaker = canonicalSpeaker(matched[1], salesNames);
+      if (speaker) {
+        messages.push({ speaker, text: matched[2] });
+        continue;
+      }
+      if (/^[\p{L}\p{M} ._'\-]{2,60}$/u.test(matched[1])) {
+        if (salesNames.size) {
+          messages.push({ speaker: "CUSTOMER", text: matched[2] });
+          continue;
+        }
+        unresolved.add(clean(matched[1]));
+        messages.push({ speaker: `PARTICIPANT_${[...unresolved].indexOf(clean(matched[1])) + 1}`, text: matched[2] });
+        continue;
+      }
+    }
+    if (messages.length) messages[messages.length - 1].text += `\n${line}`;
+    else messages.push({ speaker: "UNASSIGNED", text: line });
+  }
+  const conversationText = messages
+    .map((message) => `${message.speaker}: ${redactPrivateText(message.text, privateNames)}`)
+    .join("\n")
+    .slice(0, 50000);
+  const customerTurns = messages.filter((message) => message.speaker === "CUSTOMER");
+  const salesTurns = messages.filter((message) => message.speaker === "SALES");
+  const customerText = redactPrivateText(customerTurns.at(-1)?.text || "", privateNames);
+  const responseText = redactPrivateText(salesTurns.at(-1)?.text || "", privateNames);
+  const scenario = GOLDEN_SCENARIOS.includes(clean(input.scenario)) ? clean(input.scenario) : inferScenario(conversationText);
+  const outcome = GOLDEN_OUTCOMES.includes(clean(input.outcome)) ? clean(input.outcome) : "Warm";
+  const customerType = CUSTOMER_TYPES.includes(clean(input.customerType)) ? clean(input.customerType) : inferCustomerType(conversationText);
+  const language = LANGUAGES.includes(clean(input.language)) ? clean(input.language) : inferLanguage(conversationText);
+  const project = clean(input.project);
+  const warnings = [];
+  if (unresolved.size) warnings.push(`无法自动分辨 ${[...unresolved].join("、")} 是客户还是销售；请填写“你的聊天名称”，或在预览中改成 CUSTOMER / SALES。`);
+  if (!customerText || !responseText) warnings.push("必须至少找到一段 CUSTOMER 和一段 SALES 对话，才能正式导入。");
+  if (raw.length > 50000) warnings.push("对话超过 Notion 安全长度，预览只保留前 50,000 字符。");
+  warnings.push("系统已隐藏明显的电话、电邮、链接和你填写的客户姓名；保存前仍请人工检查一次对话正文。 ");
+  const item = {
+    project,
+    route: scenario,
+    scenario,
+    outcome,
+    customerType,
+    language,
+    customerText,
+    responseText,
+    conversationText,
+    note: clean(input.note) || suggestedWhy(scenario, outcome),
+    action: "Historical Import",
+    learningType: "Golden",
+  };
+  return {
+    item,
+    warnings,
+    participants: [...unresolved],
+    key: learningKeyFor(item),
+    stats: { messages: messages.length, customerTurns: customerTurns.length, salesTurns: salesTurns.length },
   };
 }
 
@@ -303,6 +468,10 @@ async function writeApproved(service, item, learningType, key, keySets) {
   return { created: true, duplicate: false };
 }
 
+async function refreshBrainCache(service) {
+  return typeof service.syncBrainCache === "function" ? service.syncBrainCache() : syncBrainCache();
+}
+
 export function registerBrainLearningRoutes(router) {
   router.get("/api/brain-learning", async (req, res, runtime) => {
     const service = requireLearning(runtime);
@@ -350,6 +519,100 @@ export function registerBrainLearningRoutes(router) {
     }
     await Promise.all(Array.from({ length: Math.min(4, items.length) }, () => worker()));
     json(res, 200, { ok: true, threads });
+  });
+
+  router.post("/api/brain-learning/import/preview", async (req, res, runtime) => {
+    const service = requireLearning(runtime);
+    const body = await readJson(req);
+    let prepared;
+    try {
+      prepared = prepareGoldenImport(body);
+    } catch (error) {
+      throw httpError(400, error.message || "成功案例无法整理。");
+    }
+    let duplicate = false;
+    let duplicateCheckError = "";
+    try {
+      const keys = await existingKeys(service, service.goldenDbId, "Golden Key");
+      duplicate = keys.has(prepared.key);
+    } catch (error) {
+      duplicateCheckError = error.message || "Notion duplicate check failed";
+      prepared.warnings.push(`暂时无法检查 Notion 重复记录：${duplicateCheckError}`);
+    }
+    json(res, 200, {
+      ok: true,
+      ...prepared,
+      duplicate,
+      duplicateCheckError,
+    });
+  });
+
+  router.post("/api/brain-learning/import", async (req, res, runtime) => {
+    const service = requireLearning(runtime);
+    const body = await readJson(req);
+    let prepared;
+    try {
+      prepared = prepareGoldenImport(body);
+    } catch (error) {
+      throw httpError(400, error.message || "成功案例无法整理。");
+    }
+    const item = prepared.item;
+    if (!item.project) throw httpError(400, "请选择或填写这个成功案例所属的 Project。");
+    if (!item.customerText || !item.responseText || !/^CUSTOMER:/m.test(item.conversationText) || !/^SALES:/m.test(item.conversationText)) {
+      throw httpError(400, "对话必须同时包含 CUSTOMER 和 SALES。请回到预览修正双方身份。");
+    }
+    if (item.conversationText.length < 20) throw httpError(400, "对话内容太短，暂时不适合作为成功案例。");
+
+    await ensureProperties(service, service.goldenDbId, GOLDEN_SCHEMA);
+    const keys = await existingKeys(service, service.goldenDbId, "Golden Key");
+    if (keys.has(prepared.key)) {
+      json(res, 409, {
+        ok: false,
+        duplicate: true,
+        key: prepared.key,
+        error: "这段成功案例已经存在，没有重复写入。",
+      });
+      return;
+    }
+
+    let page;
+    try {
+      page = await service.notion("POST", "/pages", {
+        parent: { database_id: service.goldenDbId },
+        properties: goldenProperties(item, prepared.key),
+      });
+    } catch (error) {
+      throw httpError(502, `Notion 写入失败：${error.message || "unknown error"}`);
+    }
+
+    let cache = null;
+    let cacheError = "";
+    try { cache = await refreshBrainCache(service); }
+    catch (error) { cacheError = error.message || "Brain cache sync failed"; }
+    await service.systemLogs?.write({
+      level: cacheError ? "warn" : "info",
+      area: "brain",
+      event: "golden_conversation_imported",
+      message: `Imported historical Golden Conversation for ${item.project}.`,
+      context: {
+        project: item.project,
+        scenario: item.scenario,
+        outcome: item.outcome,
+        customerType: item.customerType,
+        language: item.language,
+        goldenKey: prepared.key,
+        cacheError,
+      },
+    }).catch(() => {});
+    json(res, 201, {
+      ok: true,
+      created: true,
+      key: prepared.key,
+      pageId: pageId(page?.id),
+      pageUrl: page?.url || "",
+      cache,
+      cacheError,
+    });
   });
 
   router.post("/api/brain-learning/review", async (req, res, runtime) => {
@@ -418,7 +681,7 @@ export function registerBrainLearningRoutes(router) {
     let cache = null;
     let cacheError = "";
     if (decision === "approve" && succeeded.length) {
-      try { cache = await syncBrainCache(); }
+      try { cache = await refreshBrainCache(service); }
       catch (error) { cacheError = error.message || "Brain cache sync failed"; }
     }
     await service.systemLogs?.write({

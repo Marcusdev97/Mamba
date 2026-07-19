@@ -95,6 +95,10 @@ export function campaignSummary(snapshot) {
   const skipped = assignments.filter((job) => /^SKIPPED|PART1_ONLY/.test(job.status || "")).length;
   const pending = assignments.filter((job) => job.status === "QUEUED" || /^WAITING_PART\d+$/.test(job.status || "") || /^SENDING_PART\d+$/.test(job.status || "")).length;
   const processed = Math.max(0, assignments.length - pending);
+  const nextAt = assignments
+    .filter((job) => job.status === "QUEUED" && dateMs(job.scheduledAt) > Date.now())
+    .map((job) => dateMs(job.scheduledAt))
+    .sort((a, b) => a - b)[0] || null;
   const rawStatus = state.status || (snapshot.running ? "RUNNING" : "READY");
   const status = !snapshot.running && rawStatus === "COMPLETED" && pending > 0 ? "INCOMPLETE" : rawStatus;
   const instanceNames = [
@@ -113,6 +117,7 @@ export function campaignSummary(snapshot) {
     skipped,
     pending,
     processed,
+    nextAt: nextAt ? new Date(nextAt).toISOString() : null,
     running: snapshot.running === true,
     stopped: snapshot.stopped === true,
     updatedAt: state.updatedAt || state.createdAt || null,
@@ -177,6 +182,20 @@ async function learningQueueHealth(runtime, notionConfigured) {
 }
 
 export function registerControlCenterRoutes(router) {
+  router.post("/api/reply-tracker/refresh", async (_req, res, runtime) => {
+    if (!runtime.replyServices?.refreshTracker) {
+      json(res, 503, { ok: false, error: "Reply Tracker 管理器尚未加载，请重启 Mamba 后再试。" });
+      return;
+    }
+    const result = await runtime.replyServices.refreshTracker().catch((error) => ({
+      ok: false,
+      error: error.message,
+      tracker: false,
+      trackerState: "closed",
+    }));
+    json(res, result.ok ? 200 : 503, result);
+  });
+
   router.get("/api/control-center", async (_req, res, runtime) => {
     const root = runtime.paths.rootDir;
     const today = dateKeyKL(new Date());
@@ -295,12 +314,14 @@ export function registerControlCenterRoutes(router) {
           "Reply Tracker",
           !replyServices.tracker ? "offline" : notionReplyQueue.manualReviewMessages ? "warning" : "online",
           !replyServices.tracker
-            ? "Replies will not reach Notion or Telegram"
+            ? replyServices.trackerState === "blocked"
+              ? `已关闭 · 检测到端口 ${replyServices.portConflicts?.join(", ") || replyServices.preferredPort || 8798} 被其他服务占用；点击刷新可自动改用其他端口`
+              : "已关闭 · 客户回复不会进入 Notion 或 Telegram；点击刷新可自动启动"
             : notionReplyQueue.manualReviewMessages
-              ? `${notionReplyQueue.manualReviewMessages} replies need manual review · open System Logs for the cause and solution`
+              ? `已开启 · 动态端口 ${replyServices.trackerPort} · ${notionReplyQueue.manualReviewMessages} 条回复需要人工检查`
               : notionReplyQueue.pendingMessages
-                ? `Listening · ${notionReplyQueue.pendingMessages} replies across ${notionReplyQueue.pendingPhones} phones are waiting for Notion retry`
-                : "Listening for inbound replies · Notion queue clear",
+                ? `已开启 · 动态端口 ${replyServices.trackerPort} · ${notionReplyQueue.pendingMessages} 条回复等待 Notion 重试`
+                : `已开启 · 动态端口 ${replyServices.trackerPort} · 正在监听客户回复${replyServices.portConflicts?.length ? ` · 已避开占用端口 ${replyServices.portConflicts.join(", ")}` : ""}`,
           notionReplyQueue.pendingMessages ? "/logs" : undefined,
         ),
         healthItem(

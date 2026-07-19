@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Golden Conversation Ledger · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .wrap{max-width:1380px}.tabs{display:flex;gap:6px;padding:5px;margin-bottom:16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);width:max-content}.tab{padding:9px 14px;border-radius:6px;color:var(--muted);text-decoration:none;font-weight:750}.tab.active{color:var(--text);background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--line)}
+  .hero{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.hero p{max-width:820px;color:var(--muted);line-height:1.55}.pill{padding:7px 11px;border-radius:999px;background:var(--green-bg);color:var(--green);font-weight:800;font-size:12px}
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:10px}.stat{padding:15px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel-2)}.stat span{display:block;color:var(--muted);font-size:12px}.stat b{display:block;margin-top:5px;font-size:26px}
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:11px}.span-2{grid-column:span 2}.span-all{grid-column:1/-1}.grid input,.grid select,.grid textarea{width:100%;box-sizing:border-box}.grid textarea{min-height:100px;resize:vertical;line-height:1.5}#conversationText{min-height:390px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
+  .hint{color:var(--muted);font-size:12px;line-height:1.5}.safety{padding:12px;border:1px solid rgba(37,211,102,.28);border-radius:var(--radius);background:var(--green-bg);color:var(--muted);line-height:1.5}.conditional[hidden]{display:none}
+  .decision{padding:13px;margin-top:10px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel-2)}.decision-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.decision-grid{display:grid;grid-template-columns:110px 1fr 1fr;gap:9px}.decision-grid label:nth-child(n+4){grid-column:span 1}.decision-grid input,.decision-grid textarea{width:100%;box-sizing:border-box}.decision-grid textarea{min-height:74px;resize:vertical}.mini{padding:6px 9px;font-size:12px}
+  .actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.message{margin-top:10px;white-space:pre-wrap}.ok{color:var(--green)}.err{color:var(--red)}.preview{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:var(--radius);background:#0b1018;white-space:pre-wrap;color:var(--muted)}
+  .reports{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.report{overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}.report h3{margin:0;padding:12px}.report table{width:100%;border-collapse:collapse}.report th,.report td{padding:9px 12px;border-top:1px solid var(--line);text-align:left;font-size:13px}.report th{color:var(--muted)}
+  .ledger-table{overflow:auto}.ledger-table table{width:100%;border-collapse:collapse}.ledger-table th,.ledger-table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}.ledger-table th{color:var(--muted)}.outcome{display:inline-flex;padding:3px 8px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line)}
+  @media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.stats{grid-template-columns:1fr 1fr}.decision-grid,.reports{grid-template-columns:1fr}.decision-grid label{grid-column:1!important}}
+  @media(max-width:560px){.grid,.stats{grid-template-columns:1fr}.span-2,.span-all{grid-column:1}.hero{display:block}}
+</style>
+<script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top hero">
+    <div><h1>Golden Conversation Ledger</h1><p>这里保存的是“客户说了什么 → 我读到什么 → 为什么这样推进约看”。赢的案例给 Brain 学习，没约到的案例用来诊断。楼盘价格、库存和距离不会从这里当成事实。</p></div>
+    <span class="pill" id="ledgerState">检查中</span>
+  </header>
+  <nav class="tabs"><a class="tab" href="/brain-learning">Learning Queue</a><a class="tab active" href="/golden-ledger">Golden Ledger</a></nav>
+
+  <section class="card">
+    <div class="stats">
+      <div class="stat"><span>Viewing Booked</span><b id="countBooked">0</b></div>
+      <div class="stat"><span>Active</span><b id="countActive">0</b></div>
+      <div class="stat"><span>Dormant</span><b id="countDormant">0</b></div>
+      <div class="stat"><span>Dead（只可人工标记）</span><b id="countDead">0</b></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>导入完整案例</h2>
+    <div class="safety">安全流程：先清洗姓名、电话、车牌、电邮和地址 → 检查 M/C 格式 → 预览 → 你确认后才写进本机 SQLite。不会写去 Notion，也不会启动 AI 自动回复。</div>
+    <div class="grid" style="margin-top:14px">
+      <label class="fld"><span>Project Code *</span><input id="projectCode" placeholder="ENLACE" /></label>
+      <label class="fld"><span>Origin Project（转盘才填）</span><input id="originProjectCode" placeholder="可留空" /></label>
+      <label class="fld"><span>来源</span><select id="sourceChannel"><option>blast</option><option>xhs</option><option>fb_ads</option><option>referral</option><option>walk_in</option></select></label>
+      <label class="fld"><span>Blast Version</span><input id="blastVersion" placeholder="v3-forest-zh" /></label>
+      <label class="fld"><span>语言</span><select id="language"><option value="zh">中文</option><option value="en">English</option><option value="mixed">Mixed</option><option value="ms">BM</option></select></label>
+      <label class="fld"><span>客户角色</span><select id="customerRole"><option value="self">本人</option><option value="parent">父母</option><option value="spouse">伴侣</option><option value="investor">投资者</option></select></label>
+      <label class="fld"><span>主要目的</span><select id="primaryPurpose"><option value="own_stay">自住</option><option value="investment">投资</option><option value="both">两者</option><option value="unknown">未知</option></select></label>
+      <label class="fld"><span>第一次回复类型 *</span><select id="firstReplyType"><option value="price">问价格</option><option value="timing">问时间</option><option value="specific_question">具体问题</option><option value="perfunctory">礼貌回应</option></select></label>
+      <label class="fld"><span>结果 *</span><select id="outcome"><option>Viewing Booked</option><option>Active</option><option>Dormant</option><option>Dead</option></select></label>
+      <label class="fld"><span>客户最后回复日期</span><input id="lastCustomerReplyAt" type="date" /></label>
+      <label class="fld span-2"><span>需要隐藏的真实姓名</span><input id="privateNames" placeholder="多个名字用逗号分开；写库后只会保留 {{NAME}}" /></label>
+      <label class="fld conditional span-2" data-for="booked"><span>让客户答应来的一句 *</span><input id="triggerMessage" /></label>
+      <label class="fld conditional span-2" data-for="booked"><span>客户随后主动做了什么 *</span><input id="customerNextMove" /></label>
+      <label class="fld conditional span-all" data-for="dead"><span>为什么明确判 Dead *</span><input id="deathNote" placeholder="例如：客户明确说已买别家" /></label>
+      <label class="fld span-all"><span>完整对话 *</span><textarea id="conversationText" placeholder="[M1] blast:v3-forest-zh&#10;Hi...&#10;&#10;[C1] +3m&#10;多少钱？&#10;&#10;[M2] +5m&#10;...&#10;&#10;[—] 无回复"></textarea></label>
+      <div class="hint span-all">必须从 M1 / C1 连续编号；时间只写 +3m、+2h、+1d；最后一行使用 [—] 无回复 / 明确拒绝 / 已约。至少要有 C1。</div>
+      <fieldset class="span-all" style="border:1px solid var(--line);border-radius:var(--radius);padding:12px"><legend>已经拿掉的到场阻力</legend><div class="actions" id="frictions"></div></fieldset>
+      <label class="fld span-2"><span>不可模仿的话术（每行：原句 | 原因）</span><textarea id="doNotCopy" placeholder="银行稳批 | 客户已说吃紧，继续压回去导致收线"></textarea></label>
+      <label class="fld span-2"><span>与 Project Knowledge 冲突（每行：说法 | PK 状态 | 下一步）</span><textarea id="pkConflicts" placeholder="发展商 IJM | flagged | 等 Marcus 在 PK 定案"></textarea></label>
+    </div>
+
+    <div style="margin-top:18px"><div class="actions"><h2 style="margin:0">Decision Trace</h2><button class="btn mini" id="addDecision" type="button">+ 增加关键回合</button></div><p class="hint">只记改变方向的 3–6 个客户回合。“我读到什么”必须由人填写，系统不会假装自动理解 Marcus 的判断。</p><div id="decisions"></div></div>
+    <div class="actions" style="margin-top:16px"><button class="btn primary" id="previewBtn">1. 安全预检</button><button class="btn" id="saveBtn" disabled>2. 确认写入 SQLite</button><button class="btn" id="clearBtn">清空</button></div>
+    <div id="formMessage" class="message"></div><div id="previewBox" class="preview" hidden></div>
+  </section>
+
+  <section class="card"><div class="actions" style="justify-content:space-between"><h2>诊断报表</h2><button class="btn" id="refreshBtn">刷新</button></div><div class="reports" id="reports"></div></section>
+  <section class="card"><h2>最近案例</h2><div class="ledger-table" id="records"></div></section>
+</div>
+<script>
+const $=id=>document.getElementById(id);const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const frictionOptions=["nett_price_calc","monthly_diff_calc","waze_link","carpark_reserved","virtual_tour","showunit_video","ab_time_slot","parking_guidance"];
+let previewPayload=null;let decisionNumber=0;
+$("frictions").innerHTML=frictionOptions.map(x=>`<label class="checkline"><input type="checkbox" value="${x}"/> ${x}</label>`).join("");
+function addDecision(value={}){decisionNumber++;const node=document.createElement("div");node.className="decision";node.innerHTML=`<div class="decision-head"><b>关键客户回合</b><button class="btn mini remove" type="button">移除</button></div><div class="decision-grid"><label class="fld"><span>回合 *</span><input class="d-turn" placeholder="C2" value="${esc(value.turn||"")}"/></label><label class="fld"><span>客户 Signal *</span><textarea class="d-signal">${esc(value.signal||"")}</textarea></label><label class="fld"><span>我读到什么 *</span><textarea class="d-read">${esc(value.read||"")}</textarea></label><label class="fld"><span>因此做了什么 *</span><textarea class="d-move">${esc(value.move||"")}</textarea></label><label class="fld"><span>为什么不是另一条路 *</span><textarea class="d-why">${esc(value.why||"")}</textarea></label><label class="fld"><span>客户下一步反应 *</span><textarea class="d-effect">${esc(value.effect||"")}</textarea></label></div>`;node.querySelector(".remove").onclick=()=>node.remove();$("decisions").appendChild(node)}
+addDecision();addDecision();addDecision();
+function lineObjects(id,keys){return $(id).value.split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{const parts=line.split("|").map(x=>x.trim());return Object.fromEntries(keys.map((key,i)=>[key,parts[i]||""]))})}
+function payload(){const decisions=[...document.querySelectorAll(".decision")].map(node=>({turn:node.querySelector(".d-turn").value.trim(),signal:node.querySelector(".d-signal").value.trim(),read:node.querySelector(".d-read").value.trim(),move:node.querySelector(".d-move").value.trim(),why:node.querySelector(".d-why").value.trim(),effect:node.querySelector(".d-effect").value.trim()})).filter(x=>Object.values(x).some(Boolean));return {projectCode:$("projectCode").value.trim(),originProjectCode:$("originProjectCode").value.trim(),sourceChannel:$("sourceChannel").value,blastVersion:$("blastVersion").value.trim(),language:$("language").value,customerRole:$("customerRole").value,primaryPurpose:$("primaryPurpose").value,firstReplyType:$("firstReplyType").value,outcome:$("outcome").value,lastCustomerReplyAt:$("lastCustomerReplyAt").value||null,privateNames:$("privateNames").value.split(",").map(x=>x.trim()).filter(Boolean),triggerMessage:$("triggerMessage").value.trim(),customerNextMove:$("customerNextMove").value.trim(),deathNote:$("deathNote").value.trim(),conversationText:$("conversationText").value,frictionRemovers:[...document.querySelectorAll("#frictions input:checked")].map(x=>x.value),decisionTrace:decisions,doNotCopy:lineObjects("doNotCopy",["quote","reason"]),pkConflicts:lineObjects("pkConflicts",["claim","pk_status","action"])} }
+function outcomeFields(){const booked=$("outcome").value==="Viewing Booked",dead=$("outcome").value==="Dead";document.querySelectorAll('[data-for="booked"]').forEach(x=>x.hidden=!booked);document.querySelectorAll('[data-for="dead"]').forEach(x=>x.hidden=!dead);previewPayload=null;$("saveBtn").disabled=true}
+async function api(url,options){const response=await fetch(url,options);const data=await response.json();if(!data.ok)throw new Error(data.error+(data.details?.field?`（${data.details.field}）`:""));return data}
+async function preview(){setMessage("正在清洗和检查…","");$("previewBtn").disabled=true;try{previewPayload=payload();const data=await api("/api/golden-conversations/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(previewPayload)});$("previewBox").hidden=false;$("previewBox").textContent=`预检通过\n匿名代号：${data.summary.leadCode}\n项目：${data.summary.projectCode}\n结果：${data.summary.outcome}\n对话回合：${data.summary.turns}（客户 ${data.summary.customerTurns}）\n结束：${data.summary.ending}\nPII：已清洗\nSource Hash：${data.summary.sourceHash}`;$("saveBtn").disabled=false;setMessage("✓ 安全预检通过。请检查预览后再写入。","ok")}catch(error){previewPayload=null;$("saveBtn").disabled=true;$("previewBox").hidden=true;setMessage(error.message,"err")}finally{$("previewBtn").disabled=false}}
+async function save(){if(!previewPayload)return;if(!confirm("确认把已清洗案例写入本机 SQLite Golden Ledger？"))return;$("saveBtn").disabled=true;try{const data=await api("/api/golden-conversations/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(previewPayload)});setMessage(`✓ 已写入 ${data.leadCode}。Notion 没有被修改。`,"ok");await refresh()}catch(error){setMessage(error.message,"err")}finally{$("saveBtn").disabled=false}}
+function setMessage(text,kind){$("formMessage").className=`message ${kind}`;$("formMessage").textContent=text}
+function table(title,rows){if(!rows?.length)return `<div class="report"><h3>${esc(title)}</h3><div class="hint" style="padding:12px">还没有足够资料</div></div>`;const keys=Object.keys(rows[0]);return `<div class="report"><h3>${esc(title)}</h3><table><thead><tr>${keys.map(k=>`<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr>${keys.map(k=>`<td>${esc(row[k]??"-")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`}
+async function refresh(){try{const [status,reports,records]=await Promise.all([api("/api/golden-conversations/status"),api("/api/golden-conversations/reports"),api("/api/golden-conversations?limit=50")]);$("ledgerState").textContent=`SQLite GC v${status.schemaVersion} · READY`;const counts=Object.fromEntries((status.counts||[]).map(x=>[x.outcome,x.count]));$("countBooked").textContent=counts["Viewing Booked"]||0;$("countActive").textContent=counts.Active||0;$("countDormant").textContent=counts.Dormant||0;$("countDead").textContent=counts.Dead||0;$("reports").innerHTML=table("对话死点",reports.deathPoints)+table("Blast → 约看率",reports.blastQuality)+table("Follow-up 复活率",reports.followupEffectiveness)+table("沉默间隔效果",reports.silenceGap);$("records").innerHTML=records.records?.length?`<table><thead><tr><th>Lead</th><th>Project</th><th>Outcome</th><th>First Reply</th><th>Updated</th></tr></thead><tbody>${records.records.map(x=>`<tr><td>${esc(x.lead_code)}</td><td>${esc(x.project_code)}</td><td><span class="outcome">${esc(x.outcome)}</span></td><td>${esc(x.first_reply_type||"-")}</td><td>${esc(new Date(x.outcome_updated_at).toLocaleDateString("en-MY"))}</td></tr>`).join("")}</tbody></table>`:'<div class="hint">还没有案例</div>'}catch(error){$("ledgerState").textContent="Ledger Error";setMessage(error.message,"err")}}
+function clearForm(){document.querySelectorAll("input:not([type=checkbox]),textarea").forEach(x=>x.value="");document.querySelectorAll("input[type=checkbox]").forEach(x=>x.checked=false);$("decisions").innerHTML="";addDecision();addDecision();addDecision();previewPayload=null;$("saveBtn").disabled=true;$("previewBox").hidden=true;setMessage("","");outcomeFields()}
+$("addDecision").onclick=()=>addDecision();$("outcome").onchange=outcomeFields;$("previewBtn").onclick=preview;$("saveBtn").onclick=save;$("clearBtn").onclick=clearForm;$("refreshBtn").onclick=refresh;outcomeFields();refresh();
+</script>
+</body>
+</html>

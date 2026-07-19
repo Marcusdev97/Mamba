@@ -49,6 +49,25 @@ function importId(date = new Date()) {
   return `import_${date.toISOString().replace(/[:.]/g, "-")}_${crypto.randomUUID().slice(0, 8)}`;
 }
 
+function leadGroupId() {
+  return `group_${crypto.randomUUID()}`;
+}
+
+function cleanGroupName(value) {
+  const name = clean(value).replace(/\s+/g, " ");
+  if (!name) {
+    const error = new Error("客户群名称不能为空。");
+    error.code = "LEAD_GROUP_NAME_REQUIRED";
+    throw error;
+  }
+  if (name.length > 80) {
+    const error = new Error("客户群名称最多 80 个字。");
+    error.code = "LEAD_GROUP_NAME_TOO_LONG";
+    throw error;
+  }
+  return name;
+}
+
 function cohortNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
@@ -231,6 +250,204 @@ export function createLocalDatabaseService({
       throw error;
     }
     return detected.binary;
+  }
+
+  function requireLeadGroupScope() {
+    const deviceKey = clean(device?.id);
+    const senderPhone = senderPolicy?.configured ? normalizePhone(senderPolicy.expectedSenderPhone) : "";
+    if (!deviceKey || !senderPhone) {
+      const error = new Error("这台电脑尚未绑定真实 WhatsApp 号码，不能建立或读取客户群。请先到 Settings 完成本机号码设置。");
+      error.code = "LEAD_GROUP_DEVICE_SCOPE_REQUIRED";
+      throw error;
+    }
+    return { deviceKey, senderPhone };
+  }
+
+  function readableGroupWriteError(error) {
+    if (/idx_lead_groups_scope_name|UNIQUE constraint failed: lead_groups/i.test(String(error?.message || ""))) {
+      const wrapped = new Error("这个项目已经有同名客户群。请换一个名字，或直接选择现有客户群。");
+      wrapped.code = "LEAD_GROUP_NAME_EXISTS";
+      return wrapped;
+    }
+    return error;
+  }
+
+  async function listLeadGroups({ projectCode = "" } = {}) {
+    const binary = await requireV3Database();
+    const { deviceKey, senderPhone } = requireLeadGroupScope();
+    const projectFilter = clean(projectCode)
+      ? `AND g.project_code = ${sqlText(clean(projectCode))}`
+      : "";
+    const rows = await queryJson(binary, `
+SELECT g.group_id AS id, g.group_name AS name, g.project_code AS projectCode,
+       g.source_type AS sourceType, g.source_name AS sourceName,
+       g.device_key AS deviceId, g.sender_phone AS senderPhone,
+       g.status, g.created_at AS createdAt, g.updated_at AS updatedAt,
+       COUNT(m.member_id) AS memberCount
+FROM lead_groups g
+LEFT JOIN lead_group_members m ON m.group_id = g.group_id
+WHERE g.device_key = ${sqlText(deviceKey)}
+  AND g.sender_phone = ${sqlText(senderPhone)}
+  AND g.status = 'ACTIVE'
+  ${projectFilter}
+GROUP BY g.group_id
+ORDER BY g.updated_at DESC, g.created_at DESC;
+`);
+    return rows.map((row) => ({ ...row, memberCount: Number(row.memberCount || 0) }));
+  }
+
+  async function readLeadGroup({ groupId, projectCode = "" } = {}) {
+    const binary = await requireV3Database();
+    const { deviceKey, senderPhone } = requireLeadGroupScope();
+    const id = clean(groupId);
+    if (!id) {
+      const error = new Error("请选择一个客户群。");
+      error.code = "LEAD_GROUP_ID_REQUIRED";
+      throw error;
+    }
+    const projectFilter = clean(projectCode)
+      ? `AND project_code = ${sqlText(clean(projectCode))}`
+      : "";
+    const [group] = await queryJson(binary, `
+SELECT group_id AS id, group_name AS name, project_code AS projectCode,
+       source_type AS sourceType, source_name AS sourceName,
+       device_key AS deviceId, sender_phone AS senderPhone,
+       status, created_at AS createdAt, updated_at AS updatedAt
+FROM lead_groups
+WHERE group_id = ${sqlText(id)}
+  AND device_key = ${sqlText(deviceKey)}
+  AND sender_phone = ${sqlText(senderPhone)}
+  AND status = 'ACTIVE'
+  ${projectFilter}
+LIMIT 1;
+`);
+    if (!group) {
+      const error = new Error("找不到这个本机客户群，或它属于另一台电脑/另一个 WhatsApp 号码。");
+      error.code = "LEAD_GROUP_NOT_LOCAL";
+      throw error;
+    }
+    const members = await queryJson(binary, `
+SELECT member_id AS id, name, phone, language, source_row AS sourceRow
+FROM lead_group_members
+WHERE group_id = ${sqlText(id)}
+ORDER BY COALESCE(source_row, 2147483647), created_at, member_id;
+`);
+    return {
+      ...group,
+      memberCount: members.length,
+      leads: members.map((member) => ({
+        id: clean(member.id),
+        name: clean(member.name) || "there",
+        phone: normalizePhone(member.phone),
+        ...(clean(member.language) ? { language: clean(member.language) } : {}),
+        sourceRow: member.sourceRow === null || member.sourceRow === undefined ? null : Number(member.sourceRow),
+      })).filter((member) => member.phone),
+    };
+  }
+
+  async function createLeadGroup({ projectCode, projectName, name, sourceType = "file", sourceName = "", leads = [] } = {}) {
+    const binary = await requireV3Database();
+    const { deviceKey, senderPhone } = requireLeadGroupScope();
+    const code = clean(projectCode);
+    if (!code) {
+      const error = new Error("客户群缺少 Project，无法保存。");
+      error.code = "LEAD_GROUP_PROJECT_REQUIRED";
+      throw error;
+    }
+    const groupName = cleanGroupName(name);
+    const allowedSource = ["file", "manual", "database"].includes(clean(sourceType)) ? clean(sourceType) : "file";
+    const seen = new Set();
+    const normalized = [];
+    for (const lead of Array.isArray(leads) ? leads : []) {
+      const phone = normalizePhone(lead?.phone);
+      if (!phone || seen.has(phone)) continue;
+      seen.add(phone);
+      normalized.push({
+        id: clean(lead?.id) || `member_${crypto.randomUUID()}`,
+        name: clean(lead?.name) || "there",
+        phone,
+        language: clean(lead?.language),
+        sourceRow: Number.isFinite(Number(lead?.sourceRow)) ? Number(lead.sourceRow) : null,
+      });
+    }
+    if (!normalized.length) {
+      const error = new Error("客户群没有可用客户。请检查号码格式，或确认客户没有全部被重复/STOP 规则排除。");
+      error.code = "LEAD_GROUP_EMPTY";
+      throw error;
+    }
+    const id = leadGroupId();
+    const now = new Date().toISOString();
+    const statements = [
+      "PRAGMA foreign_keys = ON;",
+      "BEGIN IMMEDIATE;",
+      `INSERT INTO projects(project_code, project_name, aliases_json, active, created_at, updated_at)
+       VALUES (${sqlText(code)}, ${sqlText(clean(projectName) || code)}, '[]', 1, ${sqlText(now)}, ${sqlText(now)})
+       ON CONFLICT(project_code) DO UPDATE SET
+         project_name=CASE WHEN excluded.project_name <> '' THEN excluded.project_name ELSE projects.project_name END,
+         active=1, updated_at=excluded.updated_at;`,
+      `INSERT INTO lead_groups(
+         group_id, project_code, group_name, source_type, source_name,
+         device_key, sender_phone, status, created_at, updated_at
+       ) VALUES (
+         ${sqlText(id)}, ${sqlText(code)}, ${sqlText(groupName)}, ${sqlText(allowedSource)}, ${sqlText(clean(sourceName))},
+         ${sqlText(deviceKey)}, ${sqlText(senderPhone)}, 'ACTIVE', ${sqlText(now)}, ${sqlText(now)}
+       );`,
+    ];
+    for (const member of normalized) {
+      statements.push(`INSERT INTO lead_group_members(
+        group_id, member_id, phone, name, language, source_row, created_at, updated_at
+      ) VALUES (
+        ${sqlText(id)}, ${sqlText(member.id)}, ${sqlText(member.phone)}, ${sqlText(member.name)},
+        ${sqlText(member.language)}, ${member.sourceRow === null ? "NULL" : sqlNumber(member.sourceRow)},
+        ${sqlText(now)}, ${sqlText(now)}
+      );`);
+    }
+    statements.push("COMMIT;");
+    try {
+      await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 60000);
+    } catch (error) {
+      throw readableGroupWriteError(error);
+    }
+    return readLeadGroup({ groupId: id, projectCode: code });
+  }
+
+  async function renameLeadGroup({ groupId, projectCode = "", name } = {}) {
+    const binary = await requireV3Database();
+    const { deviceKey, senderPhone } = requireLeadGroupScope();
+    const group = await readLeadGroup({ groupId, projectCode });
+    const groupName = cleanGroupName(name);
+    const now = new Date().toISOString();
+    try {
+      await runProcess(binary, ["-batch", databasePath], `
+BEGIN IMMEDIATE;
+UPDATE lead_groups SET group_name=${sqlText(groupName)}, updated_at=${sqlText(now)}
+WHERE group_id=${sqlText(group.id)} AND device_key=${sqlText(deviceKey)} AND sender_phone=${sqlText(senderPhone)};
+COMMIT;
+`);
+    } catch (error) {
+      throw readableGroupWriteError(error);
+    }
+    return readLeadGroup({ groupId: group.id, projectCode: group.projectCode });
+  }
+
+  async function updateLeadGroupMembers({ groupId, projectCode = "", edits = [] } = {}) {
+    const binary = await requireV3Database();
+    const group = await readLeadGroup({ groupId, projectCode });
+    const existing = new Set(group.leads.map((lead) => lead.id));
+    const now = new Date().toISOString();
+    const statements = ["BEGIN IMMEDIATE;"];
+    let updated = 0;
+    for (const edit of Array.isArray(edits) ? edits : []) {
+      const id = clean(edit?.id);
+      const name = clean(edit?.name);
+      if (!id || !name || !existing.has(id)) continue;
+      statements.push(`UPDATE lead_group_members SET name=${sqlText(name)}, updated_at=${sqlText(now)}
+        WHERE group_id=${sqlText(group.id)} AND member_id=${sqlText(id)};`);
+      updated += 1;
+    }
+    statements.push(`UPDATE lead_groups SET updated_at=${sqlText(now)} WHERE group_id=${sqlText(group.id)};`, "COMMIT;");
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 60000);
+    return { updated, group: await readLeadGroup({ groupId: group.id, projectCode: group.projectCode }) };
   }
 
   async function previewNotionImport() {
@@ -857,6 +1074,11 @@ COMMIT;
     applyNotionImport,
     syncNotionRecords,
     readLeadCache,
+    listLeadGroups,
+    readLeadGroup,
+    createLeadGroup,
+    renameLeadGroup,
+    updateLeadGroupMembers,
     setStorageMode,
     isPrimary,
   };

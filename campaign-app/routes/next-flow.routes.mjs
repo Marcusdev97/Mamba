@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { httpError, json, readJson } from "../lib/http.mjs";
+import { recordDeviceScope } from "../lib/device-scope.mjs";
 
 function requireNextFlow(runtime) {
   if (!runtime.nextFlow) {
@@ -17,6 +18,47 @@ function requireBlastDatabase(nextFlow) {
 
 function pageId(id) {
   return String(id || "").replace(/[^a-fA-F0-9]/g, "");
+}
+
+function requireDeviceScope(nextFlow) {
+  const device = nextFlow.device || {};
+  if (device.configured !== true || device.senderPolicyConfigured !== true || !device.senderPhones?.length) {
+    throw httpError(409, "这台电脑还没有完整绑定 Device ID + 真实 WhatsApp 号码。为避免跨电脑误发，Flow 2–10 已锁定；请先到 Settings 设置本机号码。");
+  }
+  return device;
+}
+
+function pageOwnershipRecord(nextFlow, page) {
+  const props = page?.properties || {};
+  return {
+    id: page?.id || "",
+    senderInstance: nextFlow.nfSelect(page, "Sender Instance") || "",
+    assignedSenderKey: nextFlow.nfSelect(page, "Assigned Sender Key") || nextFlow.nfText(page, "Assigned Sender Key") || "",
+    lastSenderKey: nextFlow.nfSelect(page, "Last Sender Key") || nextFlow.nfText(page, "Last Sender Key") || "",
+    lastSenderPhone: props["Last Sender Phone"]?.phone_number || nextFlow.nfText(page, "Last Sender Phone") || "",
+    lastSentByDevice: nextFlow.nfSelect(page, "Last Sent By Device") || nextFlow.nfText(page, "Last Sent By Device") || "",
+  };
+}
+
+export function nextFlowPageDeviceScope(nextFlow, page) {
+  return recordDeviceScope(pageOwnershipRecord(nextFlow, page), { device: nextFlow.device || {} });
+}
+
+function requireLocalPage(nextFlow, page, action = "操作") {
+  requireDeviceScope(nextFlow);
+  const scope = nextFlowPageDeviceScope(nextFlow, page);
+  if (scope !== "local") {
+    throw httpError(403, `${action}已拒绝：客户不属于这台电脑绑定的 WhatsApp 号码（scope=${scope}）。`);
+  }
+  return page;
+}
+
+function requireLocalRunner(nextFlow, runner, action = "Next Flow") {
+  const device = requireDeviceScope(nextFlow);
+  if (!runner?.state || String(runner.state.deviceId || "") !== String(device.id || "")) {
+    throw httpError(403, `${action}已拒绝：Campaign 不属于这台电脑。`);
+  }
+  return runner;
 }
 
 // 拦截逻辑统一搬去 lead_gatekeeper.mjs (2026-07-11 架构重构) — 这里 re-export
@@ -332,6 +374,7 @@ export function registerNextFlowRoutes(router) {
       json(res, 200, { ok: true, replies: [] });
       return;
     }
+    requireLocalRunner(nextFlow, runner, "回复扫描");
     requireBlastDatabase(nextFlow);
 
     const state = runner.state;
@@ -398,6 +441,7 @@ export function registerNextFlowRoutes(router) {
       json(res, 200, { ok: true, leads: [] });
       return;
     }
+    const localDevice = requireDeviceScope(nextFlow);
     // deep=1 -> 直接扫 Evolution (慢, 手动按钮); 默认读 tracker 产物 (快)。
     const deep = new URL(req.url, "http://x").searchParams.get("deep") === "1";
 
@@ -414,6 +458,7 @@ export function registerNextFlowRoutes(router) {
 
     const leads = [];
     const blocked = [];
+    const ownershipCounts = { local: 0, remote: 0, legacy: 0, unassigned: 0 };
     const gateSnapshot = loadGateSnapshot(); // 全局 STOP 名单一次载入, 整批复用
     let cursor;
     try {
@@ -425,6 +470,9 @@ export function registerNextFlowRoutes(router) {
           const phone = nextFlow.normalizePhone(nextFlow.nfPhone(page, "Phone"));
           const next = nextFlow.nfSelect(page, "Next Flow");
           if (!phone || !next || next === "Completed") continue;
+          const ownership = nextFlowPageDeviceScope(nextFlow, page);
+          ownershipCounts[ownership] = (ownershipCounts[ownership] || 0) + 1;
+          if (ownership !== "local") continue;
           const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
           if (!gate.ok) {
             blocked.push({
@@ -557,19 +605,36 @@ export function registerNextFlowRoutes(router) {
         truncated: scanDiagnostics.some((item) => item.truncated),
         errors: scanDiagnostics.filter((item) => item.error),
       },
+      deviceScope: {
+        mode: "strict-device-sender",
+        deviceId: localDevice.id,
+        senderSuffixes: localDevice.senderPhones.map((phone) => String(phone).slice(-4)),
+        ...ownershipCounts,
+      },
     });
   });
 
   router.post("/api/next-flow/redflag", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
     requireBlastDatabase(nextFlow);
+    requireDeviceScope(nextFlow);
     const body = await readJson(req);
     const ids = Array.isArray(body.pageIds) ? body.pageIds : [];
+    const pages = [];
+    for (const id of ids) {
+      let page;
+      try {
+        page = await nextFlow.notion("GET", `/pages/${pageId(id)}`);
+      } catch (error) {
+        throw httpError(502, `标记不发前读取客户归属失败: ${error.message}`);
+      }
+      pages.push(requireLocalPage(nextFlow, page, "标记不发"));
+    }
     let done = 0;
 
-    for (const id of ids) {
+    for (const page of pages) {
       try {
-        await nextFlow.notion("PATCH", `/pages/${pageId(id)}`, { properties: {
+        await nextFlow.notion("PATCH", `/pages/${pageId(page.id)}`, { properties: {
           "Stop Flag": { checkbox: true },
           "Sequence Status": { select: { name: "Stopped" } },
           "Stop Reason": { rich_text: [{ text: { content: "Manual: marked 不发 in picker" } }] },
@@ -586,6 +651,7 @@ export function registerNextFlowRoutes(router) {
 
   router.post("/api/next-flow/load", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
+    requireDeviceScope(nextFlow);
     const replySafety = await currentReplySafety(runtime);
     if (!replySafety.safeToSend) {
       throw httpError(409, `回复安全检查已过期。Tracker 超过 ${replySafety.maxAgeMinutes} 分钟没有更新，请先按「Refresh + Check WhatsApp」完成深度扫描。`);
@@ -618,12 +684,18 @@ export function registerNextFlowRoutes(router) {
 
     const leads = [];
     const blocked = [];
+    const foreignSelected = [];
     const gateSnapshot = loadGateSnapshot();
     for (const item of normalized) {
       const phone = item.phone;
       const page = currentPages.get(pageId(item.pageId));
       if (!page) {
         blocked.push({ phone, name: String(item.name ?? "").trim() || phone, reason: "Notion row not found" });
+        continue;
+      }
+      const ownership = nextFlowPageDeviceScope(nextFlow, page);
+      if (ownership !== "local") {
+        foreignSelected.push({ phone, ownership });
         continue;
       }
       const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
@@ -638,6 +710,9 @@ export function registerNextFlowRoutes(router) {
         senderInstance: String(item.senderInstance ?? "").trim(),
       });
     }
+    if (foreignSelected.length) {
+      throw httpError(403, `发送已拒绝：选中的 ${foreignSelected.length} 位客户不属于本机 Device + WhatsApp 号码。请刷新名单后重选。`);
+    }
     if (!leads.length) {
       const detail = blocked.length ? `（${blocked.length} 人已拒绝、STOP 或转人工）` : "";
       throw httpError(400, `没有可发送的选中客户${detail}。`);
@@ -650,6 +725,7 @@ export function registerNextFlowRoutes(router) {
   router.post("/api/next-flow/set-flow", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
     requireBlastDatabase(nextFlow);
+    requireDeviceScope(nextFlow);
     const body = await readJson(req);
     const targetFlow = String(body.nextFlow ?? "").trim();
     const target = nextFlow.flowByLabel(targetFlow);
@@ -672,13 +748,26 @@ export function registerNextFlowRoutes(router) {
     let skippedStop = 0;
     let skippedRejected = 0;
     const notFound = [];
-    const gateSnapshot = loadGateSnapshot();
+    const targets = [];
+    const foreign = [];
     for (const phone of phones) {
       const page = await queryLeadPage(nextFlow, phone);
       if (!page) {
         notFound.push(phone);
         continue;
       }
+      const ownership = nextFlowPageDeviceScope(nextFlow, page);
+      if (ownership !== "local") {
+        foreign.push({ phone, ownership });
+        continue;
+      }
+      targets.push({ phone, page });
+    }
+    if (foreign.length) {
+      throw httpError(403, `改 Flow 已拒绝：${foreign.length} 位客户不属于这台电脑。`);
+    }
+    const gateSnapshot = loadGateSnapshot();
+    for (const { phone, page } of targets) {
       const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
       if (!gate.ok) {
         if (isStopReason(gate.reason)) skippedStop += 1;
@@ -704,6 +793,7 @@ export function registerNextFlowRoutes(router) {
   router.post("/api/next-flow/set-group", async (req, res, runtime) => {
     const nextFlow = requireNextFlow(runtime);
     requireBlastDatabase(nextFlow);
+    requireDeviceScope(nextFlow);
     const body = await readJson(req);
     const projectName = String(body.projectName ?? "").trim();
     const fromFlow = String(body.fromFlow ?? "").trim();
@@ -730,6 +820,7 @@ export function registerNextFlowRoutes(router) {
     let cursor;
     let skippedStop = 0;
     let skippedRejected = 0;
+    let skippedForeign = 0;
     const groupGateSnapshot = loadGateSnapshot();
     do {
       const query = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, {
@@ -742,6 +833,10 @@ export function registerNextFlowRoutes(router) {
         ...(cursor ? { start_cursor: cursor } : {}),
       });
       for (const page of query?.results ?? []) {
+        if (nextFlowPageDeviceScope(nextFlow, page) !== "local") {
+          skippedForeign += 1;
+          continue;
+        }
         // canSend 没给 phone 时会自己从行里抓 phone_number 查全局 STOP
         const gate = canSend({ page, classifyReplyText: nextFlow.classifyReplyText, snapshot: groupGateSnapshot });
         if (!gate.ok) {
@@ -763,7 +858,7 @@ export function registerNextFlowRoutes(router) {
       await sleep(350);
     }
 
-    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop, skippedRejected, matched: targets.length });
+    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop, skippedRejected, skippedForeign, matched: targets.length });
   });
 
   router.post("/api/next-flow/preview-template", async (req, res, runtime) => {
@@ -789,6 +884,7 @@ export function registerNextFlowRoutes(router) {
     const body = await readJson(req);
     const runner = nextFlow.getRunner(body.runId);
     if (!runner || !runner.state) throw httpError(400, "请先 prepare。");
+    requireLocalRunner(nextFlow, runner, "套用 Next Flow 模板");
     if (runner.running) throw httpError(409, "campaign 正在运行。");
 
     const projectName = String(body.projectName ?? "").trim();

@@ -176,7 +176,7 @@
     <div class="card database-card">
       <div class="card-head"><div>
         <h2 class="step-title"><span class="step-no">3</span> Local Database</h2>
-        <div class="card-kicker">SQLite · 每台 Mac 独立 · Dry Run → 正式导入 → Primary</div>
+        <div class="card-kicker">SQLite · 每台 Mac 独立 · 从 Notion 一键刷新 → Primary</div>
       </div></div>
       <div class="health" id="databaseHealth">
         <div class="chip">SQLite <b>查询中...</b></div>
@@ -193,13 +193,11 @@
       <div class="actions">
         <button class="btn primary" id="btnInitDatabase">初始化 SQLite 数据库壳</button>
         <button class="btn" id="btnRefreshDatabase">刷新状态</button>
-        <button class="btn" id="btnImportNotion" disabled>Notion → SQLite Dry Run</button>
-        <button class="btn" id="btnApplyNotion" disabled>正式导入本机客户</button>
+        <button class="btn" id="btnApplyNotion" disabled>从 Notion 刷新本机客户</button>
         <button class="btn" id="btnDatabaseMode" disabled>启用 SQLite Primary</button>
       </div>
-      <div class="database-report hidden" id="databaseDryRun"></div>
       <div class="database-note" style="margin-top:14px">
-        <b>安全顺序：</b>Dry Run 只对账；正式导入会先备份再用单一事务写入本机 SQLite；Primary 才会让 Customer Desk、Follow-Up 和 Customer Search 从 SQLite 读取。任何一步都不会发送 WhatsApp，也不会修改 Notion。
+        <b>说明：</b>点『从 Notion 刷新本机客户』会把 Notion 最新资料同步进本机 SQLite；Primary 才会让 Customer Desk、Follow-Up 和 Customer Search 从 SQLite 读取。不会发送 WhatsApp，也不会修改 Notion。面板每 15 分钟也会自动刷新一次。
       </div>
     </div>
 
@@ -511,7 +509,7 @@ function formatBytes(value) {
 function renderLocalDatabase(database) {
   const db = database || {};
   const primary = db.storageMode === "primary";
-  const imported = Boolean(db.notionImport?.latestApply) && Number(db.counts?.projectLeads || 0) > 0;
+  const imported = Number(db.counts?.projectLeads || 0) > 0;
   let state = "NOT INITIALIZED";
   let stateClass = "warn";
   if (!db.driverAvailable) { state = "DRIVER MISSING"; stateClass = "bad"; }
@@ -532,7 +530,7 @@ function renderLocalDatabase(database) {
       ? "SQLite Primary 正在运行。本机客户读取来自 SQLite；Notion 仍保留作云端镜像和手动刷新来源。"
       : imported
         ? "本机客户已经安全导入 SQLite，目前仍是 Shadow。检查数量后可启用 Primary。"
-        : "SQLite 已准备好。先 Dry Run PASS，再正式导入本机客户。"
+        : "SQLite 已准备好。点『从 Notion 刷新本机客户』导入/更新，再启用 Primary。"
     : db.health === "migration_required"
       ? "检测到旧版 SQLite v" + (db.schemaVersion || "1") + "。为保护资料不会原地覆盖，请先运行 v2 → v3 Dry Run 与迁移。"
     : db.health === "error"
@@ -545,33 +543,11 @@ function renderLocalDatabase(database) {
   $("btnInitDatabase").textContent = db.health === "migration_required"
     ? "旧库需要安全迁移"
     : db.initialized ? "检查并更新 SQLite Schema" : "初始化 SQLite Shadow";
-  $("btnImportNotion").disabled = !(db.initialized && db.health === "ready" && db.expectedSenderPhone);
-  $("btnApplyNotion").disabled = !(db.initialized && db.health === "ready" && db.notionImport?.latestDryRun?.safeToApply);
-  $("btnApplyNotion").textContent = imported ? "重新同步本机客户" : "正式导入本机客户";
+  $("btnApplyNotion").disabled = !(db.initialized && db.health === "ready");
+  $("btnApplyNotion").textContent = "从 Notion 刷新本机客户";
   $("btnDatabaseMode").disabled = !(db.initialized && db.health === "ready" && imported);
   $("btnDatabaseMode").textContent = primary ? "暂停 SQLite Primary" : "启用 SQLite Primary";
   $("btnDatabaseMode").dataset.mode = primary ? "shadow" : "primary";
-  renderDatabaseDryRun(db.notionImport?.latestDryRun || null);
-}
-
-function renderDatabaseDryRun(report) {
-  const box = $("databaseDryRun");
-  if (!report) {
-    box.classList.add("hidden");
-    box.textContent = "";
-    return;
-  }
-  const scope = report.scope || {};
-  const result = report.safeToApply ? "PASS · 可以进入下一阶段审核" : "HOLD · 先处理阻塞问题";
-  const blockers = (report.blockedReasons || []).length ? "\n阻塞: " + report.blockedReasons.join("；") : "";
-  box.textContent =
-    "最近 Dry Run: " + result + "\n" +
-    "Notion 总数 " + (report.sourceCount || 0) + " · 本机候选 " + (report.scopedCount || 0) +
-    " · 其他电脑 " + (scope.remote || 0) + " · Legacy " + (scope.legacy || 0) + " · 未归属 " + (scope.unassigned || 0) + "\n" +
-    "预计新增 " + (report.inserts || 0) + " · 更新 " + (report.updates || 0) + " · 不变 " + (report.unchanged || 0) +
-    " · 本机 SQLite 独有 " + (report.localOnly || 0) + " · 无效 " + (report.invalid || 0) + " · 冲突 " + (report.collisions || 0) +
-    blockers;
-  box.classList.remove("hidden");
 }
 
 async function refreshLocalDatabase() {
@@ -852,33 +828,15 @@ $("btnInitDatabase").addEventListener("click", async () => {
 
 $("btnRefreshDatabase").addEventListener("click", refreshLocalDatabase);
 
-$("btnImportNotion").addEventListener("click", async () => {
-  if (!confirm("运行 Notion → SQLite Dry Run？只会读取 Notion 并保存本机对账报告；不会导入客户、不会修改 Notion、不会发送 WhatsApp。")) return;
-  const btn = $("btnImportNotion");
-  btn.disabled = true;
-  btn.textContent = "读取并对账中...";
-  try {
-    const data = await api("/api/settings/local-database/notion-import/preview", {});
-    renderLocalDatabase(data.database);
-    renderDatabaseDryRun(data.report);
-    message(data.message || "Dry Run 完成。", "");
-  } catch (error) {
-    message("", error.message);
-  } finally {
-    btn.textContent = "Notion → SQLite Dry Run";
-    await refreshLocalDatabase();
-  }
-});
-
 $("btnApplyNotion").addEventListener("click", async () => {
-  if (!confirm("正式导入本机客户到 SQLite？程序会先建立完整备份，再用单一事务写入；失败会整批回滚。不会修改 Notion，也不会发送 WhatsApp。")) return;
+  if (!confirm("从 Notion 刷新本机客户到 SQLite？会把 Notion 最新资料同步进本机 SQLite。不会修改 Notion，也不会发送 WhatsApp。")) return;
   const btn = $("btnApplyNotion");
   btn.disabled = true;
-  btn.textContent = "备份并导入中...";
+  btn.textContent = "刷新中...";
   try {
-    const data = await api("/api/settings/local-database/notion-import/apply", {});
+    const data = await api("/api/settings/local-database/refresh", {});
     renderLocalDatabase(data.database);
-    message((data.message || "正式导入完成。") + " 备份：" + (data.report?.backupPath || "已建立"), "");
+    message(data.message || "已从 Notion 刷新本机客户。", "");
   } catch (error) {
     message("", error.message);
   } finally {

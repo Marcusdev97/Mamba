@@ -36,7 +36,7 @@ function makeRunner() {
   let saves = 0;
   return {
     runPath: "/tmp/mamba-test/run.json",
-    state: { mode: "LIVE", assignments: [] },
+    state: { mode: "LIVE", status: "COMPLETED", assignments: [] },
     pushLog(message) { logs.push(message); },
     async saveState() { saves += 1; },
     get saves() { return saves; },
@@ -98,6 +98,30 @@ function makeRunner() {
   const result = await service.recoverPendingUpdates(runner);
   assert.equal(result.recovered, false);
   assert.equal(called, false, "interrupted sending must never auto-resume or auto-upload as completed");
+}
+
+{
+  let called = false;
+  const service = makeService(() => { called = true; });
+  const runner = makeRunner();
+  runner.state.status = "STOPPED";
+  runner.state.assignments = [{ status: "QUEUED" }];
+  runner.state.notionSync = { status: "FAILED" };
+  const result = await service.recoverPendingUpdates(runner);
+  assert.equal(result.recovered, false);
+  assert.equal(called, false, "a stopped partial run must not be uploaded as a finished campaign");
+}
+
+{
+  let called = false;
+  const service = makeService(() => { called = true; });
+  const runner = makeRunner();
+  runner.state.status = "INTERRUPTED";
+  runner.state.assignments = [{ status: "QUEUED" }];
+  const result = await service.autoNotionUpload(runner);
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.pending, 1);
+  assert.equal(called, false, "Notion upload must fail closed while recipients are still pending");
 }
 
 {
