@@ -171,7 +171,6 @@ let currentProject = "";
 let REPLY_SAFETY_OK = false;
 
 // Which Cohort Day's templates to send for each Next Flow (mirrors FLOW_SEQUENCE).
-// Flow 5 / 9 / 10 are conditional and not auto-mapped.
 const FLOW_DAY = {
   "Flow 2 - Layout": "Day 2",
   "Flow 3 - Location": "Day 4",
@@ -179,6 +178,7 @@ const FLOW_DAY = {
   "Flow 6 - Price": "Day 9",
   "Flow 7 - Facilities": "Day 12",
   "Flow 8 - Invitation": "Day 15",
+  "Flow 10 - Surrounding": "Day 18",
 };
 
 function selectedRows() { return [...document.querySelectorAll(".rowchk:checked")]; }

@@ -11,7 +11,7 @@ const FLOW_META = [
   { no: 7, topic: "Facilities", day: "Day 12" },
   { no: 8, topic: "Invitation", day: "Day 15" },
   { no: 9, topic: "Rental", day: "" },
-  { no: 10, topic: "Surrounding", day: "" },
+  { no: 10, topic: "Surrounding", day: "Day 18" },
 ];
 
 const FIRST_FLOW_LABEL = "Flow 1 - Project Template";

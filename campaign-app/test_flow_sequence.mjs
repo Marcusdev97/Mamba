@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { FLOW_SEQUENCE, flowStateAfter, classifyReplyText } from "./flow_sequence.mjs";
-import { nextFlowBlockReason } from "./routes/next-flow.routes.mjs";
+import { effectiveAutomaticFlow, nextFlowBlockReason } from "./routes/next-flow.routes.mjs";
 
 function choice(name) {
   return { select: name ? { name } : null };
@@ -45,6 +45,22 @@ assert.deepEqual(transitions.map((item) => item.nextFlowLabel), [
 ]);
 assert.equal(transitions.at(-1).nextFlowLabel, "Completed");
 assert.equal(transitions.at(-1).dueDays, null);
+assert.deepEqual(effectiveAutomaticFlow("Flow 6 - Price", "Day 6"), {
+  nextFlow: "Flow 6 - Price",
+  originalNextFlow: "",
+});
+assert.deepEqual(effectiveAutomaticFlow("Flow 6 - Price", "Day 9"), {
+  nextFlow: "Flow 6 - Price",
+  originalNextFlow: "",
+});
+assert.deepEqual(effectiveAutomaticFlow("Flow 10 - Surrounding", "Day 18"), {
+  nextFlow: "Flow 10 - Surrounding",
+  originalNextFlow: "",
+});
+assert.deepEqual(effectiveAutomaticFlow("Flow 10 - Surrounding", "Day 21"), {
+  nextFlow: "Flow 10 - Surrounding",
+  originalNextFlow: "",
+});
 
 // No-reply leads remain eligible at every stage.
 assert.equal(nextFlowBlockReason(leadPage(), classifyReplyText), "");
@@ -64,4 +80,6 @@ assert.equal(warm.sequenceStatus, "Human Takeover");
 assert.equal(warm.signal, "GREEN");
 assert.equal(nextFlowBlockReason(leadPage({ lastReply: "Can send me the price and monthly installment?" }), classifyReplyText), "Last Reply: PRICE_REQUEST");
 
-console.log("✅ full Flow 1→10 simulation passed (automatic chain ends on Day 18; Flow 5/9 remain conditional)");
+assert.deepEqual(FLOW_SEQUENCE.map((flow) => flow.cohortDay), ["Day 0", "Day 2", "Day 4", "Day 6", "Day 9", "Day 12", "Day 15", "Day 18"]);
+
+console.log("✅ scheduled Flow chain excludes conditional Flow 5/9 and ends on Day 18");

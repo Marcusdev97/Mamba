@@ -4,11 +4,9 @@
 // state after Flow 1) and morning_followup.mjs (classifies replies, decides
 // whether the automatic sequence continues).
 //
-// Flow 5 (Furnished List) and Flow 9 (Rental) are intentionally NOT in the
-// automatic chain — they are conditional and only sent when a lead is manually
-// tagged as suitable. The chain skips 4 -> 6 on purpose.
-// Flow 10 (Surrounding) runs as the final touch AFTER Flow 8 (Invitation), so the
-// day-by-day drip is: 1 -> 2 -> 3 -> 4 -> 6 -> 7 -> 8 -> 10 (Day 0 ... Day 18).
+// Flow 5 (Furnished List) and Flow 9 (Rental) are conditional templates.
+// They stay available in Templates, but are not scheduled lifecycle days.
+// The automatic follow-up chain is Flow 1 -> 2 -> 3 -> 4 -> 6 -> 7 -> 8 -> 10.
 
 import fs from "node:fs";
 import path from "node:path";

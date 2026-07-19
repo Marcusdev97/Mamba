@@ -70,6 +70,28 @@ function brainSettingsFromBody(body) {
   return values;
 }
 
+function normalizePhone(value) {
+  let digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.startsWith("0")) digits = `60${digits.slice(1)}`;
+  return /^\d{8,15}$/.test(digits) ? digits : "";
+}
+
+function testLeadsFromBody(body) {
+  if (!Object.hasOwn(body, "testRecipients")) return undefined;
+  if (!Array.isArray(body.testRecipients)) throw httpError(400, "TEST 名单格式不对。");
+  const leads = [];
+  for (const item of body.testRecipients) {
+    const name = String(item?.name || "").trim();
+    const phone = normalizePhone(item?.phone);
+    const language = String(item?.language || "en").trim().toLowerCase() === "zh" ? "zh" : "en";
+    if (!name && !String(item?.phone || "").trim()) continue;
+    if (!name) throw httpError(400, "TEST 名单每一行都需要名字。");
+    if (!phone) throw httpError(400, `TEST 电话号码格式不对: ${item?.phone || ""}`);
+    leads.push({ name, phone, language });
+  }
+  return leads;
+}
+
 export function registerSettingsRoutes(router) {
   router.get("/api/settings", async (_req, res, runtime) => {
     const settings = requireSettings(runtime);
@@ -198,8 +220,14 @@ export function registerSettingsRoutes(router) {
     const openaiApiKey = String(body.openaiApiKey ?? "").trim();
     const geminiApiKey = String(body.geminiApiKey ?? "").trim();
     Object.assign(values, brainSettingsFromBody(body));
+    const testLeads = testLeadsFromBody(body);
 
     if (notionToken) values.NOTION_API_KEY = notionToken;
+    if (testLeads !== undefined) {
+      values.TEST_LEADS = testLeads.length
+        ? testLeads.map((lead) => `${lead.name}:${lead.phone}:${lead.language}`).join(",")
+        : null;
+    }
     if (anthropicApiKey) {
       if (!/^sk-ant-/.test(anthropicApiKey)) {
         throw httpError(400, "Anthropic API Key 格式不对: 应该以 sk-ant- 开头 (console.anthropic.com 生成)。");

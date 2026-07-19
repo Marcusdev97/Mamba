@@ -37,6 +37,42 @@ function assertTelegramChatId(value) {
   }
 }
 
+const DEFAULT_TEST_RECIPIENTS = [
+  { name: "Anson", phone: "017 206 4505", language: "en" },
+  { name: "Mark", phone: "011 3369 8121", language: "en" },
+  { name: "Chin", phone: "0168568756", language: "en" },
+  { name: "Cici Liu", phone: "017 997 8682", language: "en" },
+];
+
+function normalizePhone(value) {
+  let digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.startsWith("0")) digits = `60${digits.slice(1)}`;
+  return /^\d{8,15}$/.test(digits) ? digits : "";
+}
+
+function parseTestLeads(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return DEFAULT_TEST_RECIPIENTS.map((lead) => ({
+      ...lead,
+      phone: normalizePhone(lead.phone),
+    }));
+  }
+  const entries = (text.includes("\n")
+    ? text.split(/\r?\n/)
+    : (text.includes(":") && text.includes(",") ? text.split(",") : [text]))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.map((entry) => {
+    const pieces = entry.includes(":") ? entry.split(":") : entry.split(/[,\t|]/);
+    const [nameRaw, phoneRaw, languageRaw] = pieces.map((item) => String(item || "").trim());
+    const phone = normalizePhone(phoneRaw);
+    if (!nameRaw || !phone) return null;
+    const language = String(languageRaw || "en").trim().toLowerCase() === "zh" ? "zh" : "en";
+    return { name: nameRaw, phone, language };
+  }).filter(Boolean);
+}
+
 async function telegramApi(method, token, body = {}) {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
@@ -108,6 +144,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
     const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
     const openaiKey = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
     const geminiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+    const testLeads = env.TEST_LEADS || process.env.TEST_LEADS || "";
     const configuredProvider = String(env.BRAIN_AI_PROVIDER || process.env.BRAIN_AI_PROVIDER || "").trim().toLowerCase();
     const brainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
     const provider = ["rules", "anthropic", "openai", "gemini", "auto"].includes(configuredProvider)
@@ -151,6 +188,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
         chatInvalid: Boolean(chatId && !chatValid),
         chatId: chatValid ? chatId : "",
       },
+      testRecipients: parseTestLeads(testLeads),
     };
   }
 

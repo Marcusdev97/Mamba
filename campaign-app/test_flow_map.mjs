@@ -13,8 +13,7 @@ for (const requiredText of [
   "Account &amp; Device · 号码身份与换电脑",
   "Cooperative handoff · v4 candidate / 尚未 Cutover",
   "Flow 1–10 · 自动跟进节奏",
-  "Conditional Flow 5",
-  "Conditional Flow 9",
+  "Flow 5 与 Flow 9 保持条件式模板",
   "Account = 真实号码；Binding = Device::号码",
   "Emergency Takeover 必须等 Phase 2 原子 Arbiter",
 ]) {
@@ -28,6 +27,8 @@ for (const flow of mainSequence) {
   assert.ok(index > previousIndex, `${flow} must appear in the correct automatic sequence`);
   previousIndex = index;
 }
+assert.equal(html.indexOf("<b>Flow 5</b>"), -1, "Flow 5 must not appear as a scheduled lifecycle step");
+assert.equal(html.indexOf("<b>Flow 9</b>"), -1, "Flow 9 must not appear as a scheduled lifecycle step");
 
 assert.match(html, /api\("\/api\/control-center"\)/);
 assert.match(html, /api\("\/api\/settings\/local-database"\)/);

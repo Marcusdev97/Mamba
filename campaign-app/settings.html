@@ -15,11 +15,12 @@
   }
   .settings-grid > .card { margin: 0; min-width: 0; }
   .phone-card { order: 1; grid-column: 1 / -1; }
-  .notion-card { order: 2; grid-column: span 6; }
-  .database-card { order: 3; grid-column: span 6; }
-  .telegram-card { order: 4; grid-column: 1 / -1; }
-  .ai-card { order: 5; grid-column: 1 / -1; }
-  .save-card { order: 6; grid-column: 1 / -1; display: flex; flex-direction: column; }
+  .test-card { order: 2; grid-column: 1 / -1; }
+  .notion-card { order: 3; grid-column: span 6; }
+  .database-card { order: 4; grid-column: span 6; }
+  .telegram-card { order: 5; grid-column: 1 / -1; }
+  .ai-card { order: 6; grid-column: 1 / -1; }
+  .save-card { order: 7; grid-column: 1 / -1; display: flex; flex-direction: column; }
   .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
   .card-head h2 { margin: 0; }
   .card-kicker { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.5; }
@@ -114,6 +115,12 @@
   .database-note { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
   .database-report { margin-top: 12px; border: 1px solid #1d4ed8; border-radius: var(--radius); background: rgba(29,78,216,.08); padding: 12px 14px; color: var(--text); font-size: 12px; line-height: 1.65; white-space: pre-line; }
   .database-report.hidden { display: none; }
+  .test-table input, .test-table select { min-height: 38px; padding: 8px 10px; }
+  .test-table .test-name { min-width: 150px; }
+  .test-table .test-phone { min-width: 180px; font-family: var(--font-mono); }
+  .test-table .test-language { min-width: 96px; }
+  .test-table td:last-child { width: 1%; white-space: nowrap; text-align: right; }
+  .test-note { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin-top: 10px; }
   .save-card .save-copy { color: var(--muted); font-size: 13px; line-height: 1.6; }
   .save-card .actions { margin-top: auto; padding-top: 22px; }
   .save-card .primary { width: 100%; justify-content: center; }
@@ -128,7 +135,7 @@
   .model-grid, .model-grid.three { display: grid; grid-template-columns: 1fr; gap: 0; }
   .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
   @media (max-width: 1050px) {
-    .notion-card, .database-card, .telegram-card, .ai-card, .save-card { grid-column: 1 / -1; }
+    .notion-card, .database-card, .telegram-card, .ai-card, .save-card, .test-card { grid-column: 1 / -1; }
     .phone-overview { grid-template-columns: 1fr; }
     .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
     .ai-provider + .ai-provider { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; }
@@ -140,6 +147,7 @@
     .card-head .actions { width: 100%; flex-direction: column; }
     .card-head .actions .btn { width: 100%; }
     .phone-card table { display: block; overflow-x: auto; }
+    .test-card table { display: block; overflow-x: auto; }
     .phone-card th, .phone-card td { padding-left: 10px; padding-right: 10px; font-size: 12px; }
     .model-grid, .model-grid.three { grid-template-columns: 1fr; }
     .database-stats { grid-template-columns: 1fr; }
@@ -401,12 +409,29 @@
       <div class="status-line">健康标准：至少 1 个 Key 显示 OPEN，才可以发送 campaign。</div>
     </div>
 
+    <div class="card test-card">
+      <div class="card-head">
+        <div>
+          <h2 class="step-title"><span class="step-no">T</span> TEST 号码</h2>
+          <div class="card-kicker">Campaign Automations 的 TEST 模式只会发给这里的人。</div>
+        </div>
+        <div class="actions" style="margin-top:0">
+          <button class="btn" id="btnAddTestRecipient">+ 添加 TEST 号码</button>
+        </div>
+      </div>
+      <table class="test-table">
+        <thead><tr><th>名字</th><th>电话号码</th><th>语言</th><th></th></tr></thead>
+        <tbody id="testRecipientBody"><tr><td colspan="4" class="muted">读取中...</td></tr></tbody>
+      </table>
+      <div class="test-note">电话号码可以写 017 / 011 开头，保存时会自动转成 WhatsApp 可发送格式。这里不会影响真实发送号码，只是 TEST 收件人。</div>
+    </div>
+
     <div class="card save-card">
       <div class="card-head"><div>
         <h2 class="step-title"><span class="step-no">6</span> Save</h2>
         <div class="card-kicker">Apply local configuration</div>
       </div></div>
-      <div class="save-copy">保存以上 Notion、Telegram 和 AI 设置。Brain service 下次起草时会读取所选 Provider；独立运行中的 Brain 建议重启一次。</div>
+      <div class="save-copy">保存 TEST 号码、Notion、Telegram 和 AI 设置。Brain service 下次起草时会读取所选 Provider；独立运行中的 Brain 建议重启一次。</div>
       <div class="actions">
         <button class="btn primary" id="btnSave">保存 Settings</button>
       </div>
@@ -421,6 +446,12 @@ const $ = (id) => document.getElementById(id);
 let qrName = null;
 let qrTimer = null;
 let qrTicks = 0;
+const DEFAULT_TEST_RECIPIENTS = [
+  { name: "Anson", phone: "017 206 4505", language: "en" },
+  { name: "Mark", phone: "011 3369 8121", language: "en" },
+  { name: "Chin", phone: "0168568756", language: "en" },
+  { name: "Cici Liu", phone: "017 997 8682", language: "en" },
+];
 
 async function api(url, body) {
   const res = await fetch(url, body === undefined ? undefined : {
@@ -450,7 +481,46 @@ function values() {
     openaiReasoningEffort: $("openaiReasoningEffort").value,
     geminiSimpleModel: $("geminiSimpleModel").value,
     geminiComplexModel: $("geminiComplexModel").value,
+    testRecipients: readTestRecipients(),
   };
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]);
+}
+
+function displayPhone(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  const local = digits.startsWith("60") ? "0" + digits.slice(2) : digits;
+  if (/^011\d{8}$/.test(local)) return local.replace(/(\d{3})(\d{4})(\d{4})/, "$1 $2 $3");
+  if (/^01\d{8}$/.test(local)) return local.replace(/(\d{3})(\d{3})(\d{4})/, "$1 $2 $3");
+  return phone || "";
+}
+
+function testRecipientRow(item = {}) {
+  const language = item.language === "zh" ? "zh" : "en";
+  return `
+    <tr>
+      <td><input class="test-name" type="text" value="${escapeHtml(item.name || "")}" placeholder="Anson" /></td>
+      <td><input class="test-phone" type="tel" value="${escapeHtml(displayPhone(item.phone || ""))}" placeholder="017 206 4505" /></td>
+      <td><select class="test-language"><option value="en"${language === "en" ? " selected" : ""}>EN</option><option value="zh"${language === "zh" ? " selected" : ""}>中文</option></select></td>
+      <td><button class="btn" type="button" data-remove-test>删除</button></td>
+    </tr>`;
+}
+
+function renderTestRecipients(items = []) {
+  const list = Array.isArray(items) && items.length ? items : [{ name: "", phone: "", language: "en" }];
+  $("testRecipientBody").innerHTML = list.map(testRecipientRow).join("");
+}
+
+function readTestRecipients() {
+  return [...document.querySelectorAll("#testRecipientBody tr")].map((row) => ({
+    name: row.querySelector(".test-name")?.value.trim() || "",
+    phone: row.querySelector(".test-phone")?.value.trim() || "",
+    language: row.querySelector(".test-language")?.value || "en",
+  })).filter((item) => item.name || item.phone);
 }
 
 function renderBrainMode() {
@@ -496,6 +566,7 @@ function render(settings) {
     $("geminiSimpleModel").value = s.brain.geminiSimpleModel || "gemini-3.5-flash";
     $("geminiComplexModel").value = s.brain.geminiComplexModel || "gemini-3.1-pro-preview";
   }
+  renderTestRecipients(Array.isArray(s.testRecipients) ? s.testRecipients : DEFAULT_TEST_RECIPIENTS);
   renderBrainMode();
 }
 
@@ -705,7 +776,7 @@ $("btnSave").addEventListener("click", async () => {
     $("openaiApiKey").value = "";
     $("geminiApiKey").value = "";
     refreshIdentity();
-    message("已保存。自动回复开关需要重新启动 Mamba 才会完全生效。", "");
+    message("已保存。TEST 号码会马上用于 Campaign Automations；自动回复开关需要重新启动 Mamba 才会完全生效。", "");
   } catch (e) {
     message("", e.message);
   }
@@ -777,6 +848,16 @@ $("btnTestGemini").addEventListener("click", async () => {
 
 $("brainProvider").addEventListener("change", renderBrainMode);
 $("brainEnabled").addEventListener("change", renderBrainMode);
+$("btnAddTestRecipient").addEventListener("click", () => {
+  $("testRecipientBody").insertAdjacentHTML("beforeend", testRecipientRow({ language: "en" }));
+});
+$("testRecipientBody").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-test]");
+  if (!button) return;
+  const row = button.closest("tr");
+  row?.remove();
+  if (!$("testRecipientBody").querySelector("tr")) renderTestRecipients([]);
+});
 
 $("btnTestTelegram").addEventListener("click", async () => {
   message("", "");

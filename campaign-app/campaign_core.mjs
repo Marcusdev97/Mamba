@@ -237,6 +237,13 @@ export function normalizePhone(value) {
   return /^\d{8,15}$/.test(digits) ? digits : null;
 }
 
+export const DEFAULT_TEST_LEADS = [
+  { name: "Anson", phone: "017 206 4505", language: "en" },
+  { name: "Mark", phone: "011 3369 8121", language: "en" },
+  { name: "Chin", phone: "0168568756", language: "en" },
+  { name: "Cici Liu", phone: "017 997 8682", language: "en" },
+];
+
 export async function importLeads(sourcePath) {
   const { FileBlob, SpreadsheetFile } = await import("./xlsx_compat.mjs");
   const resolved = path.resolve(sourcePath || path.join(paths.rootDir, "Untitled spreadsheet.xlsx"));
@@ -373,9 +380,10 @@ export function firstFlowPart2Variants(config, part1Variant) {
 // from TEST_LEADS in .env (legacy: Name:phone:lang:templateId).
 export function getTestLeads(raw = process.env.TEST_LEADS || "") {
   const text = String(raw || "").trim();
-  const entries = (text.includes("\n")
-    ? text.split(/\r?\n/)
-    : (text.includes(":") && text.includes(",") ? text.split(",") : [text]))
+  const source = text || DEFAULT_TEST_LEADS.map((lead) => `${lead.name},${lead.phone},${lead.language}`).join("\n");
+  const entries = (source.includes("\n")
+    ? source.split(/\r?\n/)
+    : (source.includes(":") && source.includes(",") ? source.split(",") : [source]))
     .map((s) => s.trim())
     .filter(Boolean);
   const leads = entries.map((entry, i) => {

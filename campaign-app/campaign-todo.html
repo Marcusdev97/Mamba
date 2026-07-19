@@ -3,254 +3,328 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Next Campaign · Mamba</title>
+<title>Campaign Automations · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
   .wrap { max-width:1240px; }
-  .hero { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:18px; }
-  .hero-actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-  .status-line { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }
-  .pill { display:inline-flex; align-items:center; min-height:30px; padding:5px 10px; border-radius:999px; border:1px solid var(--line); background:var(--panel-2); color:var(--muted); font-size:12px; font-weight:800; }
-  .pill.ready { color:var(--green); border-color:rgba(37,211,102,.35); background:var(--green-bg); }
-  .pill.hold { color:var(--amber); border-color:rgba(245,179,66,.4); background:var(--amber-bg); }
-  .pill.error { color:var(--red); border-color:rgba(255,93,93,.4); background:var(--red-bg); }
-  .summary { color:var(--muted); }
-  .layout { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:16px; align-items:start; }
-  .section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; margin-bottom:16px; }
-  .section h2 { margin:0 0 16px; }
-  .form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
-  .field { display:grid; gap:7px; }
-  .field > span { color:var(--muted); font-size:12px; font-weight:700; }
-  input, select { width:100%; min-height:42px; border:1px solid var(--line); border-radius:6px; background:var(--panel-2); color:var(--text); padding:8px 10px; font:inherit; }
-  input[type="time"]::-webkit-calendar-picker-indicator { filter:invert(.8); }
-  .project-options { display:flex; gap:12px; align-items:center; min-height:42px; }
-  .check { display:inline-flex; align-items:center; gap:7px; color:var(--text); }
-  .check input { width:16px; min-height:auto; }
-  .switch-row { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 0 0; margin-top:14px; border-top:1px solid var(--line); }
-  .switch-row b { display:block; }
-  .switch-row p { margin:3px 0 0; color:var(--muted); font-size:13px; }
-  .toggle { width:44px; height:24px; accent-color:var(--green); }
-  .fixed-note { padding:12px 14px; border-left:3px solid var(--blue); background:var(--panel-2); color:var(--muted); font-size:13px; margin-top:14px; }
-  .gates { display:grid; gap:1px; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--line); }
-  .gate { display:grid; grid-template-columns:26px minmax(130px,.45fr) minmax(0,1fr); gap:10px; align-items:center; padding:11px 13px; background:var(--panel); }
-  .gate-icon { width:20px; height:20px; display:grid; place-items:center; border-radius:50%; color:var(--muted); background:var(--panel-2); font-size:12px; font-weight:900; }
-  .gate.ok .gate-icon { color:var(--green); background:var(--green-bg); }
-  .gate.bad .gate-icon { color:var(--red); background:var(--red-bg); }
-  .gate b { font-size:13px; }
-  .gate span { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
-  .batch { min-height:164px; display:grid; align-content:start; gap:10px; }
-  .batch-title { font-size:18px; font-weight:800; }
-  .metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-  .metric { padding:11px; background:var(--panel-2); border:1px solid var(--line); border-radius:6px; }
-  .metric span { display:block; color:var(--muted); font-size:11px; }
-  .metric b { display:block; margin-top:3px; font-size:15px; }
-  .last-run { white-space:pre-wrap; color:var(--muted); font-size:12px; line-height:1.6; }
-  .action-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .danger-note { color:var(--amber); font-size:12px; }
+  .auto-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--sp-5); align-items:start; margin-bottom:var(--sp-5); }
+  .auto-head h1 { margin:0; font-size:var(--fs-h1); line-height:var(--lh-h1); letter-spacing:0; }
+  .auto-head .sub { margin-top:var(--sp-1); color:var(--muted); font-size:var(--fs-sub); }
+  .head-actions { display:flex; align-items:center; justify-content:flex-end; gap:var(--sp-2); flex-wrap:wrap; }
+  .mode-row { display:flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap; margin-top:var(--sp-4); }
+  .mode-note { color:var(--muted); font-size:var(--fs-tiny); }
+  .mode-note.warn { color:var(--amber); }
+  .grid-top { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr); gap:var(--sp-4); align-items:stretch; }
+  .grid-main { margin-top:var(--sp-4); }
+  .card { border-radius:8px; }
+  .card.tight { min-height:176px; }
+  .card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--sp-3); margin-bottom:var(--sp-3); }
+  .card-head h2 { margin:0; }
+  .status-stack { display:grid; gap:var(--sp-2); }
+  .big-status { font-size:28px; line-height:1.1; font-weight:800; letter-spacing:0; }
+  .muted { color:var(--muted); }
+  .tiny { color:var(--faint); font-size:var(--fs-tiny); }
+  .data-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); margin-top:var(--sp-4); }
+  .data-cell { min-height:62px; padding:var(--sp-3); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
+  .data-cell span { display:block; color:var(--muted); font-size:var(--fs-tiny); }
+  .data-cell b { display:block; margin-top:var(--sp-1); font-size:16px; overflow-wrap:anywhere; }
+  .shift-track { height:10px; border:1px solid var(--line); border-radius:var(--radius-full); background:var(--panel-2); overflow:hidden; margin-top:var(--sp-4); }
+  .shift-track i { display:block; width:0%; height:100%; background:var(--green); transition:width var(--t-slow) var(--ease); }
+  .batch-title { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2); }
+  .batch-title strong { font-size:20px; overflow-wrap:anywhere; }
+  .progress-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); margin-top:var(--sp-4); }
+  .lifecycle { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--sp-2); }
+  .life-item { min-height:76px; padding:var(--sp-3); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); }
+  .life-item b { display:block; font-size:17px; }
+  .life-item span { display:block; margin-top:2px; color:var(--muted); font-size:var(--fs-tiny); }
+  .life-item.hot { border-color:var(--green); background:var(--green-bg); }
+  .action-row { display:flex; align-items:center; gap:var(--sp-2); flex-wrap:wrap; margin-top:var(--sp-4); }
+  .summary-box { min-height:92px; padding:var(--sp-3); border:1px solid var(--line); border-radius:7px; background:var(--panel-2); white-space:pre-wrap; color:var(--muted); font-size:var(--fs-sub); }
+  .empty { min-height:88px; display:grid; place-items:center; color:var(--muted); text-align:center; font-size:var(--fs-sub); }
   button[disabled] { opacity:.55; cursor:not-allowed; }
-  @media (max-width:860px) {
-    .hero, .switch-row { align-items:stretch; flex-direction:column; }
-    .hero-actions { justify-content:flex-start; }
-    .layout, .form-grid { grid-template-columns:1fr; }
-    .gate { grid-template-columns:26px 1fr; }
-    .gate span { grid-column:2; }
+  @media (max-width:1040px) {
+    .grid-top { grid-template-columns:1fr; }
+    .lifecycle { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  }
+  @media (max-width:720px) {
+    .auto-head { grid-template-columns:1fr; }
+    .head-actions { justify-content:flex-start; }
+    .data-row, .progress-row, .lifecycle { grid-template-columns:1fr; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
 <main class="wrap">
-  <header class="hero">
+  <header class="auto-head">
     <div>
-      <h1>Next Campaign</h1>
-      <div class="sub">每日 Next Flow 自动任务 · TEST 安全阶段</div>
-      <div class="status-line">
-        <span id="overallStatus" class="pill">LOADING</span>
-        <span id="statusSummary" class="summary">正在读取安全状态...</span>
+      <h1>Campaign Automations</h1>
+      <div class="sub">10:00 上班，21:00 下班；到期就发 Flow，有回复就停下来交给你。</div>
+      <div class="mode-row">
+        <div class="seg" id="modeSeg" aria-label="Automation mode">
+          <button type="button" data-mode="OFF">关闭</button>
+          <button type="button" data-mode="TEST">TEST</button>
+          <button type="button" data-mode="LIVE">LIVE</button>
+        </div>
+        <span id="modeNote" class="mode-note">正在读取模式...</span>
       </div>
     </div>
-    <div class="hero-actions">
-      <button id="checkBtn" class="btn">检查状态</button>
-      <button id="deepBtn" class="btn">深度检查 WhatsApp</button>
+    <div class="head-actions">
+      <a class="btn" href="/send">开新一批</a>
+      <button id="checkBtn" class="btn">检查</button>
+      <button id="deepBtn" class="btn">深度检查</button>
+      <button id="runBtn" class="btn primary" disabled>开工</button>
+      <button id="stopBtn" class="btn danger">提前放工</button>
     </div>
   </header>
 
-  <div class="layout">
-    <div>
-      <section class="section">
-        <h2>TEST Scheduler</h2>
-        <div class="form-grid">
-          <label class="field"><span>每日检查时间</span><input id="scheduleTime" type="time" value="10:00" /></label>
-          <label class="field"><span>每次测试上限</span><select id="maxLeads"><option>2</option><option>3</option><option>4</option><option selected>5</option></select></label>
-          <div class="field"><span>允许的项目</span><div class="project-options"><label class="check"><input id="projectBinastra" type="checkbox" checked /> Binastra</label><label class="check"><input id="projectEnlace" type="checkbox" checked /> Enlace</label></div></div>
-          <label class="field"><span>运行模式</span><select disabled><option>TEST only</option></select></label>
-        </div>
-        <div class="switch-row">
-          <div><b>每日自动 TEST</b><p>只会发给 Settings 里的测试号码，不会发送给当天到期的真实客户。</p></div>
-          <input id="enabled" class="toggle" type="checkbox" aria-label="开启每日自动 TEST" />
-        </div>
-        <div class="fixed-note">固定规则：18 天节奏（Day 0、2、4、6、9、12、15、18）；Flow 5 与 Flow 9 保持条件式，不进入自动链。</div>
-        <div class="action-bar" style="margin-top:14px">
-          <button id="saveBtn" class="btn primary">保存设置</button>
-          <span id="saveMessage" class="summary"></span>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Launch Gate</h2>
-        <div id="gates" class="gates"><div class="gate"><span class="gate-icon">...</span><b>等候检查</b><span>尚未载入。</span></div></div>
-      </section>
+  <section class="grid-top">
+    <div class="card tight">
+      <div class="card-head"><h2>今天这一班</h2><span id="shiftBadge" class="badge b-queued">Loading</span></div>
+      <div class="status-stack">
+        <div id="shiftTitle" class="big-status">读取值班状态</div>
+        <div id="shiftDetail" class="muted">固定窗口 10:00–21:00。</div>
+      </div>
+      <div class="shift-track" aria-label="Shift progress"><i id="shiftProgress"></i></div>
+      <div class="data-row">
+        <div class="data-cell"><span>现在</span><b id="shiftNow">-</b></div>
+        <div class="data-cell"><span>收工</span><b id="shiftEnd">21:00</b></div>
+        <div class="data-cell"><span>剩余</span><b id="shiftRemaining">-</b></div>
+      </div>
+      <div class="progress-row">
+        <div class="data-cell"><span>已发</span><b id="progressSent">0</b></div>
+        <div class="data-cell"><span>待发</span><b id="progressPending">0</b></div>
+        <div class="data-cell"><span>失败</span><b id="progressFailed">0</b></div>
+      </div>
     </div>
 
-    <aside>
-      <section class="section batch">
-        <h2>Today Batch</h2>
-        <div id="batchEmpty" class="summary">检查后会显示今天最先到期的一个 Project + Flow。</div>
-        <div id="batchDetails" hidden>
-          <div id="batchTitle" class="batch-title"></div>
-          <div id="batchFlow" class="summary" style="margin:4px 0 12px"></div>
-          <div class="metrics">
-            <div class="metric"><span>到期客户</span><b id="batchDue">0</b></div>
-            <div class="metric"><span>本次 TEST 上限</span><b id="batchSelected">0</b></div>
-          </div>
-        </div>
-        <button id="runBtn" class="btn primary" disabled>立即运行 TEST</button>
-        <div class="danger-note">按钮会真实发送，但只发给 Settings 中的 TEST 收件人。</div>
-      </section>
+    <div class="card tight">
+      <div class="card-head"><h2>Today Flow</h2><span class="badge b-go" id="batchCount">0 due</span></div>
+      <div id="batchEmpty" class="empty">没有到期 Flow。</div>
+      <div id="batchDetails" hidden>
+        <div class="batch-title"><strong id="batchProject">-</strong></div>
+        <div id="batchFlow" class="muted" style="margin-top:var(--sp-2)">-</div>
+      </div>
+    </div>
+  </section>
 
-      <section class="section">
-        <h2>Last Result</h2>
-        <div id="lastRun" class="last-run">还没有运行记录。</div>
-      </section>
-    </aside>
-  </div>
+  <section class="grid-main">
+    <section class="card">
+      <div class="card-head"><h2>Lifecycle Board</h2><span id="cohortTotal" class="tiny">0 leads</span></div>
+      <div id="lifecycle" class="lifecycle"><div class="empty">等待名单检查。</div></div>
+    </section>
+    <span id="actionMessage" class="tiny" hidden></span>
+  </section>
 </main>
+
 <script>
-  const el = (id) => document.getElementById(id);
-  let currentCheck = null;
+const el = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[char]);
+let currentCheck = null;
+let currentSnapshot = null;
 
-  async function api(path, options = {}) {
-    const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) throw new Error(data.error || (data.reasons || []).join(" · ") || `HTTP ${response.status}`);
-    return data;
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { "Content-Type":"application/json", ...(options.headers || {}) } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || (data.reasons || []).join(" · ") || `HTTP ${response.status}`);
+  return data;
+}
+
+function setBusy(button, busy, text) {
+  if (!button.dataset.label) button.dataset.label = button.textContent;
+  button.disabled = busy;
+  button.textContent = busy ? text : button.dataset.label;
+}
+
+function modeOf(data) {
+  return data?.schedulerMode || (!data?.config?.enabled ? "OFF" : data?.config?.mode === "LIVE" ? "LIVE" : "TEST");
+}
+
+function renderMode(mode) {
+  document.querySelectorAll("#modeSeg button").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
+  el("modeNote").className = `mode-note${mode === "LIVE" ? " warn" : ""}`;
+  el("modeNote").textContent = mode === "OFF"
+    ? "关闭后不会自动发送。"
+    : mode === "LIVE"
+      ? "LIVE 已显示，但真实客户自动发送仍被安全锁挡住。"
+      : "TEST 会使用同一引擎，但只发给测试号码。";
+}
+
+function renderShift(shift = {}) {
+  const status = shift.status || "closed";
+  const mode = shift.mode || "OFF";
+  const labels = { "on-shift":"ON SHIFT", "off-shift":"OFF SHIFT", closed:"CLOSED" };
+  el("shiftBadge").className = `badge ${status === "on-shift" ? "b-go" : status === "off-shift" ? "b-warm" : "b-queued"}`;
+  el("shiftBadge").textContent = labels[status] || "CLOSED";
+  el("shiftTitle").textContent = mode === "OFF" ? "自动化关闭" : shift.stoppedToday ? "今天已提前放工" : status === "on-shift" ? "正在值班" : "窗口外安静";
+  el("shiftDetail").textContent = mode === "LIVE"
+    ? "LIVE 入口已选择，但安全锁会阻止真实发送。"
+    : status === "off-shift"
+      ? `窗口外不发送；下一班 ${shift.remainingLabel || "明天 10:00"}。`
+      : `固定窗口 ${shift.workStart || "10:00"}–${shift.workEnd || "21:00"}；窗口外不发送。`;
+  el("shiftNow").textContent = shift.now || "-";
+  el("shiftEnd").textContent = shift.offAt || "21:00";
+  el("shiftRemaining").textContent = shift.remainingLabel || "-";
+  const start = 10 * 60;
+  const end = 21 * 60;
+  const parts = String(shift.now || "00:00").split(":").map(Number);
+  const nowMinutes = (parts[0] || 0) * 60 + (parts[1] || 0);
+  const percent = Math.max(0, Math.min(100, ((nowMinutes - start) / (end - start)) * 100));
+  el("shiftProgress").style.width = status === "on-shift" ? `${percent}%` : "0%";
+}
+
+function renderSnapshot(data) {
+  currentSnapshot = data;
+  const mode = modeOf(data);
+  renderMode(mode);
+  renderShift(data.shift || {});
+}
+
+function renderBatch(data) {
+  const batch = data.batch;
+  el("batchEmpty").hidden = Boolean(batch);
+  el("batchDetails").hidden = !batch;
+  if (!batch) return;
+  el("batchProject").textContent = batch.project;
+  el("batchFlow").textContent = batch.flow;
+  el("batchCount").textContent = `${batch.totalDue} due`;
+}
+
+function renderLifecycle(cohort = {}) {
+  const buckets = [...(cohort.buckets || []), {
+    day: "Replied", label: "Human takeover", count: cohort.replied || 0,
+  }, {
+    day: "Stopped", label: "Do not send", count: cohort.stopped || 0,
+  }, {
+    day: "Done", label: "Completed", count: cohort.completed || 0,
+  }];
+  el("cohortTotal").textContent = `${cohort.total || 0} leads`;
+  el("lifecycle").innerHTML = buckets.length ? buckets.map((item) => `
+    <div class="life-item ${Number(item.count || 0) > 0 ? "hot" : ""}">
+      <b>${esc(item.count || 0)}</b>
+      <span>${esc(item.day || item.label)}</span>
+      <span>${esc(item.label || "")}</span>
+    </div>`).join("") : '<div class="empty">No lifecycle data.</div>';
+}
+
+function renderProgress(progress = {}) {
+  const failed = Number(progress.failed || 0);
+  const pending = Number(progress.pending || 0);
+  const sent = Number(progress.sent || 0);
+  el("progressSent").textContent = sent;
+  el("progressPending").textContent = pending;
+  el("progressFailed").textContent = failed;
+}
+
+function renderGates(data) {
+  el("actionMessage").textContent = "";
+}
+
+function renderCheck(data) {
+  currentCheck = data;
+  renderShift(data.shift || {});
+  renderBatch(data);
+  renderLifecycle(data.cohort || {});
+  renderProgress(data.progress || {});
+  renderGates(data);
+  el("runBtn").disabled = modeOf(data) === "LIVE";
+}
+
+async function check(deep = false) {
+  const button = deep ? el("deepBtn") : el("checkBtn");
+  setBusy(button, true, deep ? "扫描中..." : "检查中...");
+  try {
+    const data = await api("/api/daily-campaign/check", { method:"POST", body:JSON.stringify({ deep }) });
+    renderCheck(data);
+  } catch (error) {
+    el("actionMessage").textContent = error.message;
+  } finally {
+    setBusy(button, false, "");
   }
+}
 
-  function setBusy(button, busy, text) {
-    if (!button.dataset.label) button.dataset.label = button.textContent;
-    button.disabled = busy;
-    button.textContent = busy ? text : button.dataset.label;
+async function load() {
+  try {
+    const data = await api("/api/daily-campaign");
+    renderSnapshot(data);
+    await check(false);
+  } catch (error) {
+    el("modeNote").textContent = error.message;
+    el("actionMessage").textContent = error.message;
   }
+}
 
-  function renderSnapshot(data) {
-    const config = data.config || {};
-    el("scheduleTime").value = config.time || "10:00";
-    el("maxLeads").value = String(config.maxLeads || 5);
-    el("enabled").checked = config.enabled === true;
-    el("projectBinastra").checked = (config.projects || []).includes("Binastra");
-    el("projectEnlace").checked = (config.projects || []).includes("Enlace");
-    const last = data.state?.lastRun;
-    el("lastRun").textContent = last
-      ? `${last.status} · ${new Date(last.at).toLocaleString()}\n${last.error || (last.reasons || []).join("\n") || `${last.batch?.project || ""} ${last.batch?.flow || ""}`}`
-      : "还没有运行记录。";
+async function setMode(mode) {
+  const previous = modeOf(currentSnapshot);
+  renderMode(mode);
+  try {
+    const config = currentSnapshot?.config || {};
+    const data = await api("/api/daily-campaign/config", { method:"POST", body:JSON.stringify({
+      schedulerMode: mode,
+      projects: config.projects || ["Binastra", "Enlace"],
+      maxLeads: 5,
+      requireDeepCheck: true,
+    }) });
+    renderSnapshot(data);
+    el("actionMessage").textContent = "已保存";
+    await check(false);
+  } catch (error) {
+    renderMode(previous);
+    el("actionMessage").textContent = error.message;
   }
+}
 
-  function renderCheck(data) {
-    currentCheck = data;
-    const status = el("overallStatus");
-    status.className = `pill ${data.ready ? "ready" : "hold"}`;
-    status.textContent = data.ready ? "READY FOR TEST" : "HOLD";
-    const failed = (data.gates || []).filter((item) => !item.ok);
-    el("statusSummary").textContent = data.ready
-      ? "全部安全检查通过，可以由你手动运行 TEST。"
-      : `${failed.length} 项未通过，不会发送。`;
-    el("gates").innerHTML = (data.gates || []).map((item) => `
-      <div class="gate ${item.ok ? "ok" : "bad"}">
-        <span class="gate-icon">${item.ok ? "✓" : "!"}</span>
-        <b>${item.label}</b><span>${item.detail || "-"}</span>
-      </div>`).join("");
-    const batch = data.batch;
-    el("batchEmpty").hidden = Boolean(batch);
-    el("batchDetails").hidden = !batch;
-    if (batch) {
-      el("batchTitle").textContent = batch.project;
-      el("batchFlow").textContent = batch.flow;
-      el("batchDue").textContent = batch.totalDue;
-      el("batchSelected").textContent = batch.leads.length;
-    }
-    el("runBtn").disabled = !data.ready;
+document.querySelectorAll("#modeSeg button").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
+el("checkBtn").addEventListener("click", () => check(false));
+el("deepBtn").addEventListener("click", () => check(true));
+el("stopBtn").addEventListener("click", async () => {
+  if (!confirm("今天提前放工？今天不会再自动发送，明天 10:00 再继续。")) return;
+  setBusy(el("stopBtn"), true, "收工中...");
+  try {
+    const data = await api("/api/daily-campaign/stop-shift", { method:"POST", body:"{}" });
+    renderSnapshot(data);
+    await check(false);
+  } catch (error) {
+    el("actionMessage").textContent = error.message;
+  } finally {
+    setBusy(el("stopBtn"), false, "");
   }
-
-  async function load() {
-    try {
-      const data = await api("/api/daily-campaign");
-      renderSnapshot(data);
-      await check(false);
-    } catch (error) {
-      el("overallStatus").className = "pill error";
-      el("overallStatus").textContent = "ERROR";
-      el("statusSummary").textContent = error.message;
-    }
+});
+el("runBtn").addEventListener("click", async () => {
+  const mode = modeOf(currentCheck || currentSnapshot);
+  if (mode === "LIVE") return;
+  if (mode === "OFF") {
+    await setMode("TEST");
+    return;
   }
-
-  async function check(deep) {
-    const button = deep ? el("deepBtn") : el("checkBtn");
-    setBusy(button, true, deep ? "正在扫描 WhatsApp..." : "正在检查...");
-    try {
-      const data = await api("/api/daily-campaign/check", { method: "POST", body: JSON.stringify({ deep }) });
-      renderCheck(data);
-    } catch (error) {
-      el("overallStatus").className = "pill error";
-      el("overallStatus").textContent = "ERROR";
-      el("statusSummary").textContent = error.message;
-    } finally {
-      setBusy(button, false, "");
-    }
+  if (currentCheck?.shift?.status !== "on-shift") {
+    const when = currentCheck?.shift?.remainingLabel || "明天 10:00";
+    alert(`已开工。现在窗口外，不会发送；下一班 ${when} 自动检查。`);
+    await load();
+    return;
   }
+  if (!currentCheck?.ready) {
+    alert("现在还没通过安全检查，不会发送。");
+    return;
+  }
+  const batch = currentCheck.batch;
+  if (!confirm(`现在开工跑 ${batch.project} · ${batch.flow}？\n只会发给 Settings 里的 TEST 号码。`)) return;
+  setBusy(el("runBtn"), true, "启动中...");
+  try {
+    const data = await api("/api/daily-campaign/run-test", { method:"POST", body:"{}" });
+    alert(`TEST 已启动：${data.readiness.batch.project} · ${data.readiness.batch.flow}`);
+    await load();
+  } catch (error) {
+    alert(`没有发送：${error.message}`);
+    await check(false);
+  } finally {
+    setBusy(el("runBtn"), false, "");
+    el("runBtn").disabled = modeOf(currentCheck) === "LIVE";
+  }
+});
 
-  el("checkBtn").addEventListener("click", () => check(false));
-  el("deepBtn").addEventListener("click", () => check(true));
-  el("saveBtn").addEventListener("click", async () => {
-    const projects = [el("projectBinastra").checked && "Binastra", el("projectEnlace").checked && "Enlace"].filter(Boolean);
-    if (!projects.length) return alert("至少保留一个项目。");
-    setBusy(el("saveBtn"), true, "保存中...");
-    try {
-      const data = await api("/api/daily-campaign/config", { method: "POST", body: JSON.stringify({
-        enabled: el("enabled").checked,
-        mode: "TEST",
-        time: el("scheduleTime").value,
-        maxLeads: Number(el("maxLeads").value),
-        projects,
-        requireDeepCheck: true,
-      }) });
-      renderSnapshot(data);
-      el("saveMessage").textContent = "已保存。";
-      await check(false);
-    } catch (error) {
-      el("saveMessage").textContent = `保存失败：${error.message}`;
-    } finally {
-      setBusy(el("saveBtn"), false, "");
-    }
-  });
-  el("runBtn").addEventListener("click", async () => {
-    if (!currentCheck?.ready) return;
-    const batch = currentCheck.batch;
-    if (!confirm(`运行 ${batch.project} · ${batch.flow} 的 TEST？\n只会发给 Settings 的测试号码。`)) return;
-    setBusy(el("runBtn"), true, "正在启动 TEST...");
-    try {
-      const data = await api("/api/daily-campaign/run-test", { method: "POST", body: "{}" });
-      alert(`TEST 已启动：${data.readiness.batch.project} · ${data.readiness.batch.flow}`);
-      await load();
-    } catch (error) {
-      alert(`没有发送：${error.message}`);
-      await check(false);
-    } finally {
-      setBusy(el("runBtn"), false, "");
-      el("runBtn").disabled = !currentCheck?.ready;
-    }
-  });
-
-  load();
+load();
+setInterval(load, 60000);
 </script>
 </body>
 </html>

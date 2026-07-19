@@ -40,6 +40,11 @@ function pageOwnershipRecord(nextFlow, page) {
   };
 }
 
+export function effectiveAutomaticFlow(nextFlowLabel, cohortDay) {
+  void cohortDay;
+  return { nextFlow: nextFlowLabel, originalNextFlow: "" };
+}
+
 export function nextFlowPageDeviceScope(nextFlow, page) {
   return recordDeviceScope(pageOwnershipRecord(nextFlow, page), { device: nextFlow.device || {} });
 }
@@ -468,7 +473,10 @@ export function registerNextFlowRoutes(router) {
         const data = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, body);
         for (const page of data?.results ?? []) {
           const phone = nextFlow.normalizePhone(nextFlow.nfPhone(page, "Phone"));
-          const next = nextFlow.nfSelect(page, "Next Flow");
+          const rawNext = nextFlow.nfSelect(page, "Next Flow");
+          const cohortDay = nextFlow.nfSelect(page, "Cohort Day");
+          const effective = effectiveAutomaticFlow(rawNext, cohortDay);
+          const next = effective.nextFlow;
           if (!phone || !next || next === "Completed") continue;
           const ownership = nextFlowPageDeviceScope(nextFlow, page);
           ownershipCounts[ownership] = (ownershipCounts[ownership] || 0) + 1;
@@ -494,7 +502,9 @@ export function registerNextFlowRoutes(router) {
             phone,
             project: nextFlow.nfSelect(page, "Project") || "Unknown",
             nextFlow: next,
-            cohortDay: nextFlow.nfSelect(page, "Cohort Day"),
+            originalNextFlow: effective.originalNextFlow,
+            cohortDay,
+            nextDueDate: page?.properties?.["Follow Up Due"]?.date?.start || null,
             lastReply: nextFlow.nfText(page, "Last Reply Text"),
             lastBlastAt: page?.properties?.["Last Blast At"]?.date?.start || null,
             senderInstance: nextFlow.nfSelect(page, "Sender Instance"),

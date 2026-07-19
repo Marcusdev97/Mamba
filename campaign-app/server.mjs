@@ -326,12 +326,16 @@ const dailyCampaignService = createDailyCampaignService({
   queue: campaignQueueService,
   systemLogs: systemLogService,
   postOps: telegramHub.hasOps ? (text) => telegramHub.postOps(text) : null,
+  getTestLeads,
   fetchDuePlan: ({ deep = false } = {}) => localJson(`/api/next-flow/list${deep ? "?deep=1" : ""}`),
   executeTest: async ({ batch, instances, maxLeads }) => {
     const projects = await loadProjects();
     const project = projects.find((item) => item.name === batch.project);
     if (!project) throw new Error(`找不到 Project 配置: ${batch.project}`);
-    const testRecipients = getTestLeads().slice(0, maxLeads)
+    const selectedTestLeads = Array.isArray(batch.leads) && batch.leads.length
+      ? batch.leads
+      : getTestLeads().slice(0, maxLeads);
+    const testRecipients = selectedTestLeads
       .map((lead) => `${lead.name},${lead.phone},${lead.language || "en"}`)
       .join("\n");
     if (!testRecipients) throw new Error("Settings 没有 TEST 收件人，无法安全测试自动任务。");
@@ -340,10 +344,12 @@ const dailyCampaignService = createDailyCampaignService({
       method: "POST",
       body: JSON.stringify({ project: project.id, mode: "TEST", instances: selectedInstances, testRecipients }),
     });
-    await localJson("/api/next-flow/apply-templates", {
-      method: "POST",
-      body: JSON.stringify({ projectName: batch.project, flow: batch.flow, runId: prepared?.snapshot?.state?.runId }),
-    });
+    if (batch.flow !== "Flow 1 - Project Template") {
+      await localJson("/api/next-flow/apply-templates", {
+        method: "POST",
+        body: JSON.stringify({ projectName: batch.project, flow: batch.flow, runId: prepared?.snapshot?.state?.runId }),
+      });
+    }
     const started = await localJson("/api/start", {
       method: "POST",
       body: JSON.stringify({ optIn: true, overrides: [], project: project.id, runId: prepared?.snapshot?.state?.runId }),
