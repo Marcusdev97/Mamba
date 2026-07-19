@@ -76,7 +76,12 @@ async function findSqliteBinary(preferred) {
 
 function runProcess(binary, args, input = "", timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { stdio: ["pipe", "pipe", "pipe"] });
+    // 撞锁时等待而不是立刻抛 "database is locked"。
+    // .timeout 是 sqlite3 dot-command,设置 busy_timeout 且不产生输出(不污染 -json)。
+    const finalArgs = String(binary).includes("sqlite3")
+      ? ["-cmd", ".timeout 10000", ...args]
+      : args;
+    const child = spawn(binary, finalArgs, { stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
     const timer = setTimeout(() => {

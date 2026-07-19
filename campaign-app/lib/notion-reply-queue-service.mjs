@@ -180,12 +180,30 @@ export function createNotionReplyQueueService({
       }
 
       if (!existingLead) {
-        return markGroupFailure(normalized, pending, {
-          code: "NOTION_LEAD_NOT_FOUND",
-          message: "Blast Leads 暂时找不到这个电话号码。",
-          action: "如果客户刚由另一台电脑上传，请等待自动重试；如果本来就不属于 Blast Leads，可忽略并稍后人工分类。",
-          details: "Notion phone query returned 0 rows.",
-        }, { reason });
+        // Phone is not in Blast Leads. Retry briefly in case it was just uploaded
+        // from another Mac and hasn't synced to Notion yet. Once past the grace
+        // window it is clearly not a Blast Lead (e.g. one of your own private
+        // leads), so treat it as an UNKNOWN contact we only track locally: drop it
+        // from the Notion push queue instead of raising a manual-review alarm.
+        // The reply itself stays saved on this machine (replies.jsonl / lead_status
+        // / conversations) — nothing is lost.
+        const nowMs = now().getTime();
+        const settled = pending.filter((item) => nowMs - dateMs(item.queuedAt) >= manualAfterMs);
+        const young = pending.filter((item) => nowMs - dateMs(item.queuedAt) < manualAfterMs);
+        if (settled.length) {
+          await reliability.removeMany(settled.map((item) => String(item.event.id)));
+          phoneCooldowns.delete(normalized);
+          onLog(`[reply-tracker] not a Blast Lead — tracked locally only, dropped from Notion queue phone=${normalized} messages=${settled.length} reason=${reason}`);
+        }
+        if (young.length) {
+          return markGroupFailure(normalized, young, {
+            code: "NOTION_LEAD_NOT_FOUND",
+            message: "Blast Leads 暂时找不到这个电话号码。",
+            action: "如果客户刚由另一台电脑上传，请等待自动重试；确认不属于 Blast Leads 后会自动转为「仅本机跟踪」，不再报警。",
+            details: "Notion phone query returned 0 rows.",
+          }, { reason });
+        }
+        return { action: "tracked_only", matched: false, messages: settled.length };
       }
 
       phoneCooldowns.delete(normalized);
@@ -274,6 +292,18 @@ export function createNotionReplyQueueService({
 
   async function retryPending() {
     if (!notion.enabled) return { checkedPhones: 0 };
+    // Auto-resolve replies from numbers confirmed NOT in Blast Leads (own leads /
+    // unknown contacts): keep them tracked locally only, don't leave them sitting
+    // as a standing manual-review warning. Data stays on this machine.
+    const settleMs = now().getTime();
+    const trackOnly = reliability.values().filter((item) =>
+      item.status === "manual_review"
+      && (item.errorCode === "NOTION_REPLY_MANUAL_REVIEW" || item.errorCode === "NOTION_LEAD_NOT_FOUND")
+      && settleMs - dateMs(item.queuedAt) >= manualAfterMs);
+    if (trackOnly.length) {
+      await reliability.removeMany(trackOnly.map((item) => String(item.event.id)));
+      onLog(`[reply-tracker] auto-resolved ${trackOnly.length} non-Blast-Lead repl${trackOnly.length === 1 ? "y" : "ies"} to tracked-only`);
+    }
     const phones = [...new Set(reliability.values()
       .filter((item) => item.status !== "manual_review")
       .map((item) => cleanPhone(item.event?.phone))

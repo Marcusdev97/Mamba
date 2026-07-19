@@ -117,8 +117,9 @@ assert.equal(explainNotionReplyError(new Error("fetch failed")).code, "NOTION_NE
   await fs.rm(root, { recursive: true, force: true });
 }
 
-// Old unresolved replies stop generating hourly traffic and become a visible,
-// durable manual-review item with an actionable error code.
+// Replies from numbers that are NOT in Blast Leads (your own private leads or
+// unknown contacts) retry during the sync-lag grace window, then convert to
+// "tracked locally only" instead of becoming a standing manual-review alarm.
 {
   let current = new Date("2026-07-16T10:00:00.000Z");
   const { root, reliability } = await makeReliability("reply-manual", () => current);
@@ -126,17 +127,21 @@ assert.equal(explainNotionReplyError(new Error("fetch failed")).code, "NOTION_NE
   const notion = { enabled: true, findLeadForReply: async () => null, upsertLeadReply: async () => null };
   const queue = createNotionReplyQueueService({ notion, reliability, clock: () => current, onLog: (line) => logs.push(line) });
   await queue.submit(event("msg-1"));
+  // Within the grace window it keeps retrying (a Blast Lead may still be syncing from another Mac).
+  assert.equal(reliability.values()[0].status, "pending");
+  assert.equal(reliability.values()[0].errorCode, "NOTION_LEAD_NOT_FOUND");
+  // Past the grace window it is confirmed not a Blast Lead -> drop to tracked-only, no alarm.
   current = new Date("2026-07-17T10:01:00.000Z");
   await queue.retryPending();
-  const item = reliability.values()[0];
-  assert.equal(item.status, "manual_review");
-  assert.equal(item.errorCode, "NOTION_REPLY_MANUAL_REVIEW");
-  assert.match(item.help, /电话号码|Blast Leads/);
-  assert.ok(logs.some((line) => line.includes('"level":"error"') && line.includes("NOTION_REPLY_MANUAL_REVIEW")));
+  assert.equal(reliability.snapshot().pendingCount, 0, "non-Blast-Lead replies convert to tracked-only");
+  assert.equal(reliability.snapshot().manualReviewCount, 0, "must not raise a manual-review warning");
+  assert.ok(logs.some((line) => line.includes("tracked locally only")), "logs a tracked-only note");
+  assert.ok(!logs.some((line) => line.includes('"level":"error"')), "no error-level issue emitted");
+  // A genuine Blast Lead reply still syncs to Notion normally afterwards.
   notion.findLeadForReply = async () => ({ id: "page-manual", properties: {} });
   notion.upsertLeadReply = async (_event, { existingLead }) => ({ matched: true, existingLead });
-  await queue.syncPhone("60111111111", { force: true, reason: "manual_push" });
-  assert.equal(reliability.snapshot().pendingCount, 0, "manual action must be able to drain manual-review items");
+  await queue.submit(event("msg-2"));
+  assert.equal(reliability.snapshot().pendingCount, 0, "matched replies drain to Notion");
   await fs.rm(root, { recursive: true, force: true });
 }
 
