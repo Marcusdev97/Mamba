@@ -718,8 +718,40 @@ export function registerNextFlowRoutes(router) {
       throw httpError(400, `没有可发送的选中客户${detail}。`);
     }
 
-    nextFlow.setLeadsCache({ projectId: project.id, leads, rejected: [], sourcePath: "(next-flow picker)" });
-    json(res, 200, { ok: true, project: project.id, loaded: leads.length, blocked });
+    // Register the picked list as a proper saved local customer group so it carries a
+    // leadGroupId. Upstream's send gate now requires one; the picker path previously set
+    // the cache without it, which blocked sending. The leads here already passed device
+    // scope + STOP/reply gates above, so this changes who gets messaged not at all — it
+    // only supplies the missing group record and its id.
+    let group;
+    try {
+      group = await nextFlow.createLeadGroup({
+        projectCode: project.id,
+        projectName: project.name,
+        name: `${project.name || project.id} · Next-Flow ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
+        sourceType: "database",
+        sourceName: "next-flow picker",
+        leads,
+      });
+    } catch (error) {
+      throw httpError(400, `建立客户群失败: ${error.message}`);
+    }
+    nextFlow.setLeadsCache({
+      projectId: project.id,
+      leads,
+      rejected: [],
+      sourcePath: "(next-flow picker)",
+      leadGroupId: group.id,
+      leadGroupName: group.name,
+      groupMemberCount: group.memberCount,
+    });
+    json(res, 200, {
+      ok: true,
+      project: project.id,
+      loaded: leads.length,
+      blocked,
+      group: { id: group.id, name: group.name, memberCount: group.memberCount },
+    });
   });
 
   router.post("/api/next-flow/set-flow", async (req, res, runtime) => {

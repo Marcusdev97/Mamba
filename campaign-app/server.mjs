@@ -554,6 +554,7 @@ const runtime = await loadRuntime({
     listRunners: () => campaignRunnerRegistry.list(),
     getProject,
     setLeadsCache: (value) => { leadsCache = value; },
+    createLeadGroup: (options) => localDatabaseService.createLeadGroup(options),
     flowByLabel,
     flowSequence: FLOW_SEQUENCE,
     fetchFlowTemplates,

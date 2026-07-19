@@ -400,9 +400,11 @@ async function startBlast(mode) {
 
 async function doSend(mode, proj, rows, flow, limitCount) {
   try {
+    let leadGroupId = "";
     if (mode === "LIVE") {
       const sel = rows.map((r) => ({ pageId: r.dataset.id, name: r.dataset.name, phone: r.dataset.phone, senderInstance: r.dataset.sender || "" }));
       const loaded = await api("/api/next-flow/load", { project: proj.id, leads: sel });
+      leadGroupId = loaded.group?.id || "";
       if ((loaded.blocked || []).length) {
         toast(`发送前再次拦截 ${loaded.blocked.length} 个拒绝/STOP 客户`);
       }
@@ -411,6 +413,7 @@ async function doSend(mode, proj, rows, flow, limitCount) {
     const startTime = document.getElementById("startTime").value.trim();
     const endTime = document.getElementById("endTime").value.trim();
     const prep = { project: proj.id, mode, instances, startTime, endTime };
+    if (leadGroupId) prep.leadGroupId = leadGroupId;
     if (mode === "LIVE" && limitCount && limitCount < rows.length) prep.leadCount = limitCount;
     const prepared = await api("/api/prepare", prep);
     activeNextRunId = prepared?.snapshot?.state?.runId || null;
