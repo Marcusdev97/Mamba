@@ -74,7 +74,7 @@ export function isExcludedMarketProject(record) {
   return Boolean(exclusionReason(record));
 }
 
-function priceBand(minimum) {
+export function priceBand(minimum) {
   if (!minimum) return "Missing";
   if (minimum < 400000) return "Below RM400k";
   if (minimum < 600000) return "RM400k - RM600k";
@@ -83,7 +83,7 @@ function priceBand(minimum) {
   return "RM1m+";
 }
 
-function completenessOf(project) {
+export function completenessOf(project) {
   const checks = [
     project.name,
     project.developer,

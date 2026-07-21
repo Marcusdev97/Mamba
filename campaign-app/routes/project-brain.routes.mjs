@@ -1,15 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { httpError, json, readJson } from "../lib/http.mjs";
 import { createMarketDashboardService, isExcludedMarketProject } from "../lib/market-dashboard-service.mjs";
-import { listProjects, normalizeProjectKey } from "../knowledge_layer.mjs";
-
-const require = createRequire(import.meta.url);
-const yaml = require("js-yaml");
-// The closing delimiter must be the whole line. Several project descriptions
-// contain long dashed separators which are content, not frontmatter endings.
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
+import { buildProjectBrainExport, buildProjectBrainWorkbook, renderProjectBrainMarkdown } from "../lib/project-brain-export.mjs";
+import {
+  fillFromLegacyKb,
+  LEGACY_KB_DIR,
+  loadLegacyMarketKb,
+  numericRange,
+  parseFrontmatter,
+} from "../lib/market-legacy-kb.mjs";
+import { listProjects, loadProjectContext, normalizeProjectKey } from "../knowledge_layer.mjs";
 
 function jsonNoStore(res, status, data) {
   res.writeHead(status, {
@@ -21,7 +22,7 @@ function jsonNoStore(res, status, data) {
 }
 
 function marketDir(runtime) {
-  return path.join(runtime.paths.rootDir, "brain-vault-import", "市场库");
+  return path.join(runtime.paths.rootDir, ...LEGACY_KB_DIR);
 }
 
 const fallbackServices = new WeakMap();
@@ -34,51 +35,6 @@ function companyMarket(runtime) {
     }));
   }
   return fallbackServices.get(runtime);
-}
-
-function numericRange(value) {
-  if (!Array.isArray(value)) return [null, null];
-  const numbers = value.slice(0, 2).map((item) => Number(item));
-  return numbers.map((item) => Number.isFinite(item) && item > 0 ? item : null);
-}
-
-// Fable 的第一批导出里有些 quoted scalar 直接跨行，严格 YAML 会拒绝。
-// Dashboard 只读这些文件，所以这里做保守 fallback：按 top-level key 拆值，
-// 不改原文件，也不让损坏的扩展字段进入 Active Brain。
-function parseLenientFrontmatter(source) {
-  const fields = {};
-  let currentKey = null;
-  let chunks = [];
-  const commit = () => {
-    if (!currentKey) return;
-    const raw = chunks.join("\n").trim();
-    if (["price_range_rm", "bu_range_sf"].includes(currentKey)) {
-      fields[currentKey] = (raw.match(/-?[\d.]+/g) ?? []).slice(0, 2).map(Number);
-    } else if (currentKey === "tags") {
-      fields[currentKey] = chunks.map((line) => line.match(/^\s*-\s*(.+)$/)?.[1]?.trim()).filter(Boolean);
-    } else if (currentKey === "verified") {
-      fields[currentKey] = /^true\b/i.test(raw);
-    } else {
-      fields[currentKey] = raw
-        .replace(/\s+#.*$/, "")
-        .replace(/^"/, "")
-        .replace(/"$/, "")
-        .replace(/\\"/g, '"')
-        .trim();
-    }
-  };
-  for (const line of source.split(/\r?\n/)) {
-    const keyMatch = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (keyMatch) {
-      commit();
-      currentKey = keyMatch[1];
-      chunks = [keyMatch[2]];
-    } else if (currentKey) {
-      chunks.push(line);
-    }
-  }
-  commit();
-  return fields;
 }
 
 function priceBand(minimum) {
@@ -117,26 +73,19 @@ function completenessOf(fields) {
 }
 
 function parseProject(file, raw, activeProjects, includeBody = false) {
-  const match = FRONTMATTER_RE.exec(raw);
-  if (!match) throw new Error(`${file} 缺 YAML frontmatter。`);
-  let fields;
-  let parseMode = "yaml";
-  try {
-    fields = yaml.load(match[1]) ?? {};
-  } catch {
-    fields = parseLenientFrontmatter(match[1]);
-    parseMode = "recovered";
-  }
+  const parsed = parseFrontmatter(raw);
+  if (!parsed) throw new Error(`${file} 缺 YAML frontmatter。`);
+  const { fields, body, source: frontmatter, parseMode } = parsed;
   if (!fields.name) throw new Error(`${file} 无法读取项目名称。`);
   const [priceMin, priceMax] = numericRange(fields.price_range_rm);
   const [buMin, buMax] = numericRange(fields.bu_range_sf);
   // Read these safety flags directly too. They are one-line fields even in the
   // malformed Fable exports and must never be lost behind an earlier bad quote.
-  const qaInline = match[1].match(/^qa_flag:\s*(.+)$/m)?.[1]
+  const qaInline = frontmatter.match(/^qa_flag:\s*(.+)$/m)?.[1]
     ?.replace(/\s+#.*$/, "")
     .replace(/^["']|["']$/g, "")
     .trim();
-  const verifiedInline = match[1].match(/^verified:\s*(true|false)\b/im)?.[1];
+  const verifiedInline = frontmatter.match(/^verified:\s*(true|false)\b/im)?.[1];
   const qaFlag = String(qaInline ?? fields.qa_flag ?? "Not checked").trim();
   const qaReady = qaFlag.toUpperCase() === "OK";
   const state = String(fields.state ?? "Unassigned").trim() || "Unassigned";
@@ -169,7 +118,7 @@ function parseProject(file, raw, activeProjects, includeBody = false) {
     completeness: completenessOf(fields),
     activeBrain: isActiveProject(fields.name, activeProjects),
     parseMode,
-    ...(includeBody ? { body: match[2].trim() } : {}),
+    ...(includeBody ? { body: body.trim() } : {}),
   };
 }
 
@@ -186,10 +135,14 @@ async function loadMarket(runtime, includeBody = false) {
   const cached = await company.readCache();
   if (cached?.projects?.length) {
     const activeProjects = listProjects();
+    // 公司 API 只给薄薄一层清单。completion / land size / maintenance 这些回客户
+    // 常被问到的栏位，靠旧 KB 按 uid 补空 —— 只补公司没填的，绝不覆盖。
+    const legacyKb = await loadLegacyMarketKb(runtime.paths.rootDir);
     const projects = cached.projects.map((project) => {
       const safe = company.publicProject(project);
+      const merged = fillFromLegacyKb(safe, legacyKb.get(project.uid));
       return {
-        ...safe,
+        ...merged,
         detailKey: project.uid,
         activeBrain: isActiveProject(project.name, activeProjects),
         ...(includeBody ? {
@@ -214,6 +167,7 @@ async function loadMarket(runtime, includeBody = false) {
         excludedCount: cached.excludedCount,
         excluded: cached.excluded,
         latestChanges: cached.latestChanges || [],
+        legacyFilledProjects: projects.filter((project) => project.legacyFilled?.length).length,
       },
     };
   }
@@ -248,6 +202,36 @@ async function loadMarket(runtime, includeBody = false) {
     source: "brain-vault-import/市场库 (尚未从公司刷新)",
     company: { cached: false, collectedAt: null, rawCount: 0, includedCount: 0, excludedCount: 0, excluded: { Penang: 0, Johor: 0 }, latestChanges: [] },
   };
+}
+
+const EXPORT_CONTENT_TYPES = {
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  md: "text/markdown; charset=utf-8",
+  json: "application/json; charset=utf-8",
+};
+
+// Active Brain 那几个盘的完整资料 + 已核实事实。fact 没写 project 的算通用，
+// 只收一次，不然每个盘都重复一遍，喂给 AI 全是噪音。
+function loadActiveBrainExport() {
+  const entries = [];
+  const generic = new Map();
+  for (const { name, file } of listProjects()) {
+    const context = loadProjectContext(name);
+    const key = normalizeProjectKey(name);
+    const facts = [];
+    for (const fact of context.facts) {
+      if (normalizeProjectKey(fact.project) === key) facts.push(fact);
+      else generic.set(`${fact.category ?? ""}::${fact.fact}`, fact);
+    }
+    entries.push({
+      name: context.projectName ?? name,
+      file,
+      sheet: context.sheet ?? {},
+      promos: context.promos ?? [],
+      facts,
+    });
+  }
+  return { projects: entries, genericFacts: [...generic.values()] };
 }
 
 export function registerProjectBrainRoutes(router) {
@@ -297,7 +281,8 @@ export function registerProjectBrainRoutes(router) {
       if (!project) throw httpError(404, "公司楼盘缓存里找不到这个项目。请按「从公司刷新」后再试。", "MARKET_PROJECT_NOT_FOUND");
       const companyDetail = await company.projectDetails(uid, { force: url.searchParams.get("refresh") === "1" });
       const activeProjects = listProjects();
-      const safe = company.publicProject(project);
+      const legacyKb = await loadLegacyMarketKb(runtime.paths.rootDir);
+      const safe = fillFromLegacyKb(company.publicProject(project), legacyKb.get(project.uid));
       json(res, 200, {
         ok: true,
         project: {
@@ -329,12 +314,105 @@ export function registerProjectBrainRoutes(router) {
     json(res, 200, { ok: true, project: parseProject(file, raw, listProjects(), true) });
   });
 
+  // 导出整个 Project Brain。xlsx 给人开 Excel 看/筛选，md 给 ChatGPT 直接读，json 给程式接。
+  // Sales Chart 登入资料和公司 raw payload 由 project-brain-export 挡掉，不会出现在档案里。
+  router.get("/api/project-brain/export", async (req, res, runtime) => {
+    const url = new URL(req.url, "http://mamba.local");
+    const format = (url.searchParams.get("format") || "xlsx").toLowerCase();
+    const scope = (url.searchParams.get("scope") || "all").toLowerCase();
+    if (!EXPORT_CONTENT_TYPES[format]) throw httpError(400, "导出格式只支持 xlsx / md / json。", "INVALID_EXPORT_FORMAT");
+    if (!["all", "active", "market"].includes(scope)) throw httpError(400, "导出范围只支持 all / active / market。", "INVALID_EXPORT_SCOPE");
+
+    let market = { projects: [], source: "", company: {} };
+    let details = {};
+    if (scope !== "active") {
+      market = await loadMarket(runtime, true);
+      const cache = await companyMarket(runtime).readDetailCache?.();
+      details = cache?.projects ?? {};
+    }
+    const active = scope === "market" ? { projects: [], genericFacts: [] } : loadActiveBrainExport();
+
+    const payload = buildProjectBrainExport({
+      generatedAt: new Date().toISOString(),
+      scope,
+      source: market.source,
+      company: market.company,
+      marketProjects: market.projects,
+      details,
+      activeProjects: active.projects,
+      genericFacts: active.genericFacts,
+    });
+    let body;
+    if (format === "xlsx") body = buildProjectBrainWorkbook(payload);
+    else if (format === "json") body = `${JSON.stringify(payload, null, 2)}\n`;
+    else body = renderProjectBrainMarkdown(payload);
+
+    const filename = `mamba-project-brain-${scope}-${new Date().toISOString().slice(0, 10)}.${format}`;
+    res.writeHead(200, {
+      "Content-Type": EXPORT_CONTENT_TYPES[format],
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": Buffer.byteLength(body),
+      "Cache-Control": "no-store, max-age=0",
+    });
+    res.end(body);
+  });
+
   router.post("/api/project-brain/sales-chart/reveal", async (req, res, runtime) => {
     const body = await readJson(req);
     const uid = String(body?.uid || "").trim();
     if (!uid) throw httpError(400, "缺少楼盘 UID，无法读取 Sales Chart。", { code: "MARKET_PROJECT_UID_REQUIRED" });
     const secret = await companyMarket(runtime).salesChartSecret(uid);
     jsonNoStore(res, 200, { ok: true, salesChart: secret });
+  });
+
+  // 分批把公司详情 (Layout / Sales Package / Plans) 抓齐。一个盘要打 3 次公司 API，
+  // 132 个盘 = 近 400 次请求 —— 一口气打完既会把 HTTP 请求挂死，也太粗鲁。
+  // 所以一次只抓一小批、只抓缓存里没有的，前端反复呼叫直到 remaining 归零。
+  // 中途关掉页面也不怕，已经抓到的都写进缓存了，下次接着抓。
+  router.post("/api/project-brain/details/fetch-batch", async (req, res, runtime) => {
+    const body = await readJson(req).catch(() => ({}));
+    const limit = Math.min(Math.max(Number(body?.limit) || 8, 1), 25);
+    const company = companyMarket(runtime);
+    const cached = await company.readCache();
+    if (!cached?.projects?.length) throw httpError(409, "公司楼盘缓存是空的。请先按「从公司刷新」。", "MARKET_CACHE_EMPTY");
+
+    const detailCache = await company.readDetailCache?.();
+    const missing = cached.projects
+      .filter((project) => project.uid && !detailCache?.projects?.[project.uid])
+      .map((project) => ({ uid: project.uid, name: project.name }));
+
+    const batch = missing.slice(0, limit);
+    const failed = [];
+    let fetched = 0;
+    let tokenExpired = false;
+    for (const project of batch) {
+      try {
+        await company.refreshProjectDetail(project.uid);
+        fetched += 1;
+      } catch (error) {
+        failed.push({ name: project.name, error: error.message });
+        // Token 过期再打下去只会一路失败，直接停手让使用者去换凭证。
+        if (error.code === "MARKET_COMPANY_TOKEN_EXPIRED") { tokenExpired = true; break; }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    await runtime.systemLogs?.write({
+      level: failed.length ? "warn" : "info",
+      area: "market_dashboard",
+      event: "property213_detail_batch",
+      message: `Company detail batch: ${fetched} fetched, ${failed.length} failed, ${missing.length - fetched} remaining.`,
+      context: { fetched, failed: failed.length, remaining: missing.length - fetched, tokenExpired },
+    }).catch(() => {});
+
+    json(res, 200, {
+      ok: true,
+      total: cached.projects.length,
+      fetched,
+      failed,
+      remaining: Math.max(missing.length - fetched, 0),
+      tokenExpired,
+    });
   });
 
   router.post("/api/project-brain/refresh", async (_req, res, runtime) => {

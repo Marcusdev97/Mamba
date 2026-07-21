@@ -18,6 +18,7 @@
   .source-note small { color:var(--muted); }
   .source-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; text-align:right; }
   .source-actions .btn { white-space:nowrap; }
+  .source-actions select { background:var(--panel-3); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-size:12px; }
   .kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:var(--radius-l); overflow:hidden; margin-bottom:16px; }
   .kpi { padding:17px 18px; background:var(--panel); border-right:1px solid var(--line); min-height:92px; }
   .kpi:last-child { border-right:0; }
@@ -125,6 +126,15 @@
     <div><b>Market Library 是参考库，不会自动回答客户。</b> 只有经过核对并放进 Active Brain 的项目，Sales Brain 才会使用。</div>
     <div class="source-actions">
       <small id="source">正在读取资料...</small>
+      <select id="export-scope" aria-label="导出范围">
+        <option value="all">全部 (Active Brain + 市场库)</option>
+        <option value="active">只要 Active Brain</option>
+        <option value="market">只要市场库</option>
+      </select>
+      <button class="btn" id="export-xlsx" type="button" title="下载 Excel：一个盘一行，可以排序、筛选、做 pivot">⤓ 导出 Excel</button>
+      <button class="btn" id="export-md" type="button" title="下载 Markdown，可以直接丢进 ChatGPT 当参考资料">Markdown</button>
+      <button class="btn" id="export-json" type="button" title="下载 JSON，给程式接">JSON</button>
+      <button class="btn" id="fetch-details" type="button" title="逐个盘抓公司的 Layout / Sales Package / Plans，可以中途停，下次接着抓">⇣ 抓公司详情</button>
       <button class="btn primary" id="refresh-company" type="button">↻ 从公司刷新</button>
     </div>
   </div>
@@ -411,10 +421,14 @@ async function selectProject(detailKey, detailKind, forceRefresh = false) {
         <dt>Built-up</dt><dd>${escapeHtml(range(p.buMin, p.buMax, "sq ft"))}</dd>
         <dt>Completion</dt><dd>${escapeHtml(p.completion || "-")}</dd>
         <dt>Total Units</dt><dd>${escapeHtml(p.totalUnits || "-")}</dd>
+        <dt>Land Size</dt><dd>${escapeHtml(p.landSize || "-")}</dd>
+        <dt>Blocks / Storeys</dt><dd>${escapeHtml(p.blocksStoreys || "-")}</dd>
+        <dt>Maintenance</dt><dd>${escapeHtml(p.maintenance || "-")}</dd>
         <dt>Completeness</dt><dd>${p.completeness}%</dd>
         <dt>Source</dt><dd>${escapeHtml(p.source || "-")}</dd>
         <dt>Verified</dt><dd>${p.verified ? "Yes" : "No - check before quoting"}</dd>
       </dl>
+      ${p.legacyFilled?.length ? `<div class="qa-box"><b>补空提醒</b><br>公司系统没有这几栏，是用${escapeHtml(p.legacySource)}补的，报价前自己再确认一次：<br>${escapeHtml(p.legacyFilled.join(", "))}</div>` : ""}
       <div class="qa-box"><b>QA note</b><br>${escapeHtml(p.qaFlag)}</div>
       ${renderCompanyDetail(p.companyDetail)}
       <div class="body-preview">${escapeHtml(p.body || "No project notes.")}</div>`;
@@ -479,12 +493,94 @@ async function refreshFromCompany() {
   }
 }
 
+// 一批一批抓公司详情，抓完一批再叫下一批，直到 remaining 归零。
+// 按钮变成「停」，随时可以喊停 —— 已经抓到的都在缓存里，不会白抓。
+let stopFetchingDetails = false;
+
+async function fetchCompanyDetails() {
+  const button = $("fetch-details");
+  if (button.dataset.running === "1") {
+    stopFetchingDetails = true;
+    button.textContent = "正在停...";
+    return;
+  }
+  stopFetchingDetails = false;
+  button.dataset.running = "1";
+  const previousText = button.textContent;
+  let done = 0;
+  const problems = [];
+  try {
+    for (;;) {
+      const response = await fetch("/api/project-brain/details/fetch-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 8 }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "抓公司详情失败。");
+      done += data.fetched;
+      problems.push(...data.failed);
+      button.textContent = `■ 停 (还剩 ${data.remaining})`;
+      $("source").textContent = `已抓 ${done} 个盘的公司详情，还剩 ${data.remaining}${problems.length ? ` · ${problems.length} 个失败` : ""}...`;
+      if (data.tokenExpired) throw new Error("公司登录凭证过期了，抓到一半停下。更新凭证后可以接着抓。");
+      // fetched=0 而且还有 remaining = 这批全挂了，再打下去也是白打。
+      if (!data.remaining || (!data.fetched && data.failed.length)) break;
+      if (stopFetchingDetails) break;
+    }
+    await load();
+    $("source").textContent = `公司详情抓好 ${done} 个盘${problems.length ? `，${problems.length} 个失败: ${problems.slice(0, 3).map((item) => item.name).join(", ")}` : ""}${stopFetchingDetails ? "（已手动停止）" : ""}。`;
+  } catch (error) {
+    $("source").textContent = error.message;
+  } finally {
+    button.dataset.running = "0";
+    button.textContent = previousText;
+  }
+}
+
+// 用 fetch + blob 而不是直接开链接：出错时可以把讯息显示在页面上，
+// 不会把一页 JSON 错误丢到新分页里。
+async function downloadExport(format) {
+  const button = $(`export-${format}`);
+  const previousText = button.textContent;
+  const scope = $("export-scope").value;
+  button.disabled = true;
+  button.textContent = "正在打包...";
+  try {
+    const response = await fetch(`/api/project-brain/export?scope=${encodeURIComponent(scope)}&format=${format}`);
+    if (!response.ok) {
+      // 404 = 跑着的 server 比导出功能旧，route 还没注册。直接讲怎么修，
+      // 不要把后端那句 "Not found" 丢给使用者看。
+      if (response.status === 404) throw new Error("导出功能还没生效 —— 现在跑的 Mamba server 比这个功能旧，重启 server 就好。");
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "导出失败。");
+    }
+    const blob = await response.blob();
+    const name = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1]
+      || `mamba-project-brain.${format}`;
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    $("source").textContent = `已导出 ${name}（${Math.round(blob.size / 1024)} KB）。`;
+  } catch (error) {
+    $("source").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = previousText;
+  }
+}
+
 $("search").addEventListener("input", applyFilters);
 $("state").addEventListener("change", () => { refreshAreas(); applyFilters(); });
 $("area").addEventListener("change", applyFilters);
 $("price").addEventListener("change", applyFilters);
 $("readiness-filter").addEventListener("change", applyFilters);
 $("refresh-company").addEventListener("click", refreshFromCompany);
+$("fetch-details").addEventListener("click", fetchCompanyDetails);
+$("export-xlsx").addEventListener("click", () => downloadExport("xlsx"));
+$("export-md").addEventListener("click", () => downloadExport("md"));
+$("export-json").addEventListener("click", () => downloadExport("json"));
 load();
 </script>
 </body>
