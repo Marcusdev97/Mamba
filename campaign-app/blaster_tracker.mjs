@@ -26,6 +26,7 @@ import { createNotionReplyQueueService } from "./lib/notion-reply-queue-service.
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
+import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 
 const hub = makeHub();
 
@@ -64,6 +65,7 @@ let lastWebhookError = null;
 const pushedPhones = new Set(); // unknown numbers manually pushed to Notion this session
 const reliability = createTrackerReliabilityService({ trackerDir });
 const trackerSystemLogs = createSystemLogService({ rootDir: paths.rootDir });
+const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
 const notionReplyQueue = createNotionReplyQueueService({
   notion,
   reliability,
@@ -276,6 +278,19 @@ async function saveEvent(event) {
     event.instanceName,
     event.text,
   ].map(csvCell).join(",")}\n`);
+
+  // 写进本机数据库，jsonl 之外多一份查得动的纪录。写库失败不影响回复处理 ——
+  // jsonl 已经落地了，之后跑 backfill_reply_conversations.mjs 可以补回来。
+  await conversationLog.recordReply(event).catch((error) => {
+    console.log(`[reply-tracker] 回复写入本机数据库失败 phone=${event.phone}: ${error.message}`);
+    trackerSystemLogs.write({
+      level: "warn",
+      area: "local_database",
+      event: "CONVERSATION_LOG_WRITE_FAILED",
+      message: `客户回复已保存在 replies.jsonl，但写入本机数据库失败。影响：这条回复暂时查不到、也进不了 reply brain。处理：跑 node campaign-app/backfill_reply_conversations.mjs 补写。原始错误：${error.message}`,
+      context: { phone: event.phone, messageId: event.id, code: error.code || "" },
+    }).catch(() => {});
+  });
 
   lastEvents.unshift(event);
   lastEvents = lastEvents.slice(0, 80);

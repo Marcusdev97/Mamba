@@ -80,6 +80,25 @@ checkTrue("prompt carries the customer text", user.includes("多少钱?"));
 const emptyPrompt = buildPrompt({ event, classified, cache: { knowledge: { facts: [] }, golden: {}, objections: {} }, lead: {} });
 checkTrue("empty KB -> explicit warning in prompt", emptyPrompt.user.includes("库是空的"));
 
+// --- recall: 客户之前的对话进 prompt ---
+const history = [
+  { direction: "outbound", source: "blast", flowTopic: "Flow 1 - Project Template", sentAt: "2026-07-10T02:00:00.000Z", text: "X".repeat(900) },
+  { direction: "inbound", sentAt: "2026-07-10T03:00:00.000Z", text: "有 3 房的吗?" },
+  { direction: "outbound", source: "brain", flowTopic: "ai_reply", sentAt: "2026-07-10T03:05:00.000Z", text: "有的，我发给你看看" },
+];
+const recalled = buildPrompt({ event, classified, cache, lead: { name: "Ali", replyText: "有 3 房的吗?" }, history });
+checkTrue("recall: 历史进了 prompt", recalled.user.includes("这个客户之前的对话"));
+checkTrue("recall: 客户讲的话给全文", recalled.user.includes("有 3 房的吗?"));
+checkTrue("recall: 群发标成我方", recalled.user.includes("我方(群发)"));
+checkTrue("recall: AI 回复标成我方", recalled.user.includes("我方(AI 回复)"));
+checkTrue("recall: 出站原文不进 prompt (只给摘要)", !recalled.user.includes("X".repeat(200)));
+checkTrue("recall: 历史里的数字不算已核实", recalled.user.includes("不算「已核实」"));
+checkTrue("recall: 有历史就不再单独列上一条回复", !recalled.user.includes("上一条回复:"));
+
+const noHistory = buildPrompt({ event, classified, cache, lead: { name: "Ali", replyText: "有 3 房的吗?" }, history: [] });
+checkTrue("没有历史时仍然保留上一条回复", noHistory.user.includes("上一条回复:"));
+checkTrue("没有历史时不该出现空的历史段落", !noHistory.user.includes("这个客户之前的对话"));
+
 // --- buttons + callback round-trip ---
 check("three buttons", draftButtons("abc").map((b) => b.data), ["ok:abc", "edit:abc", "take:abc"]);
 check("parse ok", parseCallbackData("ok:abc"), { action: "ok", pendingId: "abc" });

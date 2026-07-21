@@ -12,6 +12,7 @@ import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
+import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
@@ -113,6 +114,7 @@ const goldenLedgerService = createGoldenConversationLedgerService({
   dataDir: paths.dataDir,
 });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
+const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
 const remoteMambaService = createRemoteMambaService({ rootDir: paths.rootDir, consolePort: PORT });
@@ -496,7 +498,7 @@ const runtime = await loadRuntime({
     personalize,
     shortPause,
     openInstances: deviceOpenInstances,
-    createPreviewRunner: () => new CampaignRunner({ env, systemLogs: systemLogService }),
+    createPreviewRunner: () => new CampaignRunner({ env, systemLogs: systemLogService, conversationLog }),
     addProjectOption,
     setImageAlias,
   },
@@ -513,11 +515,11 @@ const runtime = await loadRuntime({
     resolveTime,
     formatTime,
     getTestLeads,
-    createRunner: (config) => new CampaignRunner({ config, env, systemLogs: systemLogService }),
+    createRunner: (config) => new CampaignRunner({ config, env, systemLogs: systemLogService, conversationLog }),
     restoreRunner: async ({ runId, projectId }) => {
       if (!/^run_[A-Za-z0-9_.-]+$/.test(String(runId || ""))) throw new Error("Queue runId 不合法。");
       const { config } = await getProject(projectId);
-      const restored = new CampaignRunner({ config, env, systemLogs: systemLogService });
+      const restored = new CampaignRunner({ config, env, systemLogs: systemLogService, conversationLog });
       const expectedPath = path.join(paths.runsDir, `${runId}.json`);
       await restored.restore(expectedPath);
       return restored;

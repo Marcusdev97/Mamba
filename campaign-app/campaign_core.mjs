@@ -528,12 +528,15 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
 // Drives one campaign run. Holds state in memory and mirrors it to disk so the
 // web console can poll progress and other tools can read active-run.json.
 export class CampaignRunner {
-  constructor({ config, env, onLog, systemLogs } = {}) {
+  constructor({ config, env, onLog, systemLogs, conversationLog } = {}) {
     this.config = config;
     this.env = env;
     this.api = makeApi(env);
     this.onLog = onLog;
     this.systemLogs = systemLogs;
+    // 发出去的每一条也要留一份进本机数据库，conversation 才凑得完整。
+    // 没传就是不记录 —— 测试和一次性脚本不必被迫接数据库。
+    this.conversationLog = conversationLog ?? null;
     this.state = null;
     this.runPath = null;
     this.stopped = false;
@@ -808,7 +811,29 @@ export class CampaignRunner {
         delay: 1000,
       }),
     });
-    return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
+    const sent = { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
+    await this.logOutbound(instanceName, number, text, sent, { mediaPath: relativeMediaPath });
+    return sent;
+  }
+
+  // 写进本机数据库。只记名单里的号码(service 自己会挡)，而且永远不能影响真的发送 ——
+  // 讯息已经出去了，这里再怎么错都只能是一行 log。
+  async logOutbound(instanceName, number, text, sent, extra = {}) {
+    if (!this.conversationLog) return;
+    try {
+      await this.conversationLog.recordOutbound({
+        phone: number,
+        text,
+        instanceName,
+        messageId: sent?.messageId ?? "",
+        sentAt: sent?.sentAt ?? "",
+        source: "blast",
+        flowTopic: this.state?.flowKey ?? this.state?.campaignId ?? "",
+        ...extra,
+      });
+    } catch (error) {
+      this.onLog?.(`对话纪录写入失败(讯息已发出) ${number}: ${error.message}`);
+    }
   }
 
   async sendText(instanceName, number, text) {
@@ -830,7 +855,9 @@ export class CampaignRunner {
       timeoutMs: SEND_API_TIMEOUT_MS,
       body: JSON.stringify({ number, text, delay: 1000 }),
     });
-    return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
+    const sent = { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
+    await this.logOutbound(instanceName, number, text, sent);
+    return sent;
   }
 
   // Native WhatsApp poll — the customer taps an option instead of typing. Works on

@@ -158,7 +158,38 @@ export function parseMediaTags(draft, mediaMap = {}) {
 // Verified/Valid-Until gate at the data level). projectCtx (Layer 2) scopes
 // facts + sheet to the ONE 盘 this lead was blasted under — cross-project fact
 // leakage is prevented by construction, not by prompt discipline.
-export function buildPrompt({ event, classified, cache, lead, projectCtx = null }) {
+// 对话历史渲染成 prompt 里的一段。
+//
+// 客户讲的话给全文 —— 那才是判断依据。我们发出去的只给摘要：blast 模板动辄几百字，
+// 三条就把 context 塞爆，把「本盘资料」和 VERIFIED FACTS 那些硬规则挤到后面，
+// 大脑就开始乱讲数字。大脑只需要知道「我们发过 Flow 1 项目介绍」，不需要原文。
+const HISTORY_INBOUND_MAX = 400;
+const HISTORY_OUTBOUND_MAX = 60;
+
+function historyLine(message) {
+  const at = String(message.sentAt ?? "").slice(5, 16).replace("T", " ");
+  const text = String(message.text ?? "").replace(/\s+/g, " ").trim();
+  if (message.direction === "outbound") {
+    const label = message.source === "brain" ? "我方(AI 回复)" : "我方(群发)";
+    const topic = String(message.flowTopic ?? "").trim();
+    const preview = text.length > HISTORY_OUTBOUND_MAX ? `${text.slice(0, HISTORY_OUTBOUND_MAX)}…` : text;
+    return `[${at}] ${label}${topic ? ` · ${topic}` : ""}: ${preview}`;
+  }
+  const preview = text.length > HISTORY_INBOUND_MAX ? `${text.slice(0, HISTORY_INBOUND_MAX)}…` : text;
+  return `[${at}] 客户: ${preview}`;
+}
+
+export function formatConversationHistory(history) {
+  const lines = (history ?? []).map(historyLine).filter(Boolean);
+  if (!lines.length) return "";
+  return [
+    "## 这个客户之前的对话 (由旧到新, 我方内容只给摘要)",
+    ...lines,
+    "规则: 这段只是背景。里面出现过的价格/面积/优惠不算「已核实」, 要引用数字还是只能用上面的本盘资料和 VERIFIED FACTS。",
+  ].join("\n");
+}
+
+export function buildPrompt({ event, classified, cache, lead, projectCtx = null, history = [] }) {
   const factList = projectCtx?.facts ?? cache?.knowledge?.facts ?? [];
   const facts = factList
     .map((f) => `- [${f.category ?? "General"}] ${f.fact}${f.validUntil ? ` (有效至 ${f.validUntil})` : ""}`)
@@ -212,8 +243,12 @@ export function buildPrompt({ event, classified, cache, lead, projectCtx = null 
     `## 这个 LEAD`,
     `姓名: ${lead?.name ?? "未知"}`,
     `之前状态: ${lead?.lastBlastStatus ?? lead?.status ?? "未知"}`,
-    lead?.replyText ? `上一条回复: ${lead.replyText}` : "",
+    // 有完整历史时就不必再单独列「上一条回复」——历史最后一条就是它，列两次
+    // 反而像客户讲了两遍。
+    !history?.length && lead?.replyText ? `上一条回复: ${lead.replyText}` : "",
     "",
+    formatConversationHistory(history),
+    history?.length ? "" : "",
     `## 客户刚发来 (分类: ${classified.route})`,
     `"${event.text}"`,
     "",
