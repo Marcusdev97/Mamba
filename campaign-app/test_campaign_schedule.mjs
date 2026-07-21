@@ -236,6 +236,53 @@ function queuedAssignments(count) {
 }
 
 {
+  const phone = "60179978682";
+  const liveRunner = new CampaignRunner({ config: { delivery: { replyLookbackDays: 0 } }, env: {} });
+  const liveJob = {
+    id: "suppressed-live",
+    status: "QUEUED",
+    scheduledAt: new Date(0).toISOString(),
+    instanceName: "wa_01",
+    lead: { name: "Suppressed Live", phone },
+    part1Text: "Hello",
+    part1Media: "",
+    part2Text: "",
+    part2Media: "",
+  };
+  liveRunner.state = {
+    mode: "LIVE",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [liveJob],
+  };
+  liveRunner.suppression = new Set([phone]);
+  liveRunner.saveState = async () => {};
+  liveRunner.systemLog = async () => {};
+  liveRunner.sendMediaWithRetry = async () => { throw new Error("LIVE suppression should stop before send"); };
+  await liveRunner.processJob(liveJob);
+  assert.equal(liveJob.status, "SKIPPED_SUPPRESSED", "LIVE still honors the global STOP list");
+
+  const testRunner = new CampaignRunner({ config: { delivery: { replyLookbackDays: 0 } }, env: {} });
+  const testJob = { ...liveJob, id: "suppressed-test", status: "QUEUED", part1: null, error: null };
+  testRunner.state = {
+    mode: "TEST",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [testJob],
+  };
+  testRunner.suppression = new Set([phone]);
+  testRunner.saveState = async () => {};
+  testRunner.systemLog = async () => {};
+  let sent = 0;
+  testRunner.sendMediaWithRetry = async () => { sent += 1; return { sentAt: new Date().toISOString() }; };
+  await testRunner.processJob(testJob);
+  assert.equal(testJob.status, "SENT", "TEST recipients can bypass global STOP for owned test numbers");
+  assert.equal(sent, 1);
+}
+
+{
   const runner = new CampaignRunner({ config, env: {} });
   runner.state = {
     assignments: [

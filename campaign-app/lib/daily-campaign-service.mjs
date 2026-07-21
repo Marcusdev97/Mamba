@@ -737,6 +737,14 @@ export function createDailyCampaignService({
         return { ok: false, status: "HOLD", readiness, reasons };
       }
       const result = await executeTest({ batch: readiness.batch, plan: readiness.automationPlan, instances: readiness.instances, maxLeads: config.maxLeads });
+      if (result?.queued === true) {
+        state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+        state.lastRun = { at: clock().toISOString(), status: "QUEUED_TEST", scheduled, batch: readiness.batch, result };
+        await persist();
+        await systemLogs?.write({ level: "info", area: "daily-campaign", event: "test_queued", message: "Daily Next Campaign TEST was queued and has not advanced the TEST cohort.", context: { project: readiness.batch.project, flow: readiness.batch.flow, due: readiness.batch.totalDue, runId: result.runId || null } }).catch(() => {});
+        await notify(`⏳ <b>Campaign Automations TEST 已加入队列</b>\n项目: ${readiness.batch.project}\nFlow: ${readiness.batch.flow}\n名单还不会推进，等真正发送后才算完成。`);
+        return { ok: true, status: "QUEUED_TEST", readiness, result };
+      }
       await advanceTestCohort(readiness.batch?.leads || [], today);
       state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
       state.lastRun = { at: clock().toISOString(), status: "STARTED_TEST", scheduled, batch: readiness.batch, result };

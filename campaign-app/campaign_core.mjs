@@ -906,7 +906,7 @@ export class CampaignRunner {
     // into the cohort (imported before the STOP, or an old cohort file),
     // nothing goes out to a phone on the global STOP list.
     const supPhone = normalizePhone(job.lead?.phone);
-    if (supPhone && this.suppression?.has(supPhone)) {
+    if (this.state?.mode !== "TEST" && supPhone && this.suppression?.has(supPhone)) {
       job.status = "SKIPPED_SUPPRESSED";
       job.error = "Global STOP list (opted out — possibly in another project).";
       await this.saveState();

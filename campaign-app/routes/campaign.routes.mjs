@@ -318,7 +318,9 @@ export function registerCampaignRoutes(router) {
     }
     const instances = selectedOpenInstances(open, body.instances);
     const leads = selectLeads(campaign, project, mode, body);
-    const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null));
+    const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null, {
+      ignoreReadyPreviews: mode === "TEST",
+    }));
     const { startAt, endAt, scheduleMode } = resolveSchedule(campaign, config, body, leads.length);
 
     const runner = campaign.createRunner(config);
@@ -420,7 +422,9 @@ export function registerCampaignRoutes(router) {
     }
 
     const instanceNames = runnerInstanceNames(runner);
-    const activeConflict = conflictingRunner(campaign, instanceNames, runner.state.runId);
+    const activeConflict = conflictingRunner(campaign, instanceNames, runner.state.runId, {
+      ignoreReadyPreviews: runner.state?.mode === "TEST",
+    });
     const existingQueue = await campaign.queue.snapshot();
     const earlierLaneBatch = queuedLaneConflict(existingQueue.items, instanceNames, runner.state.runId);
     if (activeConflict || earlierLaneBatch) {

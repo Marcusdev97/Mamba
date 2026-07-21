@@ -131,6 +131,35 @@ assert.equal(stale.gates.find((item) => item.key === "tracker_heartbeat").ok, fa
 
 service.stop();
 
+const queuedRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-daily-campaign-queued-"));
+await fs.mkdir(path.join(queuedRootDir, "campaign-data", "tracker"), { recursive: true });
+await fs.writeFile(path.join(queuedRootDir, "campaign-data", "tracker", "heartbeat.json"), JSON.stringify({ heartbeatAt: now.toISOString() }));
+const queuedService = createDailyCampaignService({
+  rootDir: queuedRootDir,
+  flowSequence,
+  clock: () => now,
+  replyServices: { status: async () => ({ tracker: true, brain: true }) },
+  openInstances: async () => [{ name: "wa_01", number: "60110000000" }],
+  getTestLeads: () => [{ name: "Anson", phone: "60172064505", language: "en" }],
+  getRunner: () => null,
+  queue: { snapshot: async () => ({ count: 0, hold: null }) },
+  fetchDuePlan: async () => ({
+    leads: [{ project: "Binastra", nextFlow: "Flow 2 - Layout", phone: "60120000001" }],
+    whatsappCheck: { safeToSend: true, scanSource: "evolution-deep" },
+  }),
+  executeTest: async () => ({ runId: "run_queued", queued: true }),
+});
+await queuedService.ready;
+await queuedService.update({ schedulerMode: "TEST", maxLeads: 1 });
+const queuedResult = await queuedService.runTest();
+assert.equal(queuedResult.status, "QUEUED_TEST");
+const queuedSnapshot = await queuedService.snapshot();
+assert.equal(queuedSnapshot.state.lastRun.status, "QUEUED_TEST");
+assert.equal(queuedSnapshot.testCohort[0].nextFlow, "Flow 1 - Project Template", "queued TEST runs must not advance before any message is sent");
+const queuedReadiness = await queuedService.check();
+assert.equal(queuedReadiness.progress.sent, 0, "queued TEST runs are not counted as sent");
+queuedService.stop();
+
 const lateRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-daily-campaign-late-"));
 const lateNow = new Date("2026-07-15T13:13:00.000Z"); // 21:13 Kuala Lumpur
 await fs.mkdir(path.join(lateRootDir, "campaign-data", "tracker"), { recursive: true });
@@ -161,5 +190,6 @@ assert.equal(lateReadiness.workPreview.sendCount, 1);
 lateService.stop();
 
 await fs.rm(rootDir, { recursive: true, force: true });
+await fs.rm(queuedRootDir, { recursive: true, force: true });
 await fs.rm(lateRootDir, { recursive: true, force: true });
 console.log("✅ all daily-campaign tests passed");
