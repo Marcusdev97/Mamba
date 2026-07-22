@@ -195,6 +195,20 @@
     <div class="err" id="startErr"></div>
   </div>
 
+  <!-- Notion 回写队列：run 结束当下会直接回写，这里只收那次失败的。
+       每晚 22:00 自动兜底一轮；急着让名单状态正确就按「立即同步」。
+       没同步到 = 那批人下一轮会被重复发送，所以这个状态要看得见。 -->
+  <div class="card" id="outboxCard">
+    <h3>Notion 同步队列</h3>
+    <div class="muted" id="outboxState">读取中…</div>
+    <div style="margin-top:10px">
+      <button class="btn" id="btnOutboxSync">⟳ 立即同步</button>
+      <button class="btn hidden" id="btnOutboxRetry">重试已放弃的</button>
+    </div>
+    <div class="ok" id="outboxMsg"></div>
+    <div class="err" id="outboxErr"></div>
+  </div>
+
   <!-- Step 4: progress -->
   <div class="card hidden" id="progressCard">
     <div class="progress-head">
@@ -819,7 +833,63 @@ $("projectSel").addEventListener("change", async () => {
   await loadProjectConfig();
 });
 
+// ---- Notion 同步队列 ----
+//
+// 队列空 = 名单状态是准的。有东西积着 = 那些客户在 Notion 看起来还没发过，
+// 下一批可能重发 —— 所以有积压时要显眼。
+async function refreshOutbox() {
+  try {
+    const r = await get("/api/notion-outbox");
+    if (!r || !r.ok) throw new Error((r && r.error) || "读取同步队列失败");
+    const q = r.queue;
+    const waiting = q.pending + q.retry + q.running;
+    const bits = [];
+    if (waiting) bits.push("待同步 " + waiting);
+    if (q.failed) bits.push("已放弃 " + q.failed);
+    if (q.nextAttemptAt) bits.push("下次重试 " + new Date(q.nextAttemptAt).toLocaleString([], { hour12: false }));
+    $("outboxState").textContent = waiting || q.failed
+      ? "⚠️ " + bits.join(" · ") + "（这些客户在 Notion 里还没更新，下一批可能重发）"
+      : "✓ 全部已同步到 Notion" + (r.worker ? "。每晚 " + r.worker.time + " 自动兜底。" : "");
+    $("btnOutboxRetry").classList.toggle("hidden", !q.failed);
+    $("outboxErr").textContent = "";
+  } catch (error) {
+    $("outboxState").textContent = "";
+    $("outboxErr").textContent = error.message;
+  }
+}
+
+$("btnOutboxSync").addEventListener("click", async () => {
+  const button = $("btnOutboxSync");
+  const previous = button.textContent;
+  button.disabled = true; button.textContent = "同步中…";
+  $("outboxMsg").textContent = ""; $("outboxErr").textContent = "";
+  try {
+    const r = await post("/api/notion-outbox/drain", {});
+    if (!r || !r.ok) throw new Error((r && r.error) || "同步失败");
+    $("outboxMsg").textContent = "✓ " + r.message;
+  } catch (error) {
+    $("outboxErr").textContent = error.message;
+  } finally {
+    button.disabled = false; button.textContent = previous;
+    await refreshOutbox();
+  }
+});
+
+$("btnOutboxRetry").addEventListener("click", async () => {
+  $("outboxMsg").textContent = ""; $("outboxErr").textContent = "";
+  try {
+    const r = await post("/api/notion-outbox/retry-failed", {});
+    if (!r || !r.ok) throw new Error((r && r.error) || "重试失败");
+    $("outboxMsg").textContent = "✓ " + r.message + " 按「立即同步」开始推。";
+  } catch (error) {
+    $("outboxErr").textContent = error.message;
+  }
+  await refreshOutbox();
+});
+
 // ---- boot ----
+refreshOutbox();
+setInterval(refreshOutbox, 30000);
 loadProjects().then(refreshInstances);
 setInterval(refreshInstances, 10000); // 从 Settings / Phone Setup 回来时自动更新 senders
 // if a run is already in progress (server restarted page), show it

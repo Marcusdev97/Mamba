@@ -13,6 +13,8 @@ import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
+import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
@@ -508,6 +510,14 @@ const runtime = await loadRuntime({
     getRunner: (runId = null) => getCampaignRunner(runId),
     listRunners: () => campaignRunnerRegistry.list(),
     setRunner: (value, options) => setCurrentRunner(value, options),
+    // 只从监控清单拿掉，campaign-data/runs/ 的发送回执不动。
+    // 也要把「当前 runner」这个指标放掉 —— 不然 registry 空了，/api/status 还是
+    // 会从这个指标回一张卡，画面上清不掉。
+    forgetRunner: (runId) => {
+      const removed = campaignRunnerRegistry.remove(runId);
+      if (removed && runner?.state?.runId === runId) runner = null;
+      return removed;
+    },
     persistRunners: () => campaignRunnerRegistry.persist(),
     getLeadsCache: () => leadsCache,
     getProject,
@@ -569,6 +579,37 @@ const runtime = await loadRuntime({
     applyNotionFlowTemplatesToState,
   },
 });
+
+// ---------- Notion 回写队列（outbox）----------
+//
+// run 结束当下会直接回写 Notion；这里只收「那次失败的」。晚上 22:00 兜底跑一轮，
+// 急的时候按控制台的「立即同步」。没有这层的话，回写失败 = 那批人下次会被重发。
+runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
+runtime.notionOutboxWorker = createNotionOutboxWorker({
+  outbox: runtime.notionOutbox,
+  time: env.NOTION_OUTBOX_TIME || "22:00",
+  onLog: (message) => console.log(message),
+  // 重跑一次那个 run 的收尾。两个函式本身都会跳过没发出去的客户，
+  // 所以重复执行是安全的。
+  handler: async (job) => {
+    const { runId, projectId, autoAdvance } = job.payload ?? {};
+    if (!runId) return false;
+    const runner = await runtime.campaign.restoreRunner({ runId, projectId }).catch(() => null);
+    if (!runner?.state) return false;   // run 档不见了：结案，不重试
+    if (autoAdvance) await autoAdvanceFlow(runner);
+    else await autoNotionUpload(runner, { allowPartial: true });
+    await systemLogService.write({
+      level: "info",
+      area: "notion",
+      event: "outbox_finalise_retried",
+      message: `Notion 回写重试成功：${runId}`,
+      context: { runId, autoAdvance: Boolean(autoAdvance) },
+    }).catch(() => {});
+    return true;
+  },
+});
+runtime.notionOutboxWorker.start();
+
 const server = http.createServer(createApp(runtime));
 
 async function restoreActiveCampaign() {

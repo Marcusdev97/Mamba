@@ -37,6 +37,9 @@ export function isResumableJobStatus(status) {
   const value = String(status || "");
   return value === "QUEUED" || /^WAITING_PART\d+$/.test(value) || /^SENDING_PART\d+$/.test(value);
 }
+// 同一个 flow 在这几天内已经发过就不再发。7 天足够涵盖「今天停、明天重开」这种
+// 情况，又不会挡住正常的 flow 节奏(cadence 以周/月为单位)。
+const DEFAULT_RESEND_COOLDOWN_DAYS = 7;
 const DEFAULT_API_TIMEOUT_MS = 15000;
 const SEND_API_TIMEOUT_MS = 45000;
 
@@ -816,6 +819,38 @@ export class CampaignRunner {
     return sent;
   }
 
+  // 这一批算哪个 flow。防重发就是比对这个值 —— 同一个 flow 才算重发，
+  // Flow 2 不该因为客户收过 Flow 1 就被挡。
+  flowTopic() {
+    return this.state?.templateFlow || this.state?.flowLabel || this.state?.campaignId || "";
+  }
+
+  resendCooldownDays() {
+    const value = Number(this.config?.delivery?.resendCooldownDays ?? DEFAULT_RESEND_COOLDOWN_DAYS);
+    return Number.isFinite(value) && value >= 0 ? value : DEFAULT_RESEND_COOLDOWN_DAYS;
+  }
+
+  // 回传 null = 可以发；回传物件 = 要跳过，附上人看得懂的原因。
+  async recentSendSkip(job) {
+    const days = this.resendCooldownDays();
+    const flow = this.flowTopic();
+    try {
+      const hits = await this.conversationLog.sentFlowSince([job.lead.phone], { flowTopic: flow, sinceDays: days });
+      const hit = [...hits.values()][0];
+      if (!hit) return null;
+      const when = String(hit.sentAt || "").slice(0, 16).replace("T", " ");
+      return {
+        status: "SKIPPED_RECENT_SEND",
+        error: `${days} 天内已经收过「${flow || "同一批"}」(${when}${hit.times > 1 ? ` · 共 ${hit.times} 次` : ""})，跳过避免重发。`,
+      };
+    } catch (error) {
+      return {
+        status: "SKIPPED_SEND_CHECK_FAILED",
+        error: `读不到本机发送纪录，无法确认是否重发，先跳过。修好后可续跑。原因：${error.message}`,
+      };
+    }
+  }
+
   // 写进本机数据库。只记名单里的号码(service 自己会挡)，而且永远不能影响真的发送 ——
   // 讯息已经出去了，这里再怎么错都只能是一行 log。
   async logOutbound(instanceName, number, text, sent, extra = {}) {
@@ -828,7 +863,7 @@ export class CampaignRunner {
         messageId: sent?.messageId ?? "",
         sentAt: sent?.sentAt ?? "",
         source: "blast",
-        flowTopic: this.state?.flowKey ?? this.state?.campaignId ?? "",
+        flowTopic: this.flowTopic(),
         ...extra,
       });
     } catch (error) {
@@ -969,6 +1004,38 @@ export class CampaignRunner {
           });
           return;
         }
+      }
+    }
+
+    // 重发防线 (2026-07-22)：这个号码最近已经收过同一个 flow 就跳过。
+    //
+    // 起因：中途 STOP 的 campaign 不会跑 Notion 收尾(autoAdvanceFlow /
+    // creditSentCounts 只在 COMPLETED 时执行)，所以已发的人在 Notion 里看起来
+    // 从没发过，隔天重开就整批重发。之前唯一的防线就是那个 Notion 栏位。
+    // 这里改成问本机纪录，STOP 与否、Notion 通不通都不影响。
+    //
+    // 查不到就跳过这个客户(fail-closed)：宁可这批少发几个、画面上写清楚原因，
+    // 也不要因为读不到纪录就默默把同一条再发一次。
+    // 没接上纪录服务 = 这道闸整个失效，而且是静默的。宁可吵一次也不要重演事故。
+    if (!this.conversationLog && !this.warnedNoConversationLog) {
+      this.warnedNoConversationLog = true;
+      this.showProgress("⚠️ 没有接上本机发送纪录，防重发闸门停用中 —— 这批有可能重复发给已收过的客户。");
+      await this.systemLog("warn", "resend_guard_disabled", "Campaign is running without the conversation log; duplicate sends cannot be detected.", {
+        runId: this.state?.runId ?? null,
+      });
+    }
+
+    if (!job.part1?.sentAt && this.conversationLog && this.resendCooldownDays() > 0) {
+      const skip = await this.recentSendSkip(job);
+      if (skip) {
+        job.status = skip.status;
+        job.error = skip.error;
+        await this.saveState();
+        this.showProgress(`🔁 ${job.lead.name} skipped — ${skip.error}`);
+        await this.systemLog("info", "recent_send_skip", "Lead skipped: already received this flow recently.", {
+          jobId: job.id, name: job.lead.name, phone: job.lead.phone, flow: this.flowTopic(), detail: skip.error,
+        });
+        return;
       }
     }
 

@@ -385,6 +385,35 @@ LIMIT ${Math.max(1, Math.min(Number(limit) || 15, 200))};`);
     return rows.reverse();
   }
 
+  // 「这些号码最近收过这个 flow 吗」——防重发的核心查询。
+  //
+  // 这是本机纪录，不依赖 Notion 有没有回写成功。以前唯一防线是 Notion 里的
+  // nextFlow 被推进，而那只在 campaign 完整跑完时才写；中途 STOP 就整条防线消失，
+  // 隔天重开会把同一批人再发一次。这个查询把防线搬回本机。
+  //
+  // 一次查一整批(一个 campaign 几百个号码 = 一次查询)，预览和发送共用同一个答案。
+  async function sentFlowSince(phones, { flowTopic = "", sinceDays = 7 } = {}) {
+    const keys = [...new Set((phones ?? []).map(digits).filter(Boolean))];
+    if (!keys.length) return new Map();
+    const database = await cli();
+    const since = new Date(clock().getTime() - Math.max(0, sinceDays) * 24 * 60 * 60 * 1000).toISOString();
+    const conditions = [
+      `v.contact_key IN (${keys.map(sqlValue).join(", ")})`,
+      "m.direction = 'outbound'",
+      `m.sent_at >= ${sqlValue(since)}`,
+    ];
+    // 没给 flow 就是「任何东西都算」，给了就只挡同一个 flow ——
+    // Flow 2 不该因为客户收过 Flow 1 就被挡下来。
+    if (clean(flowTopic)) conditions.push(`m.flow_topic = ${sqlValue(clean(flowTopic))}`);
+    const rows = await database.query(`
+SELECT v.contact_key AS contactKey, MAX(m.sent_at) AS sentAt, COUNT(*) AS times
+FROM messages m
+JOIN conversations v ON v.id = m.conversation_id
+WHERE ${conditions.join(" AND ")}
+GROUP BY v.contact_key;`);
+    return new Map(rows.map((row) => [row.contactKey, { sentAt: row.sentAt, times: row.times }]));
+  }
+
   async function stats() {
     const database = await cli();
     const rows = await database.query(`
@@ -405,6 +434,7 @@ SELECT
     recordOutbound,
     recordOutbounds,
     recentThread,
+    sentFlowSince,
     isKnownLead,
     stats,
   };

@@ -212,6 +212,25 @@ async function restoreQueuedRunner(campaign, item) {
   }
 }
 
+// 回写失败就留一笔待办。idempotency key 带上 runId 和「是哪一种收尾」，
+// 同一个 run 反覆结束(续跑、重启恢复)不会堆出一串重复待办。
+async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error } = {}) {
+  const runId = runner?.state?.runId;
+  if (!runtime.notionOutbox || !runId) return;
+  await runtime.notionOutbox.enqueue({
+    entityType: "campaign_run",
+    entityId: runId,
+    idempotencyKey: `LOCAL_TO_NOTION:campaign_run:${runId}:${autoAdvance ? "flow_advance" : "flow1_upload"}`,
+    payload: {
+      runId,
+      projectId: runner.state?.projectId ?? runner.state?.campaignId ?? "",
+      autoAdvance: Boolean(autoAdvance),
+      reason: reason ?? "",
+      lastError: error?.message ?? "",
+    },
+  }).catch(() => {});
+}
+
 function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error") {
   const campaign = requireCampaign(runtime);
   campaign.setRunner(runner);
@@ -220,13 +239,41 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
     try {
       await runner.run();
       if (runner.state?.status !== "COMPLETED") {
-        const pending = (runner.state?.assignments || []).filter((job) => isResumableJobStatus(job.status)).length;
-        runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；已保留本机进度，不执行 Notion 收尾。`);
+        const assignments = runner.state?.assignments || [];
+        const pending = assignments.filter((job) => isResumableJobStatus(job.status)).length;
+        const sent = assignments.filter((job) => job.part1?.sentAt).length;
+        if (!sent) {
+          runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；没有人收到讯息，不需要收尾。`);
+          return;
+        }
+        // 2026-07-21 事故：中途 STOP 之后完全不回写 Notion，已经收到讯息的人
+        // 在名单上看起来从没发过，隔天重开就整批重发。已发的那部分必须当场记帐，
+        // 剩下的等续跑时再补。creditSentCounts 不能在这里跑 —— 它是一次性旗标，
+        // 提早烧掉的话续跑那批的模板用量就永远算不到了。
+        runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；先把已发出的 ${sent} 位回写 Notion，避免下一批重发。`);
+        try {
+          if (autoAdvance) await campaign.autoAdvanceFlow(runner);
+          else await campaign.autoNotionUpload(runner, { allowPartial: true });
+        } catch (error) {
+          // 推不出去就排进 outbox：晚上兜底那轮或你按「立即同步」时会再试。
+          // 不能只留一行 log 就算了 —— 没写进 Notion = 这批人下次会被重发。
+          await queueNotionFinalise(runtime, runner, { reason: "partial_finalise_failed", autoAdvance, error });
+          runner.pushLog(`部分回写失败：${error.message}。已排入 Notion 同步队列，会自动重试；急的话按「立即同步」。`);
+          await runner.systemLog?.("error", "partial_finalise_failed", "Partial Notion write-back after an unfinished campaign failed; queued for retry.", {
+            runId: runner.state?.runId ?? null, sent, error: error.message,
+          });
+        }
         return;
       }
-      if (autoAdvance) await campaign.autoAdvanceFlow(runner);
-      if (autoAdvance) await campaign.creditSentCounts(runner);
-      await campaign.autoNotionUpload(runner);
+      try {
+        if (autoAdvance) await campaign.autoAdvanceFlow(runner);
+        if (autoAdvance) await campaign.creditSentCounts(runner);
+        await campaign.autoNotionUpload(runner);
+      } catch (error) {
+        await queueNotionFinalise(runtime, runner, { reason: "finalise_failed", autoAdvance, error });
+        runner.pushLog(`Notion 收尾失败：${error.message}。已排入同步队列，会自动重试。`);
+        throw error;
+      }
     } catch (error) {
       runner.pushLog(`运行出错：${error.message}`);
       await runner.systemLog?.("error", errorEvent, "Campaign background run failed.", { error: error.message });
@@ -577,6 +624,83 @@ export function registerCampaignRoutes(router) {
     const campaign = requireCampaign(runtime);
     const result = await startNextQueued(runtime, { force: true });
     json(res, 200, { ok: true, result, queue: await campaign.queue.snapshot() });
+  });
+
+  // 把已结束的 campaign 从监控清单移除。
+  //
+  // 画面上那个「×」以前只写浏览器 localStorage —— 换个浏览器或换台电脑，卡片全部
+  // 回来。这里是真的从 active-runs.json 拿掉。
+  //
+  // run 档不删：里面是「谁在几点收到什么」的发送回执，是查帐依据，也是防重发
+  // 那道闸的资料来源。清掉纪录 = 下次可能重发给同一批人。
+  router.post("/api/campaign/runs/forget", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    const all = body?.all === true;
+    const runId = String(body?.runId || "").trim();
+    if (!all && !runId) throw httpError(400, "要移除哪一个 run？给 runId，或用 all:true 清掉全部已结束的。", "RUN_ID_REQUIRED");
+
+    const removable = campaignRunners(campaign).filter((runner) => {
+      const state = runner?.state;
+      if (!state) return false;
+      if (!all && state.runId !== runId) return false;
+      // 还在跑、还没启动、暂停中的都不给移除 —— 那些不是「已结束」，
+      // 拿掉之后号码车道会算不准，又变成另一个卡住的鬼影。
+      if (runner.running) return false;
+      return ["COMPLETED", "STOPPED", "CANCELLED", "FAILED"].includes(state.status);
+    });
+
+    if (!removable.length) {
+      const target = campaign.getRunner(runId);
+      throw httpError(409, all
+        ? "没有已结束的 campaign 可以移除。"
+        : target?.running || target?.state
+          ? `这个 campaign 还没结束（${target?.state?.status || "RUNNING"}），先停止或等它跑完再移除。`
+          : "找不到这个 campaign。", "RUN_NOT_REMOVABLE");
+    }
+
+    const removed = [];
+    for (const runner of removable) {
+      const id = runner.state.runId;
+      if (campaign.forgetRunner?.(id)) removed.push({ runId: id, status: runner.state.status, mode: runner.state.mode });
+    }
+    await campaign.persistRunners?.().catch(() => {});
+    json(res, 200, {
+      ok: true,
+      removed,
+      message: `已从清单移除 ${removed.length} 个 campaign。发送纪录仍保留在 campaign-data/runs/，防重发照常运作。`,
+    });
+  });
+
+  // Notion 同步队列：看状态 + 立即同步 + 把放弃的救回来。
+  router.get("/api/notion-outbox", async (_req, res, runtime) => {
+    if (!runtime.notionOutbox) throw httpError(503, "Notion 同步队列尚未启用。", "NOTION_OUTBOX_UNAVAILABLE");
+    json(res, 200, {
+      ok: true,
+      queue: await runtime.notionOutbox.snapshot(),
+      worker: runtime.notionOutboxWorker?.status() ?? null,
+    });
+  });
+
+  router.post("/api/notion-outbox/drain", async (_req, res, runtime) => {
+    if (!runtime.notionOutboxWorker) throw httpError(503, "Notion 同步队列尚未启用。", "NOTION_OUTBOX_UNAVAILABLE");
+    const result = await runtime.notionOutboxWorker.drainAll({ reason: "manual" });
+    json(res, 200, {
+      ok: true,
+      result,
+      queue: await runtime.notionOutbox.snapshot(),
+      message: result.busy
+        ? "同步正在进行中，请稍候。"
+        : result.processed === 0
+          ? "队列是空的，没有东西要同步。"
+          : `处理 ${result.processed} 笔 · 成功 ${result.completed} · 无需处理 ${result.skipped} · 待重试 ${result.retried} · 放弃 ${result.failed}`,
+    });
+  });
+
+  router.post("/api/notion-outbox/retry-failed", async (_req, res, runtime) => {
+    if (!runtime.notionOutbox) throw httpError(503, "Notion 同步队列尚未启用。", "NOTION_OUTBOX_UNAVAILABLE");
+    const result = await runtime.notionOutbox.retryFailed();
+    json(res, 200, { ok: true, ...result, message: `已把 ${result.requeued} 笔放弃的重新排入队列。` });
   });
 
   router.get("/api/export", async (req, res, runtime) => {

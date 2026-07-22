@@ -189,6 +189,7 @@
       <span class="monitor-count" id="monitorCount">0</span>
     </button>
     <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已关闭</button>
+    <button type="button" class="monitor-restore hidden" id="monitorClearDone" title="把所有已结束的 campaign 从清单移除；发送纪录仍会保留">清掉已结束</button>
     <a href="/knowledge">🧠 脑编辑器</a>
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
@@ -295,6 +296,19 @@ function dismissCampaignRun(runId) {
   saveDismissedCampaignRuns();
 }
 
+// 真的从 active-runs.json 移除（localStorage 那份只是本机隐藏，换台电脑就回来了）。
+// 发送回执留在 campaign-data/runs/ 不动 —— 那是查帐依据，也是防重发的资料来源。
+async function forgetCampaignRun(runId, { all = false } = {}) {
+  const response = await fetch("/api/campaign/runs/forget", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(all ? { all: true } : { runId }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) throw new Error(result.error || "移除失败");
+  return result;
+}
+
 function restoreDismissedCampaignRuns(runIds) {
   for (const runId of runIds) delete dismissedCampaignRuns[runId];
   saveDismissedCampaignRuns();
@@ -333,6 +347,11 @@ function renderCampaignMonitor(status, queue) {
   document.getElementById("monitorCount").textContent = String(visible.filter((item) => item?.state).length);
   restoreButton.classList.toggle("hidden", dismissedNow.length === 0);
   restoreButton.textContent = dismissedNow.length ? `恢复已关闭 (${dismissedNow.length})` : "恢复已关闭";
+  // 「清掉已结束」只在真的有已结束的 campaign 时才出现。
+  const finished = runs.filter((item) => item?.state && !monitorRunIsActive(item));
+  const clearButton = document.getElementById("monitorClearDone");
+  clearButton.classList.toggle("hidden", finished.length === 0);
+  clearButton.textContent = `清掉已结束 (${finished.length})`;
   const shouldAutoCollapse = !visible.some(monitorRunIsActive) && !queue?.count;
   setCampaignMonitorsCollapsed(monitorDisplayChoice === null ? shouldAutoCollapse : monitorDisplayChoice === "collapsed");
   if (!runs.length) {
@@ -401,6 +420,11 @@ document.getElementById("campaignMonitors").addEventListener("click", async (eve
     const run = supplied.find((item) => item?.state?.runId === runId) ||
       (latestCampaignStatus?.state?.runId === runId ? latestCampaignStatus : null);
     if (monitorRunIsActive(run) && !confirm("这批仍在运行。关闭只会收起这张进度卡，WhatsApp 发送与 Notion 收尾仍会在后台继续。确定关闭显示？")) return;
+    // 已结束的就真的从清单移除（换台电脑/换浏览器都不会再冒出来）；
+    // 还在跑的只能收起显示，不能动清单 —— 号码车道要靠它算。
+    if (!monitorRunIsActive(run)) {
+      forgetCampaignRun(runId).catch((error) => console.log("[monitor] 移除失败:", error.message));
+    }
     dismissCampaignRun(runId);
     renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
     return;
@@ -420,6 +444,24 @@ document.getElementById("monitorRestore").addEventListener("click", () => {
   monitorDisplayChoice = "expanded";
   sessionStorage.setItem("mamba-send-monitor-display", monitorDisplayChoice);
   renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+});
+
+document.getElementById("monitorClearDone").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "移除中…";
+  try {
+    const result = await forgetCampaignRun(null, { all: true });
+    // 同时清掉本机隐藏纪录，不然 localStorage 会一直留着一堆已经不存在的 runId。
+    restoreDismissedCampaignRuns(result.removed.map((item) => item.runId));
+    await pollRunning();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = previous;
+  }
 });
 
 function hideSyncOverlay() {
