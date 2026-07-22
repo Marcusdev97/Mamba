@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { httpError, json, readJson } from "../lib/http.mjs";
+import { explainError } from "../lib/error-explainer.mjs";
 import { recordDeviceScope } from "../lib/device-scope.mjs";
 
 function requireNextFlow(runtime) {
@@ -514,7 +515,16 @@ export function registerNextFlowRoutes(router) {
         cursor = data?.has_more ? data?.next_cursor : null;
       } while (cursor);
     } catch (error) {
-      throw httpError(502, `读取 Notion Next Flow 名单失败: ${error.message}`);
+      // 这是最常出现的一条错误(三天 49 次)，原本只丢 "aborted due to timeout"，
+      // 看不出严不严重。讲清楚：名单读不到而已，没有任何东西被发出去。
+      const explanation = explainError(error, { area: "api", event: "next_flow_list" });
+      throw httpError(502, [
+        "读不到 Notion 的 Next Flow 名单。",
+        `为什么：${explanation.why}`,
+        "影响：这个页面暂时列不出客户，但没有任何讯息被发出去，也没有资料被改动。",
+        `处理：${explanation.action}`,
+        `原始讯息：${explanation.details}`,
+      ].join("\n"), explanation.code);
     }
 
     const skipped = [];

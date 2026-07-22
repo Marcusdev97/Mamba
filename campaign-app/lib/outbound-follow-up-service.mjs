@@ -1,3 +1,5 @@
+import { explainError } from "./error-explainer.mjs";
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -234,7 +236,14 @@ export function createOutboundFollowUpService({
         state = { ...state, running: false, lastCheckedAt: new Date().toISOString(), error: error.message || String(error) };
         scheduleNext();
         onLog(`[follow-up-sync:error] ${state.error}`);
-        await log("warn", "outbound_follow_up_failed", "Could not check sales replies sent from WhatsApp.", { reason, error: state.error });
+        const explanation = explainError(error, { area: "follow_up", event: "outbound_follow_up_failed" });
+        await log("warn", explanation.code, [
+          "无法检查业务员自己从 WhatsApp 发出去的回复。",
+          `为什么：${explanation.why}`,
+          "影响：这些客户可能已经被人工跟进过，但 Mamba 不知道，所以还会把他们排进下一轮自动跟进 —— 客户会收到重复的讯息。",
+          "处理：" + explanation.action,
+          `原始讯息：${explanation.details}`,
+        ].join("\n"), { reason, error: state.error, matched: explanation.matched });
         return snapshot();
       } finally {
         activeRun = null;
