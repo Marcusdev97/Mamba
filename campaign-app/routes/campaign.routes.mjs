@@ -224,6 +224,10 @@ async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error
     payload: {
       runId,
       projectId: runner.state?.projectId ?? runner.state?.campaignId ?? "",
+      project: runner.state?.project?.name ?? runner.state?.project ?? "",
+      // flowLabel 让画面讲得出是哪一批在等同步（Flow 1 没有 label）。
+      // 真正决定走哪条路的是重试当下的 run 状态，不是这里存的值。
+      flowLabel: runner.state?.flowLabel ?? "",
       autoAdvance: Boolean(autoAdvance),
       reason: reason ?? "",
       lastError: error?.message ?? "",

@@ -863,12 +863,19 @@ $("btnOutboxSync").addEventListener("click", async () => {
   const previous = button.textContent;
   button.disabled = true; button.textContent = "同步中…";
   $("outboxMsg").textContent = ""; $("outboxErr").textContent = "";
+  // 这个页面是发送台里的 iframe，弹窗在外层 —— 让外层显示「正在同步哪一批」，
+  // 不然按下去之后画面完全没反应，看起来像当掉。
+  let waitingFlows = [];
+  try { waitingFlows = (await get("/api/notion-outbox"))?.queue?.waitingFlows ?? []; } catch {}
+  try { window.parent?.showOutboxSyncOverlay?.({ flows: waitingFlows, reason: "manual" }); } catch {}
   try {
     const r = await post("/api/notion-outbox/drain", {});
     if (!r || !r.ok) throw new Error((r && r.error) || "同步失败");
     $("outboxMsg").textContent = "✓ " + r.message;
+    try { window.parent?.finishOutboxSyncOverlay?.(r.result); } catch {}
   } catch (error) {
     $("outboxErr").textContent = error.message;
+    try { window.parent?.finishOutboxSyncOverlay?.({ failed: 1, completed: 0, retried: 0 }); } catch {}
   } finally {
     button.disabled = false; button.textContent = previous;
     await refreshOutbox();

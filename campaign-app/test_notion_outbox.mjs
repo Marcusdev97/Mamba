@@ -155,5 +155,39 @@ const finished = await inflight;
 assert.equal(finished.completed, 1);
 assert.notEqual(finished.busy, true);
 
+// --- 画面要讲得出「在同步哪一批」，不能只说「同步中」 ---
+const flowDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-outbox-flow-"));
+const flowDb = await createSqliteCli({ databasePath: path.join(flowDir, "mamba.sqlite") });
+await flowDb.exec(`
+CREATE TABLE sync_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, idempotency_key TEXT NOT NULL UNIQUE,
+  direction TEXT NOT NULL CHECK (direction IN ('NOTION_TO_LOCAL','LOCAL_TO_NOTION')),
+  entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('PENDING','RUNNING','RETRY','COMPLETED','FAILED')),
+  attempt_count INTEGER NOT NULL DEFAULT 0, available_at TEXT NOT NULL,
+  last_error_code TEXT NOT NULL DEFAULT '', last_error_message TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`);
+const flowOutbox = createNotionOutboxService({ dataDir: flowDir, clock: () => new Date("2026-07-22T10:00:00.000Z") });
+
+// Flow 1 没有 flowLabel，Flow 2-10 有。两种都要在画面上叫得出名字。
+await flowOutbox.enqueue({ entityType: "campaign_run", entityId: "run_f1", idempotencyKey: "f1", payload: { runId: "run_f1", flowLabel: "", project: "Binastra" } });
+await flowOutbox.enqueue({ entityType: "campaign_run", entityId: "run_f2", idempotencyKey: "f2", payload: { runId: "run_f2", flowLabel: "Flow 2 - Layout", project: "Binastra" } });
+await flowOutbox.enqueue({ entityType: "campaign_run", entityId: "run_f10", idempotencyKey: "f10", payload: { runId: "run_f10", flowLabel: "Flow 10 - Surrounding", project: "Enlace" } });
+
+const flowSnap = await flowOutbox.snapshot();
+assert.equal(flowSnap.waitingFlows.length, 3);
+const labels = flowSnap.waitingFlows.map((item) => item.flowLabel);
+assert.ok(labels.includes("Flow 2 - Layout"), "Flow 2 要认得出来");
+assert.ok(labels.includes("Flow 10 - Surrounding"), "Flow 10 也要认得出来");
+assert.ok(labels.includes("Flow 1 - Project Template"), "Flow 1 没有 label，要补成看得懂的名字");
+assert.equal(flowSnap.waitingFlows.find((item) => item.runId === "run_f10").project, "Enlace");
+
+// payload 坏掉不该让整个状态查询爆掉 —— 那会连「队列有没有积压」都看不到。
+await flowDb.exec("INSERT INTO sync_jobs (idempotency_key,direction,entity_type,entity_id,status,attempt_count,available_at,payload_json,created_at,updated_at) VALUES ('bad','LOCAL_TO_NOTION','campaign_run','run_bad','PENDING',0,'2026-07-22T10:00:00.000Z','{not json','2026-07-22T10:00:00.000Z','2026-07-22T10:00:00.000Z');");
+const afterBad = await flowOutbox.snapshot();
+assert.equal(afterBad.pending, 4, "坏 payload 也要算进积压数");
+assert.equal(afterBad.waitingFlows.length, 4);
+
+await fs.rm(flowDir, { recursive: true, force: true });
 await fs.rm(dataDir, { recursive: true, force: true });
 console.log("✅ all notion outbox tests passed");

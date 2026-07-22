@@ -153,6 +153,23 @@ SELECT status, COUNT(*) AS count, MIN(available_at) AS nextAt
 FROM sync_jobs GROUP BY status;`);
     const byStatus = {};
     for (const row of rows) byStatus[row.status] = { count: row.count, nextAt: row.nextAt };
+    // 等着同步的是哪些 flow —— 弹窗要讲得出「Flow 2 - Layout 正在同步」，
+    // 光说「同步中」使用者不知道是哪一批。
+    const waiting = await database.query(`
+SELECT payload_json AS payloadJson, entity_id AS entityId, status
+FROM sync_jobs WHERE status IN ('PENDING','RETRY','RUNNING')
+ORDER BY available_at LIMIT 20;`);
+    const flows = [];
+    for (const row of waiting) {
+      let payload = {};
+      try { payload = JSON.parse(row.payloadJson || "{}"); } catch { /* 坏 payload 不该让整个状态查询失败 */ }
+      flows.push({
+        runId: row.entityId,
+        status: row.status,
+        flowLabel: clean(payload.flowLabel) || "Flow 1 - Project Template",
+        project: clean(payload.project) || clean(payload.projectId),
+      });
+    }
     const failed = await database.query(`
 SELECT entity_type AS entityType, entity_id AS entityId, attempt_count AS attemptCount,
        last_error_code AS lastErrorCode, last_error_message AS lastErrorMessage
@@ -164,6 +181,7 @@ FROM sync_jobs WHERE status='FAILED' ORDER BY updated_at DESC LIMIT 10;`);
       completed: byStatus.COMPLETED?.count ?? 0,
       failed: byStatus.FAILED?.count ?? 0,
       nextAttemptAt: byStatus.RETRY?.nextAt ?? byStatus.PENDING?.nextAt ?? null,
+      waitingFlows: flows,
       failedSamples: failed,
     };
   }

@@ -592,18 +592,22 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
   // 重跑一次那个 run 的收尾。两个函式本身都会跳过没发出去的客户，
   // 所以重复执行是安全的。
   handler: async (job) => {
-    const { runId, projectId, autoAdvance } = job.payload ?? {};
+    const { runId, projectId } = job.payload ?? {};
     if (!runId) return false;
     const runner = await runtime.campaign.restoreRunner({ runId, projectId }).catch(() => null);
     if (!runner?.state) return false;   // run 档不见了：结案，不重试
-    if (autoAdvance) await autoAdvanceFlow(runner);
+    // 走哪条路по run 自己的状态判断，不看排队当下存的旗标 —— 旗标可能是旧的，
+    // 而 flowLabel 是这个 run 的事实。Flow 1 没有 flowLabel 走上传，
+    // Flow 2-10 有 flowLabel 走推进。
+    const flowLabel = runner.state.flowLabel || "";
+    if (flowLabel) await autoAdvanceFlow(runner);
     else await autoNotionUpload(runner, { allowPartial: true });
     await systemLogService.write({
       level: "info",
       area: "notion",
       event: "outbox_finalise_retried",
-      message: `Notion 回写重试成功：${runId}`,
-      context: { runId, autoAdvance: Boolean(autoAdvance) },
+      message: `Notion 回写重试成功：${flowLabel || "Flow 1"} · ${runId}`,
+      context: { runId, flowLabel: flowLabel || "Flow 1 - Project Template" },
     }).catch(() => {});
     return true;
   },

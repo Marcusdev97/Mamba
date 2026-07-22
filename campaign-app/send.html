@@ -468,6 +468,71 @@ function hideSyncOverlay() {
   document.getElementById("syncOverlay").classList.add("hidden");
 }
 
+// Notion 同步队列（手动按「立即同步」或晚上 22:00 那轮）跑起来时，用同一个
+// 弹窗告诉使用者「现在在同步哪一批」。以前只有 campaign 跑完那次收尾会弹，
+// 队列在背景做事时画面完全没反应，看起来像当掉。
+//
+// 跟 campaign 收尾那个弹窗共用一个 overlay，所以要让路：那边正在显示时不覆盖它。
+let outboxSyncBusy = false;
+
+function showOutboxSyncOverlay({ flows = [], reason = "manual" } = {}) {
+  if (syncBusy) return;   // campaign 自己的收尾优先，不要抢
+  outboxSyncBusy = true;
+  const overlay = document.getElementById("syncOverlay");
+  overlay.classList.remove("hidden", "failed", "succeeded");
+  document.getElementById("syncIcon").textContent = "⟳";
+  document.getElementById("syncTitle").textContent = reason === "nightly" ? "每晚自动同步 Notion" : "正在同步到 Notion";
+  const names = [...new Set(flows.map((item) => item.flowLabel).filter(Boolean))];
+  document.getElementById("syncMessage").textContent = names.length
+    ? `${names.join(" · ")} 的发送结果正在写回 Notion。`
+    : "正在把发送结果写回 Notion。";
+  document.getElementById("syncDetail").textContent = "写回去之后名单才知道这些客户已经收过，下一批才不会重复发送。请不要关掉 Mamba。";
+  document.getElementById("syncTrack").classList.remove("hidden");
+  document.getElementById("syncActions").classList.add("hidden");
+}
+
+function finishOutboxSyncOverlay(result) {
+  if (!outboxSyncBusy) return;
+  outboxSyncBusy = false;
+  const overlay = document.getElementById("syncOverlay");
+  const failed = Number(result?.failed || 0);
+  const retried = Number(result?.retried || 0);
+  overlay.classList.add(failed ? "failed" : "succeeded");
+  document.getElementById("syncIcon").textContent = failed ? "!" : "✓";
+  document.getElementById("syncTitle").textContent = failed ? "部分没同步成功" : "已同步到 Notion";
+  document.getElementById("syncMessage").textContent = failed
+    ? `${failed} 笔试到上限仍然失败，${retried} 笔会自动再试。`
+    : retried
+      ? `成功 ${result.completed} 笔，${retried} 笔稍后自动重试。`
+      : `成功 ${result?.completed ?? 0} 笔，队列已清空。`;
+  document.getElementById("syncDetail").textContent = failed
+    ? "⚠️ 没同步到的客户在名单上仍然看起来没发过，下一批可能重复发送。到 System Logs 搜 outbox 看原因。"
+    : "";
+  document.getElementById("syncTrack").classList.add("hidden");
+  // 成功就自己收起来，失败留着让人看见。
+  if (!failed) setTimeout(() => { if (!syncBusy && !outboxSyncBusy) hideSyncOverlay(); }, 2200);
+}
+
+// 每晚 22:00 那轮是背景自己跑的，没有人按按钮，所以要用轮询发现它开始了。
+// 手动那次由按钮自己开弹窗（反应比较快），这里只负责补上「自动跑起来」的情况。
+let lastOutboxRunning = false;
+
+async function pollOutboxSync() {
+  try {
+    const response = await fetch("/api/notion-outbox", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    const running = Boolean(data?.worker?.running);
+    if (running && !lastOutboxRunning && !outboxSyncBusy) {
+      showOutboxSyncOverlay({ flows: data.queue?.waitingFlows ?? [], reason: "nightly" });
+    }
+    if (!running && lastOutboxRunning && outboxSyncBusy) {
+      finishOutboxSyncOverlay(data?.worker?.lastResult ?? {});
+    }
+    lastOutboxRunning = running;
+  } catch { /* 队列没启用或读不到就当没这回事，不要影响其他轮询 */ }
+}
+
 function renderNotionSync(sync, runId, state = null) {
   const overlay = document.getElementById("syncOverlay");
   const icon = document.getElementById("syncIcon");
@@ -619,6 +684,7 @@ async function pollRunning() {
     document.getElementById("tab-next").classList.toggle("running", runningNext);
     renderNotionSync(d?.state?.notionSync, d?.state?.runId, d?.state);
   } catch { /* console 自己会显示, 这里只是点缀 */ }
+  await pollOutboxSync();
   await refreshCampaignQueue();
   renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
   setTimeout(pollRunning, 1500);
