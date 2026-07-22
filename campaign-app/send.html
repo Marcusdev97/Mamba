@@ -128,6 +128,58 @@
     .flow-step strong { font-size: 10.5px; }
     .monitor-meta { gap: 9px; }
   }
+  .sync-dock {
+    position: sticky; top: 0; z-index: 80; flex: 0 0 auto;
+    display: grid; grid-template-columns: minmax(180px, .65fr) minmax(260px, 1fr) minmax(260px, 1fr) auto;
+    gap: 14px; align-items: stretch; padding: 12px 18px;
+    border-bottom: 1px solid #29405c; background: rgba(10, 17, 29, .98);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .2); color: #e5e7eb;
+  }
+  .sync-dock-head { display: grid; align-content: center; gap: 4px; min-width: 0; }
+  .sync-dock-title { font-size: 14px; font-weight: 900; color: #f8fafc; }
+  .sync-dock-schedule { color: #94a3b8; font-size: 11px; line-height: 1.35; }
+  .sync-dock-stage {
+    min-width: 0; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px;
+    align-items: center; padding: 9px 11px; border: 1px solid #29374a; border-radius: 9px;
+    background: #111927;
+  }
+  .sync-dock-stage.active { border-color: #0ea5e9; background: #0d2130; }
+  .sync-dock-stage.done { border-color: #166534; background: #0d2119; }
+  .sync-dock-stage.waiting { border-color: #854d0e; background: #261c0d; }
+  .sync-dock-stage.failed { border-color: #991b1b; background: #281216; }
+  .sync-stage-icon {
+    width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%;
+    background: #1e293b; color: #cbd5e1; font-weight: 900; font-size: 14px;
+  }
+  .sync-dock-stage.active .sync-stage-icon { color: #7dd3fc; animation: pulse 1.1s ease-in-out infinite; }
+  .sync-dock-stage.done .sync-stage-icon { color: #4ade80; background: #123523; }
+  .sync-dock-stage.waiting .sync-stage-icon { color: #fbbf24; background: #33250d; }
+  .sync-dock-stage.failed .sync-stage-icon { color: #fca5a5; background: #3a171d; }
+  .sync-stage-copy { min-width: 0; }
+  .sync-stage-top { display: flex; gap: 9px; align-items: baseline; min-width: 0; }
+  .sync-stage-top strong { overflow: hidden; color: #f1f5f9; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .sync-stage-count { margin-left: auto; color: #94a3b8; font-size: 11px; font-weight: 800; white-space: nowrap; }
+  .sync-stage-detail { overflow: hidden; margin-top: 3px; color: #94a3b8; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .sync-stage-track { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 999px; background: #253247; }
+  .sync-stage-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: #38bdf8; transition: width .35s ease; }
+  .sync-dock-stage.done .sync-stage-track span { background: #22c55e; }
+  .sync-dock-stage.waiting .sync-stage-track span { background: #f59e0b; }
+  .sync-dock-stage.failed .sync-stage-track span { background: #ef4444; }
+  .sync-now {
+    align-self: center; min-height: 40px; padding: 8px 13px; border: 1px solid #475569; border-radius: 8px;
+    background: #1d2838; color: #e5e7eb; font: inherit; font-size: 12px; font-weight: 900; cursor: pointer; white-space: nowrap;
+  }
+  .sync-now:hover { border-color: #38bdf8; color: #fff; }
+  .sync-now:disabled { opacity: .55; cursor: wait; }
+  @media (max-width: 980px) {
+    .sync-dock { grid-template-columns: minmax(150px, .6fr) 1fr 1fr; }
+    .sync-now { grid-column: 1 / -1; justify-self: end; min-height: 32px; }
+  }
+  @media (max-width: 700px) {
+    .sync-dock { grid-template-columns: 1fr; gap: 8px; padding: 9px 12px; }
+    .sync-dock-head { grid-template-columns: 1fr auto; }
+    .sync-now { grid-column: auto; justify-self: stretch; }
+  }
   .frames { flex: 1; position: relative; }
   .frames iframe {
     position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
@@ -158,6 +210,7 @@
   .sync-detail { margin: 0; color: #94a3b8; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
   .sync-track { height: 5px; margin-top: 20px; overflow: hidden; border-radius: 3px; background: #263244; }
   .sync-track span { display: block; width: 38%; height: 100%; background: #2dd36f; animation: loading 1.25s ease-in-out infinite; }
+  .sync-track.determinate span { animation: none; transform: none; transition: width .35s ease; }
   @keyframes loading { from { transform: translateX(-105%); } to { transform: translateX(365%); } }
   .sync-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; margin-top: 20px; }
   .sync-actions button {
@@ -194,6 +247,29 @@
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
   </div>
+  <section class="sync-dock" id="syncDock" aria-live="polite" aria-label="SQLite and Notion sync progress">
+    <div class="sync-dock-head">
+      <div class="sync-dock-title">资料同步进度</div>
+      <div class="sync-dock-schedule" id="syncDockSchedule">SQLite 先保存 · Notion 每晚 22:00 兜底</div>
+    </div>
+    <div class="sync-dock-stage" id="sqliteStage">
+      <div class="sync-stage-icon" id="sqliteIcon">1</div>
+      <div class="sync-stage-copy">
+        <div class="sync-stage-top"><strong id="sqliteTitle">SQLite 本机资料库</strong><span class="sync-stage-count" id="sqliteCount">准备中</span></div>
+        <div class="sync-stage-detail" id="sqliteDetail">读取本机保存状态…</div>
+        <div class="sync-stage-track"><span id="sqliteFill"></span></div>
+      </div>
+    </div>
+    <div class="sync-dock-stage" id="notionStage">
+      <div class="sync-stage-icon" id="notionIcon">2</div>
+      <div class="sync-stage-copy">
+        <div class="sync-stage-top"><strong id="notionTitle">Notion 云端镜像</strong><span class="sync-stage-count" id="notionCount">准备中</span></div>
+        <div class="sync-stage-detail" id="notionDetail">读取晚上 22:00 同步队列…</div>
+        <div class="sync-stage-track"><span id="notionFill"></span></div>
+      </div>
+    </div>
+    <button type="button" class="sync-now" id="syncDockNow">⟳ 立即同步 Notion</button>
+  </section>
   <section class="campaign-monitors" id="campaignMonitors" aria-label="Campaign live progress"></section>
   <div class="frames">
     <iframe id="frame-flow1" src="/flow-1"></iframe>
@@ -235,6 +311,7 @@ let successTimer = null;
 let firstQueuedRunId = null;
 let latestCampaignStatus = null;
 let latestCampaignQueue = null;
+let latestOutboxStatus = null;
 let activeSyncContext = null;
 let monitorDisplayChoice = sessionStorage.getItem("mamba-send-monitor-display");
 const dismissedRunsKey = "mamba-send-dismissed-runs-v1";
@@ -268,6 +345,109 @@ function monitorOutcomes(state, assignments, summary) {
 
 function monitorEscape(value) {
   return String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+}
+
+function syncItemLabel(item) {
+  if (!item) return "";
+  const name = item.name || item.flowLabel || item.project || "";
+  const digits = String(item.phone || "").replace(/\D/g, "");
+  const phone = digits ? ` · …${digits.slice(-4)}` : "";
+  return `${name}${phone}` || item.entityId || "";
+}
+
+function setSyncDockStage(kind, { state = "", title, count, detail, current = 0, total = 0, icon } = {}) {
+  const stage = document.getElementById(`${kind}Stage`);
+  stage.classList.remove("active", "done", "waiting", "failed");
+  if (state) stage.classList.add(state);
+  document.getElementById(`${kind}Title`).textContent = title;
+  document.getElementById(`${kind}Count`).textContent = count;
+  document.getElementById(`${kind}Detail`).textContent = detail;
+  document.getElementById(`${kind}Icon`).textContent = icon || (state === "done" ? "✓" : state === "failed" ? "!" : kind === "sqlite" ? "1" : "2");
+  const percent = total > 0 ? Math.max(0, Math.min(100, Math.round(Number(current || 0) / Number(total) * 100))) : (state === "done" ? 100 : 0);
+  document.getElementById(`${kind}Fill`).style.width = `${percent}%`;
+}
+
+function renderSyncDock(campaignStatus = latestCampaignStatus, outboxStatus = latestOutboxStatus) {
+  const supplied = Array.isArray(campaignStatus?.runs) ? campaignStatus.runs : [];
+  const runs = (supplied.length ? supplied : (campaignStatus?.state ? [campaignStatus] : []))
+    .filter((item) => item?.state)
+    .sort((a, b) => Number(monitorRunIsActive(b)) - Number(monitorRunIsActive(a)) || String(b.state?.updatedAt || b.state?.endAt || "").localeCompare(String(a.state?.updatedAt || a.state?.endAt || "")));
+  const run = runs[0] || null;
+  const state = run?.state || null;
+  const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
+  const outcomes = state ? monitorOutcomes(state, assignments, state.summary || {}) : null;
+  const local = state?.localAdvance || null;
+  const activeAssignment = [...assignments].reverse().find((item) => item.part1At || item.part1?.sentAt || terminalStatuses.has(String(item.status || "")));
+  const flowName = state?.flowLabel || state?.templateFlow || "Flow 1";
+
+  if (local?.status === "RUNNING") {
+    setSyncDockStage("sqlite", {
+      state: "active", title: "正在保存到 SQLite", count: `${local.recorded || 0}/${local.total || outcomes?.contacted || 0}`,
+      detail: `${flowName} · 正在把本轮客户 Flow 锁进本机资料库`, current: local.recorded || 0, total: local.total || outcomes?.contacted || 0, icon: "↻",
+    });
+  } else if (run?.running || state?.status === "RUNNING") {
+    setSyncDockStage("sqlite", {
+      state: "active", title: "正在逐笔写入 SQLite", count: `${outcomes?.processed || 0}/${outcomes?.total || 0}`,
+      detail: `${syncItemLabel(activeAssignment) || flowName} · 已安全保存 ${outcomes?.contacted || 0} 位发送证据`,
+      current: outcomes?.processed || 0, total: outcomes?.total || 0, icon: "↻",
+    });
+  } else if (local?.status === "FAILED") {
+    setSyncDockStage("sqlite", { state: "failed", title: "SQLite 保存需要检查", count: "未完成", detail: local.error || `${flowName} 本机状态没有完整落盘` });
+  } else if (state && (local?.status === "SUCCEEDED" || outcomes?.processed)) {
+    const saved = local?.recorded ?? outcomes?.contacted ?? 0;
+    const total = local?.total ?? saved;
+    setSyncDockStage("sqlite", {
+      state: "done", title: "SQLite 已安全保存", count: `${saved}/${total}`,
+      detail: `${flowName} · ${local?.status === "SUCCEEDED" ? "客户 Flow 与发送证据都已落盘" : "发送证据已保留在本机"}`,
+      current: total, total,
+    });
+  } else {
+    setSyncDockStage("sqlite", { state: "done", title: "SQLite 本机资料库", count: "READY", detail: "发送时会先逐笔保存在这台电脑", current: 1, total: 1 });
+  }
+
+  const directRun = runs.find((item) => String(item.state?.notionSync?.status || "").toUpperCase() === "RUNNING");
+  const advanceRun = runs.find((item) => String(item.state?.advanceStatus || "").toUpperCase() === "RUNNING");
+  const worker = outboxStatus?.worker || null;
+  const queue = outboxStatus?.queue || {};
+  const waiting = Number(queue.pending || 0) + Number(queue.retry || 0) + Number(queue.running || 0);
+  let notionProgress = null;
+  let notionSource = "";
+  if (directRun) {
+    notionProgress = directRun.state.notionSync?.progress || {};
+    notionSource = directRun.state.flowLabel || directRun.state.templateFlow || "Flow 1";
+  } else if (advanceRun) {
+    notionProgress = advanceRun.state.advanceProgress || {};
+    notionSource = advanceRun.state.flowLabel || "Flow 2–10";
+  } else if (worker?.running) {
+    notionProgress = worker.progress || {};
+    notionSource = syncItemLabel(notionProgress.currentItem) || "Notion 补同步队列";
+  }
+
+  if (notionProgress) {
+    const current = Number(notionProgress.current || 0);
+    const total = Number(notionProgress.total || 0);
+    const item = syncItemLabel(notionProgress.currentItem);
+    setSyncDockStage("notion", {
+      state: "active", title: worker?.running ? "正在上传队列到 Notion" : "正在逐笔上传到 Notion",
+      count: total ? `${current}/${total}` : "同步中", detail: item ? `${notionSource} · ${item}` : notionSource,
+      current, total, icon: "↻",
+    });
+  } else if (Number(queue.failed || 0)) {
+    setSyncDockStage("notion", { state: "failed", title: "Notion 有失败项目", count: `${queue.failed} 笔`, detail: "发送资料仍在 SQLite；可重试后按「立即同步」" });
+  } else if (waiting) {
+    const first = queue.waitingFlows?.[0];
+    setSyncDockStage("notion", {
+      state: "waiting", title: "等待晚上 22:00 上传 Notion", count: `${waiting} 笔`,
+      detail: first ? `${first.flowLabel}${first.project ? ` · ${first.project}` : ""}` : "资料已经安全留在 SQLite",
+      current: 0, total: waiting,
+    });
+  } else {
+    setSyncDockStage("notion", { state: "done", title: "Notion 已同步", count: "队列 0", detail: "每晚 22:00 会再自动检查一次", current: 1, total: 1 });
+  }
+
+  const schedule = worker?.time || "22:00";
+  document.getElementById("syncDockSchedule").textContent = `SQLite 先保存 · Notion 每晚 ${schedule} 兜底`;
+  document.getElementById("syncDockNow").disabled = Boolean(worker?.running);
 }
 
 function loadDismissedCampaignRuns() {
@@ -488,7 +668,22 @@ function showOutboxSyncOverlay({ flows = [], reason = "manual" } = {}) {
     : "正在把发送结果写回 Notion。";
   document.getElementById("syncDetail").textContent = "写回去之后名单才知道这些客户已经收过，下一批才不会重复发送。请不要关掉 Mamba。";
   document.getElementById("syncTrack").classList.remove("hidden");
+  document.getElementById("syncTrack").classList.remove("determinate");
   document.getElementById("syncActions").classList.add("hidden");
+}
+
+function updateSyncOverlayProgress(progress, prefix = "正在逐笔上传") {
+  if (!progress) return;
+  const current = Number(progress.current || 0);
+  const total = Number(progress.total || 0);
+  const item = syncItemLabel(progress.currentItem);
+  if (total > 0) {
+    const track = document.getElementById("syncTrack");
+    track.classList.add("determinate");
+    track.querySelector("span").style.width = `${Math.max(0, Math.min(100, Math.round(current / total * 100)))}%`;
+    document.getElementById("syncMessage").textContent = `${prefix} · ${current}/${total}`;
+  }
+  if (item) document.getElementById("syncDetail").textContent = `当前：${item}。资料已经先保存在 SQLite，请保持 Mamba 开启直到 Notion 完成。`;
 }
 
 function finishOutboxSyncOverlay(result) {
@@ -522,14 +717,17 @@ async function pollOutboxSync() {
     const response = await fetch("/api/notion-outbox", { cache: "no-store" });
     if (!response.ok) return;
     const data = await response.json();
+    latestOutboxStatus = data;
     const running = Boolean(data?.worker?.running);
     if (running && !lastOutboxRunning && !outboxSyncBusy) {
       showOutboxSyncOverlay({ flows: data.queue?.waitingFlows ?? [], reason: "nightly" });
     }
+    if (running && outboxSyncBusy) updateSyncOverlayProgress(data?.worker?.progress, "正在逐笔上传到 Notion");
     if (!running && lastOutboxRunning && outboxSyncBusy) {
       finishOutboxSyncOverlay(data?.worker?.lastResult ?? {});
     }
     lastOutboxRunning = running;
+    renderSyncDock(latestCampaignStatus, latestOutboxStatus);
   } catch { /* 队列没启用或读不到就当没这回事，不要影响其他轮询 */ }
 }
 
@@ -571,6 +769,8 @@ function renderNotionSync(sync, runId, state = null) {
     message.textContent = sync.message || "正在保存本轮发送结果…";
     detail.textContent = "请保持 Mamba 开启。即使刷新页面，进度也会从服务器恢复；完成前请勿关闭 Mamba。";
     track.classList.remove("hidden");
+    track.classList.remove("determinate");
+    updateSyncOverlayProgress(sync?.progress, "正在逐笔上传到 Notion");
     return;
   }
 
@@ -683,12 +883,37 @@ async function pollRunning() {
     document.getElementById("tab-flow1").classList.toggle("running", runningFlow1);
     document.getElementById("tab-next").classList.toggle("running", runningNext);
     renderNotionSync(d?.state?.notionSync, d?.state?.runId, d?.state);
+    renderSyncDock(latestCampaignStatus, latestOutboxStatus);
   } catch { /* console 自己会显示, 这里只是点缀 */ }
   await pollOutboxSync();
   await refreshCampaignQueue();
   renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
   setTimeout(pollRunning, 1500);
 }
+
+document.getElementById("syncDockNow").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "同步中…";
+  const flows = latestOutboxStatus?.queue?.waitingFlows || [];
+  showOutboxSyncOverlay({ flows, reason: "manual" });
+  try {
+    const response = await fetch("/api/notion-outbox/drain", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || "Notion 同步失败");
+    finishOutboxSyncOverlay(data.result || {});
+    await pollOutboxSync();
+  } catch (error) {
+    finishOutboxSyncOverlay({ failed: 1, completed: 0, retried: 0 });
+    document.getElementById("syncDetail").textContent = `资料仍安全保留在 SQLite。${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = previous;
+  }
+});
 
 async function refreshCampaignQueue() {
   try {

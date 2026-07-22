@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 
 function makeService(execFileFn, overrides = {}) {
@@ -23,6 +24,8 @@ function makeFlowRunner() {
     runId: "run-flow-2",
     deviceId: "upstairs-mac",
     mode: "LIVE",
+    status: "STOPPED",
+    projectId: "binastra",
     project: "Binastra",
     flowLabel: "Flow 2 - Layout",
     instances: [{ name: "wa_01", owner: "60111111111" }],
@@ -54,6 +57,25 @@ function makeRunner() {
   assert.ok(runner.state.notionSync.startedAt);
   assert.ok(runner.state.notionSync.finishedAt);
   assert.equal(runner.saves, 2);
+}
+
+{
+  const stdout = new EventEmitter();
+  stdout.setEncoding = () => {};
+  const service = makeService((_node, _args, _options, callback) => {
+    queueMicrotask(() => {
+      stdout.emit("data", 'MAMBA_PROGRESS {"status":"RUNNING","current":1,"total":1,"name":"Ricky","phone":"60123456789","outcome":"ADDED"}\n');
+      callback(null, "uploaded 1 row\n", "");
+    });
+    return { stdout };
+  });
+  const runner = makeRunner();
+  runner.state.assignments = [{ lead: { name: "Ricky", phone: "60123456789" }, part1: { sentAt: "2026-07-22T08:00:00.000Z" } }];
+  await service.autoNotionUpload(runner);
+  assert.equal(runner.state.notionSync.progress.status, "SUCCEEDED");
+  assert.equal(runner.state.notionSync.progress.current, 1);
+  assert.equal(runner.state.notionSync.progress.total, 1);
+  assert.equal(runner.state.notionSync.progress.currentItem.name, "Ricky");
 }
 
 {
@@ -126,6 +148,8 @@ function makeRunner() {
 
 {
   const calls = [];
+  const order = [];
+  const localWrites = [];
   const page = {
     id: "page-1",
     properties: {
@@ -137,8 +161,16 @@ function makeRunner() {
   };
   const service = makeService(() => {}, {
     notion: async (method, pathname, body) => {
+      order.push(`notion:${method}`);
       calls.push({ method, pathname, body });
       return method === "POST" ? { results: [page] } : {};
+    },
+    localDatabase: {
+      async recordCampaignFlowProgress(payload) {
+        order.push("local");
+        localWrites.push(payload);
+        return { recorded: 1, skipped: 0 };
+      },
     },
     nfSelect: (item, name) => item?.properties?.[name]?.select?.name || "",
     nfAddDaysKL: () => "2026-07-15",
@@ -155,6 +187,11 @@ function makeRunner() {
   assert.equal(runner.state.advanceStatus, "SUCCEEDED");
   assert.equal(runner.state.advanceDone, true);
   assert.equal(runner.state.advanceSummary.advanced, 1);
+  assert.equal(order[0], "local", "SQLite must be committed before the first Notion request");
+  assert.equal(localWrites[0].flowLabel, "Flow 2 - Layout");
+  assert.equal(localWrites[0].nextFlow, "Flow 3 - Location");
+  assert.equal(localWrites[0].assignments[0].phone, "60123456789");
+  assert.equal(runner.state.localAdvance.status, "SUCCEEDED");
   assert.equal(calls[0].body.filter.and[1].property, "Project");
   assert.equal(calls[1].body.properties["Next Flow"].select.name, "Flow 3 - Location");
   assert.equal(calls[1].body.properties["Assigned Sender Key"].rich_text[0].text.content, "upstairs-mac::60111111111");

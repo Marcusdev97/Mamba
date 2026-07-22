@@ -41,6 +41,7 @@ export function createNotionOutboxWorker({
   let running = false;
   let lastRunDate = null;
   let lastResult = null;
+  let progress = null;
 
   // 一直推到没有到期的为止，但有上限 —— 免得一笔一直失败的把 worker 卡死在这轮。
   async function drainAll({ reason = "manual", maxBatches = 20 } = {}) {
@@ -51,8 +52,46 @@ export function createNotionOutboxWorker({
     const total = { processed: 0, completed: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
     try {
       await outbox.requeueStuckRunning().catch(() => {});
+      const planned = await outbox.due({ limit: batchLimit * maxBatches }).catch(() => []);
+      progress = {
+        status: "RUNNING",
+        reason,
+        current: 0,
+        total: planned.length,
+        completed: 0,
+        retried: 0,
+        failed: 0,
+        skipped: 0,
+        currentItem: null,
+        startedAt: clock().toISOString(),
+        finishedAt: null,
+      };
       for (let batch = 0; batch < maxBatches; batch += 1) {
-        const report = await outbox.drain(handler, { limit: batchLimit });
+        const before = total.processed;
+        const report = await outbox.drain(handler, {
+          limit: batchLimit,
+          onProgress: ({ phase, current, job, outcome, report: batchReport }) => {
+            progress = {
+              ...progress,
+              current: before + current,
+              total: Math.max(progress?.total || 0, before + (batchReport?.processed || 0)),
+              completed: total.completed + Number(batchReport?.completed || 0),
+              retried: total.retried + Number(batchReport?.retried || 0),
+              failed: total.failed + Number(batchReport?.failed || 0),
+              skipped: total.skipped + Number(batchReport?.skipped || 0),
+              currentItem: {
+                entityType: job?.entityType || null,
+                entityId: job?.entityId || null,
+                flowLabel: job?.payload?.flowLabel || null,
+                project: job?.payload?.project || job?.payload?.projectId || null,
+                name: job?.payload?.name || null,
+                phone: job?.payload?.phone || null,
+                outcome: phase === "finished" ? outcome : "running",
+              },
+              updatedAt: clock().toISOString(),
+            };
+          },
+        });
         total.processed += report.processed;
         total.completed += report.completed;
         total.retried += report.retried;
@@ -62,6 +101,17 @@ export function createNotionOutboxWorker({
         if (!report.processed) break;
       }
       lastResult = { at: clock().toISOString(), reason, ...total };
+      progress = {
+        ...progress,
+        status: total.failed ? "FAILED" : total.retried ? "RETRY" : "SUCCEEDED",
+        current: total.processed,
+        total: Math.max(progress?.total || 0, total.processed),
+        completed: total.completed,
+        retried: total.retried,
+        failed: total.failed,
+        skipped: total.skipped,
+        finishedAt: clock().toISOString(),
+      };
       if (total.processed) {
         onLog(`[notion-outbox] ${reason}: 处理 ${total.processed} · 成功 ${total.completed} · 待重试 ${total.retried} · 放弃 ${total.failed}`);
       }
@@ -89,5 +139,5 @@ export function createNotionOutboxWorker({
     timer = null;
   }
 
-  return { start, stop, tick, drainAll, status: () => ({ time, running, lastRunDate, lastResult }) };
+  return { start, stop, tick, drainAll, status: () => ({ time, running, lastRunDate, lastResult, progress }) };
 }

@@ -1362,6 +1362,7 @@ export class CampaignRunner {
             advanceStatus: this.state.advanceStatus ?? null,
             advanceError: this.state.advanceError ?? null,
             advanceSummary: this.state.advanceSummary ?? null,
+            localAdvance: this.state.localAdvance ?? null,
             notionSync: this.state.notionSync ?? null,
             interruption: this.state.interruption ?? null,
             assignments: this.state.assignments.map((job) => ({

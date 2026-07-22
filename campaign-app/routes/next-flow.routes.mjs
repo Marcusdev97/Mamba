@@ -210,6 +210,84 @@ async function writeReplyToNotion(nextFlow, page, reply, at, text, reasonSuffix 
   });
 }
 
+async function mirrorProjectLeadPatch(runtime, nextFlow, {
+  pageId: rawPageId,
+  entityId,
+  properties,
+  idempotencyKey,
+} = {}) {
+  const notionPageId = pageId(rawPageId);
+  if (!notionPageId) throw new Error("客户缺少 Notion Page ID，无法建立云端同步任务。");
+  if (runtime.notionOutbox) {
+    await runtime.notionOutbox.enqueue({
+      entityType: "project_lead_patch",
+      entityId: entityId || notionPageId,
+      idempotencyKey,
+      payload: { pageId: notionPageId, properties },
+    });
+  }
+  try {
+    await nextFlow.notion("PATCH", `/pages/${notionPageId}`, { properties });
+    if (runtime.notionOutbox && idempotencyKey) {
+      await runtime.notionOutbox.markCompletedByKey(idempotencyKey).catch(() => {});
+    }
+    return { notionUpdated: true, notionQueued: false };
+  } catch (error) {
+    error.notionQueued = Boolean(runtime.notionOutbox);
+    throw error;
+  }
+}
+
+async function writeReplyLocalFirst(runtime, nextFlow, page, phone, reply, at, text, reasonSuffix = "") {
+  const properties = replyProps(nextFlow, reply, at, text, reasonSuffix);
+  const local = await nextFlow.recordLocalLeadReply?.({
+    pageId: page?.id,
+    phone,
+    reply,
+    at,
+    text,
+  });
+  if (!local || local.updated < 1) {
+    const error = new Error("客户回复无法写入本机资料库；为避免误发，Notion 同步已暂停。请检查 SQLite 状态。");
+    error.code = "LOCAL_REPLY_WRITE_FAILED";
+    throw error;
+  }
+  const key = `LOCAL_TO_NOTION:project_lead_patch:${pageId(page?.id)}:reply:${new Date(at || Date.now()).toISOString()}`;
+  try {
+    const mirror = await mirrorProjectLeadPatch(runtime, nextFlow, {
+      pageId: page?.id,
+      entityId: `${phone}:reply`,
+      properties,
+      idempotencyKey: key,
+    });
+    return { localUpdated: true, ...mirror };
+  } catch (error) {
+    error.localUpdated = true;
+    throw error;
+  }
+}
+
+function localRecordAsPage(record) {
+  const rich = (value) => ({ rich_text: value ? [{ text: { content: String(value) } }] : [] });
+  const select = (value) => ({ select: value ? { name: String(value) } : null });
+  return {
+    id: record?.id,
+    properties: {
+      Phone: { type: "phone_number", phone_number: record?.phone || "" },
+      "Stop Flag": { checkbox: record?.stopFlag === true },
+      Status: select(record?.status),
+      "Sequence Status": select(record?.sequenceStatus),
+      "AI Category": select(record?.aiCategory),
+      "Last Reply Text": rich(record?.lastReplyText),
+    },
+  };
+}
+
+function dateMs(value) {
+  const ms = new Date(value || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 async function creditReplyMetrics(nextFlow, state, phone, signal) {
   const job = state.assignments.find((item) => nextFlow.normalizePhone(item.lead?.phone) === phone);
   let credits = job?.tplCredit;
@@ -418,10 +496,13 @@ export function registerNextFlowRoutes(router) {
       try {
         const page = await queryLeadPage(nextFlow, phone);
         if (!page) throw new Error(`Notion Blast Leads 找不到号码 ${phone}`);
-        await writeReplyToNotion(nextFlow, page, verdict, event.at, event.text);
+        const persisted = await writeReplyLocalFirst(runtime, nextFlow, page, phone, verdict, event.at, event.text);
+        record.localUpdated = persisted.localUpdated;
         record.notionUpdated = true;
       } catch (error) {
+        record.localUpdated = error.localUpdated === true;
         record.notionUpdated = false;
+        record.notionQueued = error.notionQueued === true;
         record.notionError = error.message || String(error);
         await writeNextFlowLog(nextFlow, "error", "reply_notion_update_failed", "A reply was detected during Next Flow but Notion could not be updated.", {
           phone,
@@ -448,6 +529,32 @@ export function registerNextFlowRoutes(router) {
       return;
     }
     const localDevice = requireDeviceScope(nextFlow);
+    // Refresh is also a recovery trigger. If the app/browser stopped after WhatsApp
+    // acknowledged some sends but before Notion finalisation, replay the persisted
+    // run state into SQLite first. This is idempotent and sentAt prevents regression.
+    const localReconcile = { runsChecked: 0, runsRecorded: 0, leadsRecorded: 0, errors: [] };
+    for (const runner of nextFlow.listRunners?.() || []) {
+      const state = runner?.state;
+      if (!state?.flowLabel || state.mode !== "LIVE" || !(state.assignments || []).some((job) => job?.part1?.sentAt)) continue;
+      localReconcile.runsChecked += 1;
+      try {
+        const result = await nextFlow.recordLocalFlowProgress?.(runner);
+        localReconcile.runsRecorded += 1;
+        localReconcile.leadsRecorded += Number(result?.recorded || 0);
+      } catch (error) {
+        localReconcile.errors.push({ runId: state.runId, error: error.message || String(error) });
+      }
+    }
+    if (localReconcile.errors.length) {
+      throw httpError(500, `本机 Flow 补账失败；为避免把已发送客户放回旧 Flow，本次名单已锁定。${localReconcile.errors.map((item) => `${item.runId}: ${item.error}`).join("；")}`);
+    }
+    const localCache = await nextFlow.readLocalLeadCache?.().catch(() => ({ records: [] })) || { records: [] };
+    const localByPage = new Map();
+    const localByProjectPhone = new Map();
+    for (const record of localCache.records || []) {
+      if (record.id) localByPage.set(pageId(record.id), record);
+      localByProjectPhone.set(`${String(record.project || "").trim().toLowerCase()}:${nextFlow.normalizePhone(record.phone)}`, record);
+    }
     // deep=1 -> 直接扫 Evolution (慢, 手动按钮); 默认读 tracker 产物 (快)。
     const deep = new URL(req.url, "http://x").searchParams.get("deep") === "1";
 
@@ -474,15 +581,31 @@ export function registerNextFlowRoutes(router) {
         const data = await nextFlow.notion("POST", `/databases/${nextFlow.blastDatabaseId}/query`, body);
         for (const page of data?.results ?? []) {
           const phone = nextFlow.normalizePhone(nextFlow.nfPhone(page, "Phone"));
-          const rawNext = nextFlow.nfSelect(page, "Next Flow");
-          const cohortDay = nextFlow.nfSelect(page, "Cohort Day");
+          const project = nextFlow.nfSelect(page, "Project") || "Unknown";
+          const local = localByPage.get(pageId(page.id))
+            || localByProjectPhone.get(`${project.trim().toLowerCase()}:${phone}`)
+            || null;
+          const notionLastBlastAt = page?.properties?.["Last Blast At"]?.date?.start || null;
+          const localFlowWins = (Boolean(local?.campaignRunId)
+              && dateMs(local?.lastBlastAt) >= dateMs(notionLastBlastAt))
+            || dateMs(local?.localUpdatedAt) > dateMs(page?.last_edited_time);
+          const rawNext = localFlowWins ? local.nextFlow : nextFlow.nfSelect(page, "Next Flow");
+          const cohortDay = localFlowWins && local?.cohortDay !== null && local?.cohortDay !== undefined
+            ? `Day ${local.cohortDay}`
+            : nextFlow.nfSelect(page, "Cohort Day");
           const effective = effectiveAutomaticFlow(rawNext, cohortDay);
           const next = effective.nextFlow;
           if (!phone || !next || next === "Completed") continue;
           const ownership = nextFlowPageDeviceScope(nextFlow, page);
           ownershipCounts[ownership] = (ownershipCounts[ownership] || 0) + 1;
           if (ownership !== "local") continue;
-          const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
+          const effectivePage = local ? localRecordAsPage({
+            ...local,
+            nextFlow: next,
+            sequenceStatus: localFlowWins ? local.sequenceStatus : nextFlow.nfSelect(page, "Sequence Status"),
+            status: local.status || nextFlow.nfSelect(page, "Status"),
+          }) : page;
+          const gate = canSend({ phone, page: effectivePage, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
           if (!gate.ok) {
             blocked.push({
               pageId: page.id,
@@ -492,24 +615,32 @@ export function registerNextFlowRoutes(router) {
             });
             continue;
           }
+          const nextDueDate = localFlowWins
+            ? local.followUpDue
+            : page?.properties?.["Follow Up Due"]?.date?.start || null;
+          if (nextDueDate && nextDueDate > today) continue;
+          if (localFlowWins && local.sequenceStatus !== "Running") continue;
           const senderKeys = [
-            nextFlow.nfSelect(page, "Sender Instance"),
-            nextFlow.nfSelect(page, "Assigned Sender Key") || nextFlow.nfText(page, "Assigned Sender Key"),
-            nextFlow.nfSelect(page, "Last Sender Key") || nextFlow.nfText(page, "Last Sender Key"),
+            local?.senderInstance || nextFlow.nfSelect(page, "Sender Instance"),
+            local?.assignedSenderKey || nextFlow.nfSelect(page, "Assigned Sender Key") || nextFlow.nfText(page, "Assigned Sender Key"),
+            local?.lastSenderKey || nextFlow.nfSelect(page, "Last Sender Key") || nextFlow.nfText(page, "Last Sender Key"),
           ].filter(Boolean);
           leads.push({
             pageId: page.id,
             name: nextFlow.nfTitle(page, "Name") || phone,
             phone,
-            project: nextFlow.nfSelect(page, "Project") || "Unknown",
+            project,
             nextFlow: next,
             originalNextFlow: effective.originalNextFlow,
             cohortDay,
-            nextDueDate: page?.properties?.["Follow Up Due"]?.date?.start || null,
-            lastReply: nextFlow.nfText(page, "Last Reply Text"),
-            lastBlastAt: page?.properties?.["Last Blast At"]?.date?.start || null,
-            senderInstance: nextFlow.nfSelect(page, "Sender Instance"),
+            nextDueDate,
+            lastReply: dateMs(local?.lastReplyAt) >= dateMs(page?.properties?.["Last Reply At"]?.date?.start)
+              ? local?.lastReplyText || ""
+              : nextFlow.nfText(page, "Last Reply Text"),
+            lastBlastAt: localFlowWins ? local.lastBlastAt : notionLastBlastAt,
+            senderInstance: local?.senderInstance || nextFlow.nfSelect(page, "Sender Instance"),
             senderKeys: [...new Set(senderKeys)],
+            localFlowRecovered: localFlowWins,
           });
         }
         cursor = data?.has_more ? data?.next_cursor : null;
@@ -572,11 +703,14 @@ export function registerNextFlowRoutes(router) {
             text: (event.text || "").slice(0, 80),
           });
           try {
-            await writeReplyToNotion(nextFlow, { id: lead.pageId }, verdict, event.at, event.text, "(picker 开单前检测)");
+            const persisted = await writeReplyLocalFirst(runtime, nextFlow, { id: lead.pageId }, phone, verdict, event.at, event.text, "(picker 开单前检测)");
+            skipped[skipped.length - 1].localUpdated = persisted.localUpdated;
             skipped[skipped.length - 1].notionUpdated = true;
             await sleep(200);
           } catch (error) {
+            skipped[skipped.length - 1].localUpdated = error.localUpdated === true;
             skipped[skipped.length - 1].notionUpdated = false;
+            skipped[skipped.length - 1].notionQueued = error.notionQueued === true;
             skipped[skipped.length - 1].notionError = error.message || String(error);
             await writeNextFlowLog(nextFlow, "error", "picker_reply_notion_update_failed", "A rejection was detected before Next Flow, but Notion could not be updated.", {
               phone,
@@ -631,6 +765,7 @@ export function registerNextFlowRoutes(router) {
         senderSuffixes: localDevice.senderPhones.map((phone) => String(phone).slice(-4)),
         ...ownershipCounts,
       },
+      localReconcile,
     });
   });
 
@@ -819,6 +954,7 @@ export function registerNextFlowRoutes(router) {
       throw httpError(403, `改 Flow 已拒绝：${foreign.length} 位客户不属于这台电脑。`);
     }
     const gateSnapshot = loadGateSnapshot();
+    const eligible = [];
     for (const { phone, page } of targets) {
       const gate = canSend({ phone, page, classifyReplyText: nextFlow.classifyReplyText, snapshot: gateSnapshot });
       if (!gate.ok) {
@@ -826,7 +962,31 @@ export function registerNextFlowRoutes(router) {
         else skippedRejected += 1;
         continue;
       }
-      await nextFlow.notion("PATCH", `/pages/${pageId(page.id)}`, { properties: props });
+      eligible.push({ phone, page });
+    }
+    const localWrite = await nextFlow.setLocalLeadFlowState?.({
+      targets: eligible.map(({ phone, page }) => ({ pageId: page.id, phone })),
+      nextFlow: target.label,
+      lastFlowSent: previous?.label || "",
+      cohortDay: previous?.cohortDay || "Day 0",
+      followUpDue: nextFlow.klTodayKL(),
+    });
+    if (eligible.length && (!localWrite || localWrite.updated < eligible.length)) {
+      throw httpError(500, `本机只更新 ${localWrite?.updated || 0}/${eligible.length} 位客户，Notion 尚未修改。请先检查 Local Storage。`);
+    }
+    let notionPending = 0;
+    const operationAt = new Date().toISOString();
+    for (const { phone, page } of eligible) {
+      try {
+        await mirrorProjectLeadPatch(runtime, nextFlow, {
+          pageId: page.id,
+          entityId: `${phone}:flow`,
+          properties: props,
+          idempotencyKey: `LOCAL_TO_NOTION:project_lead_patch:${pageId(page.id)}:manual-flow:${operationAt}`,
+        });
+      } catch {
+        notionPending += 1;
+      }
       set += 1;
       await sleep(220);
     }
@@ -837,6 +997,8 @@ export function registerNextFlowRoutes(router) {
       set,
       skippedStop,
       skippedRejected,
+      localUpdated: localWrite?.updated || 0,
+      notionPending,
       notFound: notFound.length,
       notFoundSample: notFound.slice(0, 15),
     });
@@ -896,21 +1058,53 @@ export function registerNextFlowRoutes(router) {
           else skippedRejected += 1;
           continue;
         }
-        targets.push(page.id);
+        targets.push({ id: page.id, phone: nextFlow.normalizePhone(nextFlow.nfPhone(page, "Phone")) });
       }
       cursor = query?.has_more ? query?.next_cursor : null;
     } while (cursor);
 
     // Phase 2 — now write to every collected page. 350ms keeps us under Notion's
     // ~3 req/s average so a big group doesn't fail partway with 429.
+    const localWrite = await nextFlow.setLocalLeadFlowState?.({
+      targets: targets.map((item) => ({ pageId: item.id, phone: item.phone })),
+      nextFlow: target.label,
+      lastFlowSent: previous?.label || "",
+      cohortDay: previous?.cohortDay || "Day 0",
+      followUpDue: nextFlow.klTodayKL(),
+    });
+    if (targets.length && (!localWrite || localWrite.updated < targets.length)) {
+      throw httpError(500, `本机只更新 ${localWrite?.updated || 0}/${targets.length} 位客户，Notion 尚未修改。请先检查 Local Storage。`);
+    }
     let set = 0;
-    for (const id of targets) {
-      await nextFlow.notion("PATCH", `/pages/${pageId(id)}`, { properties: props });
+    let notionPending = 0;
+    const operationAt = new Date().toISOString();
+    for (const item of targets) {
+      try {
+        await mirrorProjectLeadPatch(runtime, nextFlow, {
+          pageId: item.id,
+          entityId: `${item.phone}:flow`,
+          properties: props,
+          idempotencyKey: `LOCAL_TO_NOTION:project_lead_patch:${pageId(item.id)}:group-flow:${operationAt}`,
+        });
+      } catch {
+        notionPending += 1;
+      }
       set += 1;
       await sleep(350);
     }
 
-    json(res, 200, { ok: true, from: fromFlow, to: target.label, set, skippedStop, skippedRejected, skippedForeign, matched: targets.length });
+    json(res, 200, {
+      ok: true,
+      from: fromFlow,
+      to: target.label,
+      set,
+      localUpdated: localWrite?.updated || 0,
+      notionPending,
+      skippedStop,
+      skippedRejected,
+      skippedForeign,
+      matched: targets.length,
+    });
   });
 
   router.post("/api/next-flow/preview-template", async (req, res, runtime) => {

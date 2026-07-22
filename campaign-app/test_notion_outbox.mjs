@@ -62,6 +62,13 @@ let snap = await outbox.snapshot();
 assert.equal(snap.pending, 0);
 assert.equal(snap.completed, 1);
 
+// Local-first page patches are queued before the direct Notion attempt; a
+// successful direct PATCH must be able to close that durable job by key.
+await outbox.enqueue({ entityType: "project_lead_patch", entityId: "lead_1", idempotencyKey: "lead_patch_1", payload: { pageId: "abc", properties: {} } });
+assert.equal((await outbox.snapshot()).pending, 1);
+await outbox.markCompletedByKey("lead_patch_1");
+assert.equal((await outbox.snapshot()).pending, 0);
+
 // --- 推失败 -> 退避重试，不是丢掉 ---
 await outbox.enqueue({ entityType: "campaign_run", entityId: "run_B", idempotencyKey: "k_B", payload: { runId: "run_B" } });
 report = await outbox.drain(async () => { throw new Error("Notion timeout"); });
@@ -145,8 +152,15 @@ assert.notEqual(manual.busy, true, "跑完了就不该说自己还在忙");
 await workerOutbox.enqueue({ entityType: "campaign_run", entityId: "run_N", idempotencyKey: "k_N" });
 let release;
 const gate = new Promise((resolve) => { release = resolve; });
-const slowWorker = createNotionOutboxWorker({ outbox: workerOutbox, clock: () => workerNow, handler: () => gate });
+let markStarted;
+const started = new Promise((resolve) => { markStarted = resolve; });
+const slowWorker = createNotionOutboxWorker({ outbox: workerOutbox, clock: () => workerNow, handler: () => { markStarted(); return gate; } });
 const inflight = slowWorker.drainAll({ reason: "manual" });
+await started;
+assert.equal(slowWorker.status().progress.status, "RUNNING");
+assert.equal(slowWorker.status().progress.current, 0);
+assert.equal(slowWorker.status().progress.total, 1, "画面要知道这轮总共有几笔");
+assert.equal(slowWorker.status().progress.currentItem.entityId, "run_N", "画面要知道当前正在处理哪一笔");
 const rejected = await slowWorker.drainAll({ reason: "manual" });
 assert.equal(rejected.busy, true, "第二次呼叫要回 busy");
 assert.equal(rejected.skipped, 0, "busy 的回应不可以让 skipped 变成真值");
@@ -154,6 +168,8 @@ release();
 const finished = await inflight;
 assert.equal(finished.completed, 1);
 assert.notEqual(finished.busy, true);
+assert.equal(slowWorker.status().progress.status, "SUCCEEDED");
+assert.equal(slowWorker.status().progress.current, 1);
 
 // --- 画面要讲得出「在同步哪一批」，不能只说「同步中」 ---
 const flowDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-outbox-flow-"));

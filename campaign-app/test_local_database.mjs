@@ -114,6 +114,79 @@ assert.equal(await service.isPrimary(), true);
 // initialize / health checks must not silently reset a deliberate Primary cutover.
 assert.equal((await service.initialize()).storageMode, "primary");
 
+// Campaign facts must land in SQLite before Notion. A stopped/failed cloud sync
+// cannot leave a successfully contacted customer in the old Flow.
+const localAdvance = await service.recordCampaignFlowProgress({
+  runId: "run_local_first_flow_2",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  flowLabel: "Flow 2 - Layout",
+  nextFlow: "Flow 3 - Location",
+  cohortDay: "Day 2",
+  sequenceStatus: "Running",
+  mode: "LIVE",
+  runStatus: "STOPPED",
+  deviceId: device.id,
+  startedAt: "2026-07-22T08:00:00.000Z",
+  assignments: [{
+    phone: "60123456789",
+    name: "Alice",
+    instanceName: "wa_01",
+    senderPhone: senderPolicy.expectedSenderPhone,
+    senderKey: "mamba-test-device::60168568756",
+    part1SentAt: "2026-07-22T08:01:00.000Z",
+    part2SentAt: "2026-07-22T08:02:00.000Z",
+    sentAt: "2026-07-22T08:02:00.000Z",
+    dueDate: "2026-07-24",
+  }],
+});
+assert.equal(localAdvance.recorded, 1);
+let advancedAlice = (await service.readLeadCache()).records.find((row) => row.id === "page-local-1");
+assert.equal(advancedAlice.lastFlowSent, "Flow 2 - Layout");
+assert.equal(advancedAlice.nextFlow, "Flow 3 - Location");
+assert.equal(advancedAlice.campaignRunId, "run_local_first_flow_2");
+assert.equal(advancedAlice.lastBlastAt, "2026-07-22T08:02:00.000Z");
+const localRunRows = JSON.parse(execFileSync(detected.binary, [
+  "-batch", "-json", service.databasePath,
+  "SELECT (SELECT COUNT(*) FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS runs, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_2') AS jobs;",
+], { encoding: "utf8" }));
+assert.deepEqual(localRunRows, [{ runs: 1, jobs: 2 }]);
+
+// A stale Notion refresh must not roll the locally acknowledged send backward.
+await service.syncNotionRecords([
+  {
+    id: "page-local-1", phone: "60123456789", project: "Binastra", name: "Alice",
+    status: "Running", sequenceStatus: "Running", lastFlowSent: "Flow 1 - Project Template",
+    nextFlow: "Flow 2 - Layout", cohortDay: "Day 0", lastBlastAt: "2026-07-20T08:00:00.000Z",
+  },
+  { id: "page-local-2", phone: "0123456788", project: "Enlace", name: "Bob", status: "Running", sequenceStatus: "Running" },
+], { reason: "stale_notion_test" });
+advancedAlice = (await service.readLeadCache()).records.find((row) => row.id === "page-local-1");
+assert.equal(advancedAlice.nextFlow, "Flow 3 - Location", "stale Notion must not regress local Flow progress");
+
+const manualFlow = await service.setLeadFlowState({
+  targets: [{ pageId: "page-local-2", phone: "60123456788" }],
+  nextFlow: "Flow 3 - Location",
+  lastFlowSent: "Flow 2 - Layout",
+  cohortDay: "Day 2",
+  followUpDue: "2026-07-22",
+});
+assert.equal(manualFlow.updated, 1);
+assert.equal((await service.readLeadCache()).records.find((row) => row.id === "page-local-2")?.nextFlow, "Flow 3 - Location");
+
+const localReply = await service.recordLeadReply({
+  pageId: "page-local-1",
+  phone: "60123456789",
+  at: "2026-07-22T09:00:00.000Z",
+  text: "not interested",
+  reply: { signal: "RED", route: "NOT_INTERESTED", status: "Not Interested", sequenceStatus: "Not Interested", aiCategory: "Not Interested", stopFlag: true },
+});
+assert.equal(localReply.updated, 1);
+advancedAlice = (await service.readLeadCache()).records.find((row) => row.id === "page-local-1");
+assert.equal(advancedAlice.stopFlag, true);
+assert.equal(advancedAlice.lastReplyText, "not interested");
+assert.equal(advancedAlice.sequenceStatus, "Not Interested");
+
 service.configureNotionImport({
   fetchRecords: async () => [
     { id: "page-local-1", phone: "", project: "Binastra", name: "Broken" },

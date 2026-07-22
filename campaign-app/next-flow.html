@@ -62,6 +62,19 @@
   .tpl-tag { display: inline-block; font-size: 11px; color: #7dd3fc; text-transform: uppercase; letter-spacing: .04em; margin: 6px 0 2px; }
   .tpl-part pre { white-space: pre-wrap; word-break: break-word; background: #0b1322; border: 1px solid #1f2a3d; border-radius: 8px; padding: 8px 10px; margin: 2px 0; font: inherit; }
   .tinp { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; padding: 7px 9px; width: 74px; font: inherit; }
+  .time-row {
+    flex: 1 1 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 12px; align-items: end; padding-top: 2px;
+  }
+  .time-field { min-width: 0; display: grid; gap: 6px; }
+  .time-field > span { color: #94a3b8; font-size: 12px; font-weight: 700; }
+  .time-field .tinp { box-sizing: border-box; width: 100%; min-width: 0; }
+  .time-arrow { align-self: end; padding: 8px 0; color: #64748b; font-size: 16px; }
+  @media (max-width: 560px) {
+    .time-row { gap: 8px; }
+    .time-field > span { font-size: 11px; }
+    .time-arrow { padding-inline: 0; }
+  }
   .statusbox { background: #0b1322; border: 1px solid #334155; border-radius: 12px; padding: 12px 14px; margin: 14px 0; }
   .statushead { font-weight: 700; }
   .loglist { margin-top: 6px; max-height: 190px; overflow: auto; font-size: 12px; }
@@ -83,10 +96,17 @@
     <select id="projectSel"></select>
     <button id="refreshBtn" class="ghost" onclick="refreshWhatsApp()" title="平时不用点:名单默认对照实时追踪的回复记录。这个按钮是直接去 WhatsApp 全量扫一次(慢但最彻底)">↻ 深度扫描 WhatsApp</button>
     <span id="instWrap" class="insts"></span>
-    <span class="pill">发送时间</span>
-    <input id="startTime" class="tinp" placeholder="现在" title="开始时间,如 14:00,留空=现在">
-    <span class="muted">→</span>
-    <input id="endTime" class="tinp" placeholder="留空=自动完成" title="留空会按安全速度尽早完成；填写 21:00 才会铺到晚上 9 点">
+    <div class="time-row" aria-label="发送时间">
+      <label class="time-field" for="startTime">
+        <span>Start Time · 开始时间</span>
+        <input id="startTime" class="tinp" placeholder="现在" title="开始时间,如 14:00,留空=现在">
+      </label>
+      <span class="time-arrow" aria-hidden="true">→</span>
+      <label class="time-field" for="endTime">
+        <span>End Time · 结束时间</span>
+        <input id="endTime" class="tinp" placeholder="留空 = 自动完成" title="留空会按安全速度尽早完成；填写 21:00 才会铺到晚上 9 点">
+      </label>
+    </div>
   </div>
 
   <div id="deviceScopePanel" class="statusbox" style="display:none;"></div>
@@ -164,7 +184,7 @@ async function api(path, body, method) {
   return data;
 }
 
-let ALL = [];          // all due leads from Notion
+let ALL = [];          // due leads after SQLite truth overlays the Notion mirror
 let PROJECTS = [];      // console projects [{id,name}]
 let PROJECT_ALIAS = {}; // lead-project -> template/console project (e.g. Gen Starz -> Gen Starz)
 let currentProject = "";
@@ -256,7 +276,7 @@ async function setGroup(fromFlow, btn) {
   const toFlow = sel.value;
   if (toFlow === fromFlow) return toast("目标和当前一样,不用改。", true);
   if (!confirm(`把「${currentProject}」里整组「${fromFlow}」的人全部改成「${toFlow}」?`)) return;
-  showBusy(`正在把「${fromFlow}」→「${toFlow}」写进 Notion…`, "整组人数多时要几十秒,请别关页面");
+  showBusy(`正在把「${fromFlow}」→「${toFlow}」先写进本机…`, "本机保存后会自动同步 Notion；整组人数多时要几十秒");
   try {
     const r = await api("/api/next-flow/set-group", { projectName: currentProject, fromFlow, toFlow });
     // 没有一个人被改 -> 说明筛选没匹配到 / 全被拦截。以前这里静默 load(),
@@ -283,6 +303,7 @@ async function setGroup(fromFlow, btn) {
     let msg = `已把 ${r.set} 人 ${r.from} → ${r.to}`;
     if (r.skippedStop) msg += ` · ${r.skippedStop} 退订跳过`;
     if (r.skippedRejected) msg += ` · ${r.skippedRejected} 拒绝/转人工跳过`;
+    if (r.notionPending) msg += ` · ${r.notionPending} 个 Notion 排队重试`;
     toast(msg);
     setTimeout(load, 5000); // 等 Notion 索引跟上再静默对账(本地已经先更新了,这步只是核对)
   } catch (e) { toast("失败:" + e.message, true); }
@@ -295,13 +316,14 @@ async function applySetFlow() {
   if (!phones.length) return toast("先贴电话号码。", true);
   if (!nextFlow) return toast("先选一个 Flow。", true);
   if (!confirm(`把这 ${phones.length} 个号码设为「${nextFlow}」?`)) return;
-  showBusy(`正在把 ${phones.length} 个号码设为「${nextFlow}」…`, "请别关页面");
+  showBusy(`正在把 ${phones.length} 个号码先存为「${nextFlow}」…`, "本机保存后会自动同步 Notion");
   try {
     const r = await api("/api/next-flow/set-flow", { phones, nextFlow });
     let msg = `已设 ${r.set} 人 → ${r.nextFlow}`;
     if (r.notFound) msg += ` · ${r.notFound} 个没找到`;
     if (r.skippedStop) msg += ` · ${r.skippedStop} 个已退订跳过`;
     if (r.skippedRejected) msg += ` · ${r.skippedRejected} 个拒绝/转人工跳过`;
+    if (r.notionPending) msg += ` · ${r.notionPending} 个 Notion 排队重试`;
     toast(msg, r.set ? false : true);
     document.getElementById("phonesBox").value = "";
     // Notion 写后读有延迟,等索引跟上再刷新列表(否则刚改的还是显示旧 flow)。
@@ -436,7 +458,7 @@ async function stopSend() {
   if (!confirm("确定停止这批发送?已经发出去的会自动推进到下一轮,没发的留着下次再发。")) return;
   try {
     await api("/api/stop", { runId: activeNextRunId });
-    toast("已发停止指令,正在收尾并更新 Notion…");
+    toast("已发停止指令，正在先保存本机进度，再同步 Notion…");
   } catch (e) { toast("停止失败:" + e.message, true); }
 }
 
@@ -465,8 +487,10 @@ async function scanReplies() {
         const c = x.signal === "RED" ? "red" : x.signal === "GREEN" ? "green" : "grey";
         const dot = x.signal === "RED" ? "🔴" : x.signal === "GREEN" ? "🟢" : "⚪️";
         const notionState = x.notionUpdated === false
-          ? ` · ⚠️ Notion 写入失败: ${esc(x.notionError || "unknown error")}`
-          : " · ✅ Notion 已更新";
+          ? x.localUpdated
+            ? ` · ✅ 本机已保存${x.notionQueued ? " · Notion 已排队重试" : ""}`
+            : ` · ⚠️ 本机写入失败: ${esc(x.notionError || "unknown error")}`
+          : " · ✅ 本机 + Notion 已更新";
         return `<div class="rep ${c}">${dot} <b>${esc(x.name)}</b> · ${esc(x.route)} · 「${esc(x.text || "")}」${notionState}</div>`;
       }).join("");
   } catch { /* ignore */ }
@@ -503,13 +527,15 @@ async function pollStatus() {
     const advanceDone = !!s.state.advanceDone; // server says the Notion update finished
     const advanceStatus = String(s.state.advanceStatus || "").toUpperCase();
     const advanceProblem = advanceStatus === "FAILED" || advanceStatus === "PARTIAL";
+    const localAdvanceSaved = s.state.localAdvance?.status === "SUCCEEDED";
     const recent = log.slice(-10).reverse()
       .map((e) => `<div class="logline"><span class="muted">${esc(hhmmss(e.time))}</span> ${esc(e.message)}</div>`).join("");
     const head = running ? "🟢 发送中"
       : !isFlowRun ? "✅ 完成"
-      : advanceProblem ? `⚠️ Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${esc(s.state.advanceError || "请查看 System Logs")}`
-      : advanceDone ? "✅ 已更新完毕,可以继续"
-      : "⚪️ Notion 更新中…(正在推进已发的人)";
+      : advanceProblem && localAdvanceSaved ? `✅ 本机进度已保存 · ⚠️ Notion ${advanceStatus === "PARTIAL" ? "只完成一部分" : "等待重试"}`
+      : advanceProblem ? `⚠️ 本机/Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${esc(s.state.advanceError || "请查看 System Logs")}`
+      : advanceDone ? "✅ 本机 + Notion 已更新完毕,可以继续"
+      : localAdvanceSaved ? "✅ 本机已保存 · ⚪️ Notion 同步中…" : "⚪️ 正在先保存本机进度…";
     const stopBtn = running
       ? ` <button class="ghost" style="padding:3px 12px; margin-left:10px; border-color:#dc2626; color:#f87171;" onclick="stopSend()">⏸ 停止发送</button>`
       : "";
@@ -535,7 +561,9 @@ async function pollStatus() {
         load();
       } else if (advanceProblem) {
         wasRunning = false;
-        toast(`Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${s.state.advanceError || "请查看 System Logs"}`, true);
+        toast(localAdvanceSaved
+          ? `本机 Flow 已保存；Notion ${advanceStatus === "PARTIAL" ? "只完成一部分" : "已排队重试"}`
+          : `本机/Notion 推进失败: ${s.state.advanceError || "请查看 System Logs"}`, !localAdvanceSaved);
         load();
       } else if (postDoneChecks < 80) { // wait up to ~4 min (Notion can be slow)
         postDoneChecks += 1;
@@ -561,10 +589,10 @@ async function load(manualCheck = false) {
   document.getElementById("deviceScopePanel").style.display = "none";
   if (manualCheck && refreshBtn) {
     refreshBtn.disabled = true;
-    refreshBtn.textContent = "正在检查 WhatsApp…";
+    refreshBtn.textContent = "正在补本机进度 + 检查 WhatsApp…";
     const sp = document.getElementById("scanPanel");
     sp.style.display = "";
-    sp.innerHTML = '<div class="statushead">正在读取所有在线 WhatsApp 号码和客户最新回复…</div>';
+    sp.innerHTML = '<div class="statushead">正在先核对本机 Flow 进度，再读取 WhatsApp 最新回复…</div>';
   }
   document.getElementById("list").innerHTML = '<div class="empty">加载中…</div>';
   try {
@@ -604,6 +632,10 @@ async function load(manualCheck = false) {
     const sp = document.getElementById("scanPanel");
     const skipped = data.skipped || [];
     const check = data.whatsappCheck || {};
+    const localReconcile = data.localReconcile || {};
+    const localSummary = localReconcile.runsChecked
+      ? `本机补账 ${localReconcile.leadsRecorded || 0} 位客户 / ${localReconcile.runsRecorded || 0} 批 · `
+      : "本机 Flow 已核对 · ";
     REPLY_SAFETY_OK = check.safeToSend === true;
     const liveButton = document.getElementById("btnNextLive");
     if (liveButton) {
@@ -614,8 +646,8 @@ async function load(manualCheck = false) {
       ? new Date(check.checkedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       : "";
     const checkSummary = check.scanSource === "tracker"
-      ? `已对照 ${check.candidates || 0} 位客户 · 回复来源: 实时追踪记录${check.trackerUpdatedAt ? " (最后更新 " + new Date(check.trackerUpdatedAt).toLocaleString("en-GB", { hour12: false }) + ")" : ""}${checkTime ? ` · ${checkTime}` : ""}`
-      : `已检查 ${check.candidates || 0} 位客户 · ${check.instances || 0} 个 WhatsApp connection · 实际读取 ${check.pagesRead || 0} 页 / ${check.messagesRead || 0} 条消息${checkTime ? ` · ${checkTime}` : ""}`;
+      ? `${localSummary}已对照 ${check.candidates || 0} 位客户 · 回复来源: 实时追踪记录${check.trackerUpdatedAt ? " (最后更新 " + new Date(check.trackerUpdatedAt).toLocaleString("en-GB", { hour12: false }) + ")" : ""}${checkTime ? ` · ${checkTime}` : ""}`
+      : `${localSummary}已检查 ${check.candidates || 0} 位客户 · ${check.instances || 0} 个 WhatsApp connection · 实际读取 ${check.pagesRead || 0} 页 / ${check.messagesRead || 0} 条消息${checkTime ? ` · ${checkTime}` : ""}`;
     if (data.evoOffline) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead" style="color:#fbbf24">⚠️ WhatsApp 引擎离线,深度扫描没跑成</div>' +
@@ -639,11 +671,11 @@ async function load(manualCheck = false) {
       sp.style.display = "";
       sp.innerHTML = '<div class="statushead">🛡 开单前检测:自动剔除 ' + skipped.length + ' 个回复过的客户' +
         '(🔴 ' + red + ' 停/拒 · 🟢 ' + green + ' 有意向' + (other ? ' · ⚪ ' + other + ' 其他' : '') + ')' +
-        (notionFailed ? ',⚠️ ' + notionFailed + ' 个 Notion 写入失败' : ',✅ 已写回 Notion') + '</div>' +
+        (notionFailed ? ',✅ 本机已保存 · ' + notionFailed + ' 个 Notion 排队重试' : ',✅ 本机 + Notion 已更新') + '</div>' +
         '<div style="color:#7dd3fc;font-size:13px;margin-top:5px">' + esc(checkSummary) + '</div>' +
         '<div style="color:#94a3b8;font-size:13px;margin-top:6px">' +
         skipped.map((x) => esc(x.name) + '(…' + esc(String(x.phone).slice(-4)) + ')「' + esc(x.text || '') + '」→ ' + esc(x.route) +
-          (x.notionUpdated === false ? ' · ⚠️ ' + esc(x.notionError || 'Notion 写入失败') : '')).join('<br>') +
+          (x.notionUpdated === false ? (x.localUpdated ? ' · ✅ 本机已保存' + (x.notionQueued ? ' / Notion 排队重试' : '') : ' · ⚠️ 本机写入失败') : '')).join('<br>') +
         '</div>';
     } else {
       sp.style.display = "";

@@ -258,6 +258,7 @@ const campaignRunService = createCampaignRunService({
   appDir,
   blastDatabaseId: blastDsId,
   notion,
+  localDatabase: localDatabaseService,
   normalizePhone: nfNormalizePhone,
   nfSelect,
   nfAddDaysKL,
@@ -267,6 +268,7 @@ const campaignRunService = createCampaignRunService({
   deviceIdentity,
 });
 const {
+  recordLocalFlowProgress,
   autoAdvanceFlow,
   autoNotionUpload,
   recoverPendingUpdates,
@@ -540,6 +542,7 @@ const runtime = await loadRuntime({
     applyTemplateOverrides,
     assertFirstConsoleRunUsesFlow1Only,
     autoAdvanceFlow,
+    recordLocalFlowProgress,
     creditSentCounts,
     autoNotionUpload,
     recoverPendingUpdates,
@@ -570,6 +573,10 @@ const runtime = await loadRuntime({
     incPageNumber,
     getRunner: (runId = null) => getCampaignRunner(runId),
     listRunners: () => campaignRunnerRegistry.list(),
+    recordLocalFlowProgress,
+    readLocalLeadCache: () => localDatabaseService.readLeadCache(),
+    setLocalLeadFlowState: (options) => localDatabaseService.setLeadFlowState(options),
+    recordLocalLeadReply: (options) => localDatabaseService.recordLeadReply(options),
     getProject,
     setLeadsCache: (value) => { leadsCache = value; },
     createLeadGroup: (options) => localDatabaseService.createLeadGroup(options),
@@ -592,6 +599,20 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
   // 重跑一次那个 run 的收尾。两个函式本身都会跳过没发出去的客户，
   // 所以重复执行是安全的。
   handler: async (job) => {
+    if (job.entityType === "project_lead_patch") {
+      const pageId = String(job.payload?.pageId || "").replace(/[^a-fA-F0-9]/g, "");
+      const properties = job.payload?.properties;
+      if (!pageId || !properties || typeof properties !== "object") return false;
+      await notion("PATCH", `/pages/${pageId}`, { properties });
+      await systemLogService.write({
+        level: "info",
+        area: "notion",
+        event: "outbox_project_lead_patch_retried",
+        message: `Notion 客户状态重试成功：${job.entityId}`,
+        context: { pageId, entityId: job.entityId },
+      }).catch(() => {});
+      return true;
+    }
     const { runId, projectId } = job.payload ?? {};
     if (!runId) return false;
     const runner = await runtime.campaign.restoreRunner({ runId, projectId }).catch(() => null);
@@ -600,8 +621,16 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
     // 而 flowLabel 是这个 run 的事实。Flow 1 没有 flowLabel 走上传，
     // Flow 2-10 有 flowLabel 走推进。
     const flowLabel = runner.state.flowLabel || "";
-    if (flowLabel) await autoAdvanceFlow(runner);
-    else await autoNotionUpload(runner, { allowPartial: true });
+    if (flowLabel) {
+      await autoAdvanceFlow(runner);
+      if (runner.state.advanceStatus !== "SUCCEEDED") {
+        throw new Error(runner.state.advanceError || `Notion Flow 推进状态是 ${runner.state.advanceStatus || "UNKNOWN"}`);
+      }
+    }
+    else {
+      const result = await autoNotionUpload(runner, { allowPartial: true });
+      if (result?.status === "FAILED") throw new Error(result.error || "Flow 1 Notion upload failed");
+    }
     await systemLogService.write({
       level: "info",
       area: "notion",

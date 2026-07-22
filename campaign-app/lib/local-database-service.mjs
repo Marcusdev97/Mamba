@@ -676,12 +676,47 @@ INSERT INTO project_leads(
 ON CONFLICT(project_lead_key) DO UPDATE SET
   notion_page_id=excluded.notion_page_id, contact_key=excluded.contact_key,
   project_code=excluded.project_code, phone=excluded.phone, name=excluded.name,
-  sequence_status=excluded.sequence_status, status=excluded.status,
-  last_flow_sent=excluded.last_flow_sent, next_flow=excluded.next_flow,
-  cohort_day=excluded.cohort_day, follow_up_due=excluded.follow_up_due,
-  first_blast_at=excluded.first_blast_at, last_blast_at=excluded.last_blast_at,
-  assigned_sender_key=excluded.assigned_sender_key, last_sender_key=excluded.last_sender_key,
-  last_sender_phone=excluded.last_sender_phone, last_sent_by_device=excluded.last_sent_by_device,
+  sequence_status=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.sequence_status ELSE excluded.sequence_status END,
+  status=excluded.status,
+  last_flow_sent=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.last_flow_sent ELSE excluded.last_flow_sent END,
+  next_flow=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.next_flow ELSE excluded.next_flow END,
+  cohort_day=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.cohort_day ELSE excluded.cohort_day END,
+  follow_up_due=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.follow_up_due ELSE excluded.follow_up_due END,
+  first_blast_at=COALESCE(project_leads.first_blast_at, excluded.first_blast_at),
+  last_blast_at=CASE
+    WHEN COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.last_blast_at ELSE excluded.last_blast_at END,
+  assigned_sender_key=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.assigned_sender_key ELSE excluded.assigned_sender_key END,
+  last_sender_key=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.last_sender_key ELSE excluded.last_sender_key END,
+  last_sender_phone=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.last_sender_phone ELSE excluded.last_sender_phone END,
+  last_sent_by_device=CASE
+    WHEN project_leads.campaign_run_id IS NOT NULL
+      AND COALESCE(project_leads.last_blast_at,'') >= COALESCE(excluded.last_blast_at,'')
+    THEN project_leads.last_sent_by_device ELSE excluded.last_sent_by_device END,
   ai_category=excluded.ai_category, ai_summary=excluded.ai_summary, priority=excluded.priority,
   follow_up_at=excluded.follow_up_at, assigned_sales=excluded.assigned_sales,
   sales_notes=excluded.sales_notes, appointment_date=excluded.appointment_date,
@@ -812,7 +847,7 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated
     const binary = await requireV3Database();
     const rows = await queryJson(binary, `
 SELECT
-  l.notion_page_id AS id, l.source_updated_at AS sourceUpdatedAt,
+  l.notion_page_id AS id, l.source_updated_at AS sourceUpdatedAt, l.updated_at AS localUpdatedAt,
   p.project_name AS project, l.name, l.phone,
   l.first_blast_at AS firstBlastAt, l.last_blast_at AS lastBlastAt,
   l.last_flow_sent AS lastFlowSent, l.next_flow AS nextFlow, l.cohort_day AS cohortDay,
@@ -850,6 +885,203 @@ SELECT COALESCE(
 ) AS syncedAt;
 `);
     return { syncedAt: meta?.syncedAt || null, count: records.length, records, reused: true, source: "sqlite" };
+  }
+
+  // Campaign/回复的事实先写本机，再让 Notion 当异步镜像。
+  //
+  // project_leads 以前只是 Notion snapshot；run 中途 STOP 或 Notion timeout 时，
+  // 已经收到讯息的人仍停在旧 Next Flow。下面三支 mutation 是 local-first 的热路径：
+  //   · recordCampaignFlowProgress — 以实际 sentAt 推进 Flow
+  //   · setLeadFlowState           — 人工批量改 Flow
+  //   · recordLeadReply            — Refresh/Tracker 扫到回复先落地
+  // 全部用单一 SQLite transaction，页面关掉也不会留下半批状态。
+  async function recordCampaignFlowProgress({
+    runId,
+    projectCode,
+    projectName = "",
+    flowLabel,
+    nextFlow,
+    cohortDay,
+    sequenceStatus = "Running",
+    mode = "LIVE",
+    runStatus = "PARTIAL",
+    deviceId = "",
+    startedAt = null,
+    finishedAt = null,
+    assignments = [],
+  } = {}) {
+    const id = clean(runId);
+    const code = clean(projectCode);
+    const sentFlow = clean(flowLabel);
+    if (!id || !code || !sentFlow || clean(mode).toUpperCase() !== "LIVE") {
+      return { recorded: 0, skipped: Array.isArray(assignments) ? assignments.length : 0, reason: "not_live_flow_run" };
+    }
+    const rows = (Array.isArray(assignments) ? assignments : []).map((item) => {
+      const phone = normalizePhone(item?.phone);
+      const sentAt = item?.sentAt || item?.part2SentAt || item?.part1SentAt || null;
+      if (!phone || !sentAt || !Number.isFinite(new Date(sentAt).getTime())) return null;
+      return {
+        phone,
+        name: clean(item?.name),
+        sentAt: new Date(sentAt).toISOString(),
+        dueDate: item?.dueDate || null,
+        senderKey: clean(item?.senderKey),
+        senderPhone: normalizePhone(item?.senderPhone),
+        instanceName: clean(item?.instanceName),
+        part1SentAt: item?.part1SentAt || null,
+        part2SentAt: item?.part2SentAt || null,
+      };
+    }).filter(Boolean);
+    if (!rows.length) return { recorded: 0, skipped: Array.isArray(assignments) ? assignments.length : 0, reason: "no_sent_assignments" };
+
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    const allowedRunStatus = ["QUEUED", "RUNNING", "PARTIAL", "COMPLETED", "FAILED", "STOPPED"].includes(clean(runStatus).toUpperCase())
+      ? clean(runStatus).toUpperCase()
+      : "PARTIAL";
+    const senderSet = [...new Set(rows.map((row) => row.instanceName).filter(Boolean))].join(",");
+    const runPayload = JSON.stringify({ source: "run-json", localFirst: true, flowLabel: sentFlow });
+    const statements = ["PRAGMA foreign_keys = ON;", "BEGIN IMMEDIATE;", `
+INSERT INTO campaign_runs(
+  run_id, notion_page_id, name, project_code, flow_topic, flow_no, sender_set, mode,
+  status, requested_count, sent_count, failed_count, device_key, started_at,
+  finished_at, payload_json
+) VALUES (
+  ${sqlText(id)}, NULL, ${sqlText(`${projectName || code} · ${sentFlow}`)}, ${sqlText(code)},
+  ${sqlText(sentFlow)}, NULL, ${sqlText(senderSet)}, 'LIVE', ${sqlText(allowedRunStatus)},
+  ${sqlNumber(Array.isArray(assignments) ? assignments.length : rows.length)}, ${sqlNumber(rows.length)}, 0,
+  ${sqlNullable(deviceId)}, ${sqlText(startedAt || rows[0].sentAt || now)},
+  ${sqlNullable(finishedAt)}, ${sqlText(runPayload)}
+)
+ON CONFLICT(run_id) DO UPDATE SET
+  status=excluded.status, sent_count=MAX(campaign_runs.sent_count, excluded.sent_count),
+  finished_at=COALESCE(excluded.finished_at, campaign_runs.finished_at),
+  payload_json=excluded.payload_json;`];
+
+    for (const row of rows) {
+      const leadKey = `${code}:${row.phone}`;
+      // sentAt 是硬证据。旧 run 重放时不能把已经走得更远的客户倒退。
+      statements.push(`
+UPDATE project_leads SET
+  name=CASE WHEN name='' AND ${sqlText(row.name)}<>'' THEN ${sqlText(row.name)} ELSE name END,
+  sequence_status=${sqlText(sequenceStatus)},
+  last_flow_sent=${sqlText(sentFlow)},
+  next_flow=${sqlText(nextFlow)},
+  cohort_day=${cohortNumber(cohortDay) === null ? "NULL" : sqlNumber(cohortNumber(cohortDay))},
+  follow_up_due=${sqlNullable(row.dueDate)},
+  last_blast_at=${sqlText(row.sentAt)},
+  assigned_sender_key=COALESCE(${sqlNullable(row.senderKey)}, assigned_sender_key),
+  last_sender_key=COALESCE(${sqlNullable(row.senderKey)}, last_sender_key),
+  last_sender_phone=CASE WHEN ${sqlText(row.senderPhone)}<>'' THEN ${sqlText(row.senderPhone)} ELSE last_sender_phone END,
+  last_sent_by_device=COALESCE(${sqlNullable(deviceId)}, last_sent_by_device),
+  campaign_run_id=${sqlText(id)},
+  updated_at=${sqlText(now)}
+WHERE project_code=${sqlText(code)} AND phone=${sqlText(row.phone)}
+  AND (last_blast_at IS NULL OR last_blast_at<=${sqlText(row.sentAt)} OR campaign_run_id=${sqlText(id)});
+
+INSERT INTO send_jobs(
+  id, run_id, project_lead_key, connection_key, flow_topic, part_no, template_key,
+  status, scheduled_at, sent_at, error_code, error_message, created_at, updated_at
+)
+SELECT ${sqlText(`${id}:${row.phone}:1`)}, ${sqlText(id)}, project_lead_key,
+       ${sqlNullable(row.senderKey)}, ${sqlText(sentFlow)}, 1, NULL, 'SENT', NULL,
+       ${sqlNullable(row.part1SentAt || row.sentAt)}, '', '', ${sqlText(now)}, ${sqlText(now)}
+FROM project_leads WHERE project_lead_key=${sqlText(leadKey)}
+ON CONFLICT(id) DO UPDATE SET status='SENT', sent_at=excluded.sent_at, updated_at=excluded.updated_at;`);
+      if (row.part2SentAt) {
+        statements.push(`
+INSERT INTO send_jobs(
+  id, run_id, project_lead_key, connection_key, flow_topic, part_no, template_key,
+  status, scheduled_at, sent_at, error_code, error_message, created_at, updated_at
+)
+SELECT ${sqlText(`${id}:${row.phone}:2`)}, ${sqlText(id)}, project_lead_key,
+       ${sqlNullable(row.senderKey)}, ${sqlText(sentFlow)}, 2, NULL, 'SENT', NULL,
+       ${sqlText(row.part2SentAt)}, '', '', ${sqlText(now)}, ${sqlText(now)}
+FROM project_leads WHERE project_lead_key=${sqlText(leadKey)}
+ON CONFLICT(id) DO UPDATE SET status='SENT', sent_at=excluded.sent_at, updated_at=excluded.updated_at;`);
+      }
+    }
+    statements.push("COMMIT;");
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 120000);
+    const phoneList = rows.map((row) => sqlText(row.phone)).join(",");
+    const [result] = await queryJson(binary, `
+SELECT COUNT(*) AS accounted,
+       SUM(CASE WHEN campaign_run_id=${sqlText(id)} THEN 1 ELSE 0 END) AS advanced
+FROM project_leads
+WHERE project_code=${sqlText(code)} AND phone IN (${phoneList});`);
+    const recorded = Number(result?.accounted || 0);
+    return {
+      recorded,
+      advanced: Number(result?.advanced || 0),
+      skipped: Math.max(0, rows.length - recorded),
+      runId: id,
+      flowLabel: sentFlow,
+      nextFlow,
+    };
+  }
+
+  async function setLeadFlowState({ targets = [], nextFlow, lastFlowSent = "", cohortDay = null, followUpDue = null } = {}) {
+    const normalized = (Array.isArray(targets) ? targets : []).map((target) => ({
+      pageId: clean(target?.pageId).replace(/-/g, ""),
+      phone: normalizePhone(target?.phone),
+      projectCode: clean(target?.projectCode),
+    })).filter((target) => target.pageId || (target.phone && target.projectCode));
+    if (!normalized.length || !clean(nextFlow)) return { updated: 0, requested: normalized.length };
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    const statements = ["BEGIN IMMEDIATE;"];
+    for (const target of normalized) {
+      const where = target.pageId
+        ? `replace(notion_page_id,'-','')=${sqlText(target.pageId)}`
+        : `project_code=${sqlText(target.projectCode)} AND phone=${sqlText(target.phone)}`;
+      statements.push(`UPDATE project_leads SET
+        sequence_status='Running', next_flow=${sqlText(nextFlow)},
+        last_flow_sent=CASE WHEN ${sqlText(lastFlowSent)}<>'' THEN ${sqlText(lastFlowSent)} ELSE last_flow_sent END,
+        cohort_day=${cohortNumber(cohortDay) === null ? "NULL" : sqlNumber(cohortNumber(cohortDay))},
+        follow_up_due=${sqlNullable(followUpDue)}, updated_at=${sqlText(now)}
+        WHERE ${where};`);
+    }
+    statements.push("COMMIT;");
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 120000);
+    const clauses = normalized.map((target) => target.pageId
+      ? `replace(notion_page_id,'-','')=${sqlText(target.pageId)}`
+      : `(project_code=${sqlText(target.projectCode)} AND phone=${sqlText(target.phone)})`);
+    const [result] = await queryJson(binary, `SELECT COUNT(*) AS updated FROM project_leads WHERE next_flow=${sqlText(nextFlow)} AND (${clauses.join(" OR ")});`);
+    return { updated: Number(result?.updated || 0), requested: normalized.length };
+  }
+
+  async function recordLeadReply({ pageId = "", phone, reply = {}, at, text = "" } = {}) {
+    const normalizedPhone = normalizePhone(phone);
+    const notionPageId = clean(pageId).replace(/-/g, "");
+    const replyAt = Number.isFinite(new Date(at || "").getTime()) ? new Date(at).toISOString() : new Date().toISOString();
+    if (!normalizedPhone) return { updated: 0, reason: "invalid_phone" };
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    const summary = `[${clean(reply.signal)}] ${clean(reply.route)} · 建议:${clean(reply.suggestedReply)}`.slice(0, 1900);
+    const stop = reply.stopFlag === true;
+    const leadWhere = notionPageId
+      ? `replace(notion_page_id,'-','')=${sqlText(notionPageId)}`
+      : `phone=${sqlText(normalizedPhone)}`;
+    await runProcess(binary, ["-batch", databasePath], `
+BEGIN IMMEDIATE;
+UPDATE contacts SET
+  stop_flag=MAX(stop_flag, ${sqlBoolean(stop)}),
+  stop_reason=CASE WHEN ${sqlBoolean(stop)}=1 THEN ${sqlText(`Auto: ${clean(reply.route)}`)} ELSE stop_reason END,
+  stop_at=CASE WHEN ${sqlBoolean(stop)}=1 THEN COALESCE(stop_at, ${sqlText(replyAt)}) ELSE stop_at END,
+  reply_count=reply_count+CASE WHEN COALESCE(last_reply_at,'')<${sqlText(replyAt)} THEN 1 ELSE 0 END,
+  last_reply_text=CASE WHEN COALESCE(last_reply_at,'')<=${sqlText(replyAt)} THEN ${sqlText(text)} ELSE last_reply_text END,
+  last_reply_at=CASE WHEN COALESCE(last_reply_at,'')<=${sqlText(replyAt)} THEN ${sqlText(replyAt)} ELSE last_reply_at END,
+  updated_at=${sqlText(now)}
+WHERE contact_key=${sqlText(normalizedPhone)};
+UPDATE project_leads SET
+  status=CASE WHEN ${sqlText(clean(reply.status))}<>'' THEN ${sqlText(clean(reply.status))} ELSE status END,
+  sequence_status=CASE WHEN ${sqlText(clean(reply.sequenceStatus))}<>'' THEN ${sqlText(clean(reply.sequenceStatus))} ELSE sequence_status END,
+  ai_category=CASE WHEN ${sqlText(clean(reply.aiCategory))}<>'' THEN ${sqlText(clean(reply.aiCategory))} ELSE ai_category END,
+  ai_summary=${sqlText(summary)}, updated_at=${sqlText(now)}
+WHERE ${leadWhere};
+COMMIT;`, 120000);
+    const [result] = await queryJson(binary, `SELECT COUNT(*) AS updated FROM project_leads WHERE ${leadWhere};`);
+    return { updated: Number(result?.updated || 0), phone: normalizedPhone, at: replyAt };
   }
 
   async function setStorageMode(mode) {
@@ -1074,6 +1306,9 @@ COMMIT;
     applyNotionImport,
     syncNotionRecords,
     readLeadCache,
+    recordCampaignFlowProgress,
+    setLeadFlowState,
+    recordLeadReply,
     listLeadGroups,
     readLeadGroup,
     createLeadGroup,

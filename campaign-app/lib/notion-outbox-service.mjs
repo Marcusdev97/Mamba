@@ -96,6 +96,17 @@ UPDATE sync_jobs SET status='COMPLETED', last_error_code='', last_error_message=
 WHERE id=${sqlValue(id)};`);
   }
 
+  async function markCompletedByKey(idempotencyKey) {
+    const key = clean(idempotencyKey);
+    if (!key) return { completed: false };
+    const database = await cli();
+    const nowIso = clock().toISOString();
+    await database.exec(`
+UPDATE sync_jobs SET status='COMPLETED', last_error_code='', last_error_message='', updated_at=${sqlValue(nowIso)}
+WHERE idempotency_key=${sqlValue(key)};`);
+    return { completed: true, idempotencyKey: key };
+  }
+
   // 还有额度就退避重试；用完就标 FAILED 等人来看。FAILED 不会自己再跑，
   // 免得一笔坏资料每晚洗一次版。
   async function markFailure(job, error) {
@@ -119,29 +130,36 @@ WHERE id=${sqlValue(job.id)};`);
 
   // 把到期的推一轮。handler 回 false 代表「这笔现在处理不了但不算错」(例如 run
   // 档不见了)，直接结案不重试。
-  async function drain(handler, { limit = 25 } = {}) {
+  async function drain(handler, { limit = 25, onProgress = null } = {}) {
     const report = { processed: 0, completed: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
     if (typeof handler !== "function") return report;
     const jobs = await due({ limit });
-    for (const job of jobs) {
+    for (let index = 0; index < jobs.length; index += 1) {
+      const job = jobs[index];
+      let payload = {};
+      try { payload = JSON.parse(job.payloadJson || "{}"); } catch { payload = {}; }
+      const hydratedJob = { ...job, payload };
       report.processed += 1;
+      await onProgress?.({ phase: "running", current: index, total: jobs.length, job: hydratedJob, report: { ...report } });
       await markRunning(job.id);
+      let outcome = "completed";
       try {
-        let payload = {};
-        try { payload = JSON.parse(job.payloadJson || "{}"); } catch { payload = {}; }
-        const result = await handler({ ...job, payload });
+        const result = await handler(hydratedJob);
         if (result === false) {
           await markCompleted(job.id);
           report.skipped += 1;
+          outcome = "skipped";
         } else {
           await markCompleted(job.id);
           report.completed += 1;
         }
       } catch (error) {
-        const outcome = await markFailure(job, error);
-        if (outcome.exhausted) report.failed += 1; else report.retried += 1;
-        report.errors.push({ entityId: job.entityId, attempt: outcome.attempt, error: error.message });
+        const failureOutcome = await markFailure(job, error);
+        if (failureOutcome.exhausted) report.failed += 1; else report.retried += 1;
+        report.errors.push({ entityId: job.entityId, attempt: failureOutcome.attempt, error: error.message });
+        outcome = failureOutcome.exhausted ? "failed" : "retry";
       }
+      await onProgress?.({ phase: "finished", current: index + 1, total: jobs.length, job: hydratedJob, outcome, report: { ...report } });
     }
     return report;
   }
@@ -157,7 +175,7 @@ FROM sync_jobs GROUP BY status;`);
     // 光说「同步中」使用者不知道是哪一批。
     const waiting = await database.query(`
 SELECT payload_json AS payloadJson, entity_id AS entityId, status
-FROM sync_jobs WHERE status IN ('PENDING','RETRY','RUNNING')
+FROM sync_jobs WHERE entity_type='campaign_run' AND status IN ('PENDING','RETRY','RUNNING')
 ORDER BY available_at LIMIT 20;`);
     const flows = [];
     for (const row of waiting) {
@@ -216,5 +234,5 @@ WHERE status='FAILED';`);
     return { requeued: count };
   }
 
-  return { enqueue, due, drain, snapshot, requeueStuckRunning, retryFailed, markFailure, markCompleted };
+  return { enqueue, due, drain, snapshot, requeueStuckRunning, retryFailed, markFailure, markCompleted, markCompletedByKey };
 }

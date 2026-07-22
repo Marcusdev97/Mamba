@@ -198,7 +198,7 @@
   <!-- Notion 回写队列：run 结束当下会直接回写，这里只收那次失败的。
        每晚 22:00 自动兜底一轮；急着让名单状态正确就按「立即同步」。
        没同步到 = 那批人下一轮会被重复发送，所以这个状态要看得见。 -->
-  <div class="card" id="outboxCard">
+  <div class="card hidden" id="outboxCard" aria-hidden="true">
     <h3>Notion 同步队列</h3>
     <div class="muted" id="outboxState">读取中…</div>
     <div style="margin-top:10px">

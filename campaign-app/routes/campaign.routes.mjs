@@ -147,6 +147,11 @@ function markFlowAdvanceWaiting(runner) {
   runner.state.advanceStatus = "WAITING";
   runner.state.advanceError = null;
   runner.state.advanceSummary = null;
+  runner.state.localAdvance = {
+    status: "WAITING",
+    recorded: 0,
+    updatedAt: new Date().toISOString(),
+  };
   return true;
 }
 
@@ -256,8 +261,19 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
         // 提早烧掉的话续跑那批的模板用量就永远算不到了。
         runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；先把已发出的 ${sent} 位回写 Notion，避免下一批重发。`);
         try {
-          if (autoAdvance) await campaign.autoAdvanceFlow(runner);
-          else await campaign.autoNotionUpload(runner, { allowPartial: true });
+          if (autoAdvance) {
+            await campaign.autoAdvanceFlow(runner);
+            if (runner.state.advanceStatus !== "SUCCEEDED") {
+              await queueNotionFinalise(runtime, runner, { reason: "partial_finalise_incomplete", autoAdvance });
+              runner.pushLog(`本机进度已保存；Notion 仍有 ${runner.state.advanceStatus} 项目，已排入重试队列。`);
+            }
+          }
+          else {
+            const notionResult = await campaign.autoNotionUpload(runner, { allowPartial: true });
+            if (notionResult?.status === "FAILED") {
+              await queueNotionFinalise(runtime, runner, { reason: "partial_flow1_upload_failed", autoAdvance: false });
+            }
+          }
         } catch (error) {
           // 推不出去就排进 outbox：晚上兜底那轮或你按「立即同步」时会再试。
           // 不能只留一行 log 就算了 —— 没写进 Notion = 这批人下次会被重发。
@@ -270,9 +286,17 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
         return;
       }
       try {
-        if (autoAdvance) await campaign.autoAdvanceFlow(runner);
+        if (autoAdvance) {
+          await campaign.autoAdvanceFlow(runner);
+          if (runner.state.advanceStatus !== "SUCCEEDED") {
+            await queueNotionFinalise(runtime, runner, { reason: "finalise_incomplete", autoAdvance });
+          }
+        }
         if (autoAdvance) await campaign.creditSentCounts(runner);
-        await campaign.autoNotionUpload(runner);
+        const notionResult = await campaign.autoNotionUpload(runner);
+        if (!autoAdvance && notionResult?.status === "FAILED") {
+          await queueNotionFinalise(runtime, runner, { reason: "flow1_upload_failed", autoAdvance: false });
+        }
       } catch (error) {
         await queueNotionFinalise(runtime, runner, { reason: "finalise_failed", autoAdvance, error });
         runner.pushLog(`Notion 收尾失败：${error.message}。已排入同步队列，会自动重试。`);

@@ -206,7 +206,7 @@
           <tr><td>Campaign 运行状态</td><td>本机 run JSON</td><td>SQLite `campaign_runs / send_jobs`</td><td><span class="state transition">Migration</span></td></tr>
           <tr><td>Customer Desk / Search / Follow-Up</td><td id="deskCurrent">Notion cache</td><td>SQLite Primary</td><td><span class="state transition" id="deskState">Checking</span></td></tr>
           <tr><td>Flow 1 名单与 Template</td><td>Excel / Notion Template</td><td>SQLite + 已验证 Template cache</td><td><span class="state transition">Mixed</span></td></tr>
-          <tr><td>Flow 2–10 选人 / 推进</td><td>Notion Blast Leads</td><td>SQLite `project_leads`</td><td><span class="state transition">Not cut over</span></td></tr>
+          <tr><td>Flow 2–10 选人 / 推进</td><td>SQLite `project_leads` + run 发送回执</td><td>Notion 异步镜像</td><td><span class="state active">Local-first</span></td></tr>
           <tr><td>Reply 原始历史</td><td>本机 JSONL + Notion retry queue</td><td>SQLite `conversations / messages`</td><td><span class="state transition">Protected locally</span></td></tr>
           <tr><td>账号 / 换机 / 原子去重</td><td>v4 candidate code + shadow database</td><td>Account + Binding + Send Claims</td><td><span class="state target">Not cut over</span></td></tr>
           <tr><td>Notion</td><td>仍在部分关键路径</td><td>异步镜像 + 人看的面板</td><td><span class="state target">Target</span></td></tr>

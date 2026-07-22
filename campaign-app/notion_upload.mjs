@@ -68,6 +68,7 @@ const klDate = (iso) => (iso ? new Date(iso).toLocaleDateString("sv-SE", { timeZ
 const klToday = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Kuala_Lumpur" });
 const klTime = (iso) => (iso ? new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Asia/Kuala_Lumpur", hour: "2-digit", minute: "2-digit" }) : "");
 const pad2 = (n) => String(n).padStart(2, "0");
+const emitProgress = (progress) => console.log(`MAMBA_PROGRESS ${JSON.stringify(progress)}`);
 
 // Add `days` calendar days to a Kuala Lumpur date and return YYYY-MM-DD.
 function addDaysKL(iso, days) {
@@ -300,6 +301,9 @@ async function upsertCampaignRun(run, projectName) {
 
 async function main() {
   const runFiles = await pickRuns();
+  const selectedRuns = [];
+  for (const runFile of runFiles) selectedRuns.push({ runFile, run: await readJson(runFile) });
+  const total = selectedRuns.reduce((count, item) => count + (item.run?.assignments || []).filter((job) => normalizePhone(job.lead?.phone) && job.part1?.sentAt).length, 0);
 
   console.log("\nUPLOAD BLAST LEADS -> NOTION");
   console.log("===========================");
@@ -313,9 +317,10 @@ async function main() {
   let created = 0;
   let skipped = 0;
   const failed = [];
+  let current = 0;
+  emitProgress({ status: "RUNNING", current, total, stage: "blast_leads" });
 
-  for (const runFile of runFiles) {
-    const run = await readJson(runFile);
+  for (const { runFile, run } of selectedRuns) {
     if (!run?.assignments?.length) {
       console.log(`\n(skip empty run ${path.basename(runFile)})`);
       continue;
@@ -333,14 +338,20 @@ async function main() {
         if (await existsInNotion(phone)) {
           skipped += 1;
           console.log(`SKIP    ${job.lead.name} (${phone}) — already in Notion`);
+          current += 1;
+          emitProgress({ status: "RUNNING", current, total, outcome: "SKIPPED", name: job.lead?.name || phone, phone });
         } else {
           await notion("POST", "/pages", { parent: { database_id: dbId }, properties: buildProperties(job, phone, projectName, schema, runPageId, run) });
           created += 1;
           console.log(`ADDED   ${job.lead.name} (${phone})`);
+          current += 1;
+          emitProgress({ status: "RUNNING", current, total, outcome: "ADDED", name: job.lead?.name || phone, phone });
         }
       } catch (error) {
         failed.push({ name: job.lead?.name, phone, error: error.message });
         console.log(`FAILED  ${job.lead?.name ?? phone}: ${error.message}`);
+        current += 1;
+        emitProgress({ status: "RUNNING", current, total, outcome: "FAILED", name: job.lead?.name || phone, phone, error: error.message });
       }
       await wait(350); // stay under Notion's rate limit
     }
@@ -348,6 +359,10 @@ async function main() {
 
   console.log("");
   console.log(`Done. Added ${created}, skipped ${skipped}, failed ${failed.length}.`);
+  emitProgress({ status: failed.length ? "PARTIAL" : "SUCCEEDED", current, total, created, skipped, failed: failed.length, stage: "blast_leads" });
+  if (failed.length) {
+    throw new Error(`${failed.length} 位客户没有上传成功；已成功的不会重做，失败项目会进入重试队列。`);
+  }
 }
 
 main().catch((error) => {
