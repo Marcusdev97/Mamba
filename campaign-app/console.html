@@ -20,6 +20,7 @@
   .outcome-card.skipped .outcome-value { color:var(--amber); }
   .outcome-card.failed .outcome-value { color:var(--red); }
   .progress-caption { display:flex; justify-content:space-between; gap:12px; margin:8px 0 14px; color:var(--muted); font-size:12.5px; }
+  .resume-caption { margin:-4px 0 14px; padding:9px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel-2); color:var(--blue); font-size:12.5px; font-weight:700; }
   .progress-actions { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
   .run-log { margin:0 0 14px; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--panel-2); }
   .run-log summary { padding:10px 12px; color:var(--muted); cursor:pointer; font-weight:650; }
@@ -195,9 +196,8 @@
     <div class="err" id="startErr"></div>
   </div>
 
-  <!-- Notion 回写队列：run 结束当下会直接回写，这里只收那次失败的。
-       每晚 22:00 自动兜底一轮；急着让名单状态正确就按「立即同步」。
-       没同步到 = 那批人下一轮会被重复发送，所以这个状态要看得见。 -->
+  <!-- Notion 回写队列：每位客户先写 SQLite，Notion 等晚上 22:00 或人工触发。
+       急着让云端名单状态正确就按「立即同步」。 -->
   <div class="card hidden" id="outboxCard" aria-hidden="true">
     <h3>Notion 同步队列</h3>
     <div class="muted" id="outboxState">读取中…</div>
@@ -227,6 +227,7 @@
     </div>
     <div class="progress"><i id="progFill"></i></div>
     <div class="progress-caption"><span id="progressCaption">等待发送开始</span><span>无 WhatsApp 属于不可送达，不计为发送异常</span></div>
+    <div class="resume-caption hidden" id="resumeCaption"></div>
     <div class="progress-actions">
       <button class="btn danger" id="btnStop">停止</button>
       <button class="btn primary hidden" id="btnResume">▶ 继续发送</button>
@@ -780,6 +781,10 @@ async function pollStatus() {
   const s = snap.state;
   const c = s.summary || {};
   const outcomes = deriveOutcomes(s);
+  const resumable = Number(c.QUEUED || 0) + Object.entries(c)
+    .filter(([key]) => /^(WAITING|SENDING)_PART\d+$/.test(key))
+    .reduce((sum, [, count]) => sum + Number(count || 0), 0) +
+    (s.assignments || []).filter((job) => s.localCheckpointMode === "PER_CUSTOMER_V1" && job.status === "SENT" && job.localCheckpoint?.status !== "SUCCEEDED").length;
   const displayStatus = !snap.running && s.status === "COMPLETED" && outcomes.pending > 0 ? "INCOMPLETE" : s.status;
   const notionSync = s.notionSync || null;
   const dynamicPartStates = Object.keys(c).filter((key) => /^(WAITING|SENDING)_PART\d+$/.test(key));
@@ -800,6 +805,17 @@ async function pollStatus() {
   $("progFill").style.width = outcomes.percent + "%";
   $("progressCaption").textContent = "已处理 " + outcomes.processed + "/" + outcomes.total +
     (outcomes.failed ? " · " + outcomes.failed + " 个发送异常需要检查" : " · 没有真正的发送异常");
+  const resumeProgress = s.resumeProgress || null;
+  const resumeCaption = $("resumeCaption");
+  if (resumeProgress) {
+    resumeCaption.textContent = "本次继续 " + resumeProgress.processed + "/" + resumeProgress.total + " · 尚余 " + resumeProgress.remaining + " 位；上一轮记录不会清零。";
+    resumeCaption.classList.remove("hidden");
+  } else if (!snap.running && resumable > 0) {
+    resumeCaption.textContent = "上一轮 " + outcomes.processed + "/" + outcomes.total + " 已处理 · 当前待继续 " + resumable + " 位 · 点击继续后本轮从 0/" + resumable + " 开始。";
+    resumeCaption.classList.remove("hidden");
+  } else {
+    resumeCaption.classList.add("hidden");
+  }
   $("jobBody").innerHTML = s.assignments.map((a) => {
     const extra = (a.extraPartsAt || []).map((t, i) => t ? "P" + (i + 3) + " " + fmtSec(t) : "").filter(Boolean).join("  ");
     const p2cell = fmtSec(a.part2At) + (extra ? " <span class='muted'>" + extra + "</span>" : "");
@@ -812,10 +828,6 @@ async function pollStatus() {
   $("logDetails").open = !!snap.running || outcomes.failed > 0;
   $("btnStop").classList.toggle("hidden", !snap.running);
   // Interrupted multi-part jobs (WAITING/SENDING_PART3+) are resumable too.
-  const resumable = Number(c.QUEUED || 0) + Object.entries(c)
-    .filter(([key]) => /^(WAITING|SENDING)_PART\d+$/.test(key))
-    .reduce((sum, [, count]) => sum + Number(count || 0), 0) +
-    (s.assignments || []).filter((job) => s.localCheckpointMode === "PER_CUSTOMER_V1" && job.status === "SENT" && job.localCheckpoint?.status !== "SUCCEEDED").length;
   $("btnResume").classList.toggle("hidden", snap.running || resumable === 0);
   $("btnRetryFailed").dataset.count = outcomes.failed || 0;
   $("btnRetryFailed").textContent = "重试发送异常 (" + outcomes.failed + ")";

@@ -103,6 +103,7 @@
   .monitor-meta b { color: #dbe4ef; }
   .monitor-meta .meta-skip b { color:#fbbf24; }
   .monitor-meta .meta-fail b { color:#fca5a5; }
+  .monitor-meta .meta-resume, .monitor-meta .meta-resume b { color:#7dd3fc; }
   .flow-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
   .flow-step {
     position: relative; min-width: 0; padding: 9px 10px; border: 1px solid #283447;
@@ -563,6 +564,7 @@ function renderCampaignLane(status, queue) {
   const resumable = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "") || (state.localCheckpointMode === "PER_CUSTOMER_V1" && item.status === "SENT" && item.localCheckpoint?.status !== "SUCCEEDED")).length;
   const displayStatus = !running && state.status === "COMPLETED" && resumable > 0 ? "INCOMPLETE" : state.status;
   const percent = outcomes.percent;
+  const resumeProgress = state.resumeProgress || null;
   const project = typeof state?.project === "string" ? state.project : state?.project?.name;
   const flow = state?.flowLabel || state?.templateFlow || "Flow 1 - Project Template";
   const notionStatus = String(state?.advanceStatus || state?.notionSync?.status || "").toUpperCase();
@@ -581,12 +583,12 @@ function renderCampaignLane(status, queue) {
       <div class="monitor-head"><div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">${monitorEscape(senders.join(" + ") || "No sender")}</span></div><button type="button" class="lane-dismiss" data-dismiss-run="${monitorEscape(state.runId)}" title="关闭这张进度卡；不会停止发送">× 关闭</button></div>
       <div class="monitor-title-row"><div class="monitor-title">${monitorEscape([project, flow, state.mode].filter(Boolean).join(" · "))}</div><div class="monitor-percent">${percent}%</div></div>
       <div class="monitor-track ${running ? "running" : ""}"><span style="width:${percent}%"></span></div>
-      <div class="monitor-meta"><span>已触达 <b>${outcomes.contacted}</b></span><span>待处理 <b>${waiting}</b></span><span class="meta-skip">已跳过 <b>${outcomes.skipped}</b>${outcomes.noWhatsapp ? `（无 WhatsApp ${outcomes.noWhatsapp}）` : ""}</span><span class="meta-fail">发送异常 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
+      <div class="monitor-meta"><span>${running ? "本轮" : "上一轮"}已处理 <b>${done}/${total}</b></span><span>已触达 <b>${outcomes.contacted}</b></span><span>待处理 <b>${waiting}</b></span>${resumeProgress ? `<span class="meta-resume">本次继续 <b>${resumeProgress.processed}/${resumeProgress.total}</b> · 尚余 ${resumeProgress.remaining}</span>` : !running && resumable ? `<span class="meta-resume">当前待继续 <b>${resumable}</b> · 新一轮 0/${resumable}</span>` : ""}<span class="meta-skip">已跳过 <b>${outcomes.skipped}</b>${outcomes.noWhatsapp ? `（无 WhatsApp ${outcomes.noWhatsapp}）` : ""}</span><span class="meta-fail">发送异常 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
     </div>
     <div class="flow-steps">
       <div class="flow-step done"><small>01 Prepared</small><strong>${total} 人 · ${monitorEscape(state.mode)}</strong></div>
-      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? `${done}/${total} 已处理` : failed > 0 ? `${failed} 个发送异常待检查` : displayStatus === "COMPLETED" ? "发送流程完成" : displayStatus === "INCOMPLETE" ? `${resumable} 个 Part 等待继续` : ["STOPPED", "INTERRUPTED"].includes(displayStatus) ? "已停止" : monitorEscape(displayStatus || "尚未开始")}</strong></div>
-      <div class="flow-step ${notionClass}"><small>03 Notion</small><strong>${notionFailed ? `需要检查 · ${notionStatus}` : notionBusy ? `更新中 · ${notionStatus}` : notionStatus === "SUCCEEDED" ? "已同步" : "等待发送完成"}</strong></div>
+      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? resumeProgress ? `本次 ${resumeProgress.processed}/${resumeProgress.total}` : `${done}/${total} 本轮已处理` : failed > 0 ? `${failed} 个发送异常待检查` : displayStatus === "COMPLETED" ? "发送流程完成" : displayStatus === "INCOMPLETE" ? `上一轮 ${done}/${total} · 待继续 ${resumable}` : ["STOPPED", "INTERRUPTED"].includes(displayStatus) ? `上一轮 ${done}/${total} · 待继续 ${resumable}` : monitorEscape(displayStatus || "尚未开始")}</strong></div>
+      <div class="flow-step ${notionClass}"><small>03 Notion</small><strong>${notionFailed ? `需要检查 · ${notionStatus}` : notionStatus === "RUNNING" ? "正在同步" : notionStatus === "WAITING" ? "已排队 · 22:00/手动" : notionStatus === "SUCCEEDED" ? "已同步" : "等待 SQLite"}</strong></div>
       <div class="flow-step ${queueClass}"><small>04 This Sender Queue</small><strong>${laneQueue ? `${laneQueue.position}. ${monitorEscape(laneQueue.flowLabel)}` : "Queue 空"}</strong></div>
     </div>
   </article>`;

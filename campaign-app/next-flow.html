@@ -458,7 +458,7 @@ async function stopSend() {
   if (!confirm("确定停止这批发送?已经发出去的会自动推进到下一轮,没发的留着下次再发。")) return;
   try {
     await api("/api/stop", { runId: activeNextRunId });
-    toast("已发停止指令，正在先保存本机进度，再同步 Notion…");
+    toast("已发停止指令；已完成客户保留在 SQLite，Notion 等晚上 22:00 或手动同步。");
   } catch (e) { toast("停止失败:" + e.message, true); }
 }
 
@@ -467,7 +467,7 @@ async function retryFailedNextFlow(count) {
   if (!confirm(`只重试 ${count} 个真正的发送异常？无 WhatsApp、已触达、已跳过和已回复客户不会重发。timeout 客户请先确认 WhatsApp 没收到，避免重复发送。`)) return;
   try {
     await api("/api/retry-failed", { autoAdvance: true, runId: activeNextRunId });
-    toast(`已重新排队 ${count} 个失败客户,发送成功后会自动推进 Notion。`);
+    toast(`已重新排队 ${count} 个失败客户；成功后先推进 SQLite，Notion 稍后同步。`);
     setTimeout(pollStatus, 1200);
   } catch (e) { toast("补发失败:" + e.message, true); }
 }
@@ -524,18 +524,29 @@ async function pollStatus() {
     const log = s.log || [];
     const running = !!s.running;
     const isFlowRun = !!s.state.flowLabel;   // a picker flow send (has auto-advance)
-    const advanceDone = !!s.state.advanceDone; // server says the Notion update finished
+    const advanceDone = !!s.state.advanceDone; // Notion 已完成（历史 run 或手动同步后）
     const advanceStatus = String(s.state.advanceStatus || "").toUpperCase();
     const advanceProblem = advanceStatus === "FAILED" || advanceStatus === "PARTIAL";
-    const localAdvanceSaved = s.state.localAdvance?.status === "SUCCEEDED";
+    const localRecorded = Number(s.state.localAdvance?.recorded || 0);
+    const localAdvanceSaved = ["RUNNING", "SUCCEEDED"].includes(String(s.state.localAdvance?.status || "").toUpperCase()) && localRecorded > 0;
+    const checkpointPending = a.filter((job) => s.state.localCheckpointMode === "PER_CUSTOMER_V1" && job.status === "SENT" && job.localCheckpoint?.status !== "SUCCEEDED").length;
+    const pendingNow = Number(outcomes.pending || 0) + checkpointPending;
+    const historyLabel = `${outcomes.processed || 0}/${outcomes.total || a.length}`;
+    const resumeProgress = s.state.resumeProgress;
+    const resumeLabel = resumeProgress
+      ? `本次继续 ${resumeProgress.processed || 0}/${resumeProgress.total || 0} · 尚余 ${resumeProgress.remaining || 0}`
+      : pendingNow
+        ? `当前待继续 ${pendingNow} 位 · 刷新名单后新一轮从 0/${pendingNow} 开始`
+        : "当前没有待继续客户";
     const recent = log.slice(-10).reverse()
       .map((e) => `<div class="logline"><span class="muted">${esc(hhmmss(e.time))}</span> ${esc(e.message)}</div>`).join("");
-    const head = running ? "🟢 发送中"
+    const head = running ? (resumeProgress ? "🟢 继续发送中" : "🟢 本轮发送中")
       : !isFlowRun ? "✅ 完成"
       : advanceProblem && localAdvanceSaved ? `✅ 本机进度已保存 · ⚠️ Notion ${advanceStatus === "PARTIAL" ? "只完成一部分" : "等待重试"}`
       : advanceProblem ? `⚠️ 本机/Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${esc(s.state.advanceError || "请查看 System Logs")}`
-      : advanceDone ? "✅ 本机 + Notion 已更新完毕,可以继续"
-      : localAdvanceSaved ? "✅ 本机已保存 · ⚪️ Notion 同步中…" : "⚪️ 正在先保存本机进度…";
+      : pendingNow ? "⏸ 上一轮已停止 · 进度已保留"
+      : advanceDone ? "✅ 本机 + Notion 已更新完毕"
+      : localAdvanceSaved ? "✅ SQLite 已保存 · Notion 等待 22:00 / 手动同步" : "⚪️ 等待 SQLite 保存…";
     const stopBtn = running
       ? ` <button class="ghost" style="padding:3px 12px; margin-left:10px; border-color:#dc2626; color:#f87171;" onclick="stopSend()">⏸ 停止发送</button>`
       : "";
@@ -543,8 +554,9 @@ async function pollStatus() {
       ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="retryFailedNextFlow(${failed})">重试发送异常 (${failed})</button>`
       : "";
     box.innerHTML =
-      `<div class="statushead">${head} · ${outcomes.processed || 0}/${outcomes.total || a.length} 已处理${failed ? ` · ❌ ${failed} 个发送异常` : ""}${stopBtn}${retryBtn}</div>` +
+      `<div class="statushead">${head} · ${running ? "本轮" : "上一轮"} ${historyLabel} 已处理${failed ? ` · ❌ ${failed} 个发送异常` : ""}${stopBtn}${retryBtn}</div>` +
       `<div class="muted" style="margin:4px 0;">${esc(resultSummary)}</div>` +
+      `<div style="margin:7px 0 9px;padding:8px 10px;border:1px solid #334155;border-radius:8px;background:#111827;color:${pendingNow || resumeProgress?.remaining ? "#7dd3fc" : "#4ade80"};font-size:13px;font-weight:700">${esc(resumeLabel)}</div>` +
       `<div class="loglist">${recent}</div>`;
 
     if (running) {
@@ -553,11 +565,10 @@ async function pollStatus() {
       setTimeout(pollStatus, 3000);
     } else if (wasRunning) {
       scanReplies(); // one final scan to catch last replies
-      // Run finished — wait until the server says the Notion auto-advance is done,
-      // then refresh the list so sent people drop out of their group.
-      if (!isFlowRun || advanceDone) {
+      // SQLite 已逐客户推进后就可以刷新名单；Notion 不再阻塞下一轮。
+      if (!isFlowRun || localAdvanceSaved || advanceDone) {
         wasRunning = false;
-        toast(isFlowRun ? "✅ 已更新完毕,列表已刷新" : "✅ 完成");
+        toast(isFlowRun ? `✅ SQLite 已保存；名单已刷新，当前待继续 ${pendingNow} 位` : "✅ 完成");
         load();
       } else if (advanceProblem) {
         wasRunning = false;

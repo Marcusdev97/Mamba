@@ -1,5 +1,5 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
-import { isRecipientNotOnWhatsAppError, isResumableJobStatus } from "../campaign_core.mjs";
+import { isCampaignResumeCandidate, isRecipientNotOnWhatsAppError, isResumableJobStatus } from "../campaign_core.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
 import {
   AUTO_SCHEDULE,
@@ -512,8 +512,8 @@ export function registerCampaignRoutes(router) {
     if (!runner || !runner.state) throw httpError(400, "没有可继续的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
-    const remaining = runner.state.assignments.filter((job) => isResumableJobStatus(job.status)
-      || (runner.state.localCheckpointMode === "PER_CUSTOMER_V1" && job.status === "SENT" && job.localCheckpoint?.status !== "SUCCEEDED")).length;
+    const resumeJobs = runner.state.assignments.filter((job) => isCampaignResumeCandidate(runner.state, job));
+    const remaining = resumeJobs.length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
@@ -525,6 +525,12 @@ export function registerCampaignRoutes(router) {
 
     markNotionSyncWaiting(runner);
     const autoAdvance = markFlowAdvanceWaiting(runner);
+    runner.state.resumeSession = {
+      startedAt: new Date().toISOString(),
+      total: remaining,
+      jobIds: resumeJobs.map((job) => job.id),
+    };
+    runner.pushLog(`继续上一轮：当前待继续 ${remaining} 位；本次进度从 0/${remaining} 开始，历史发送记录保留。`);
     await runner.saveState();
 
     runCampaignInBackground(runtime, runner, autoAdvance, "campaign_resume_error");

@@ -126,6 +126,28 @@ export function campaignOutcomeSummary(assignments = []) {
   return result;
 }
 
+export function isCampaignResumeCandidate(state, job) {
+  return isResumableJobStatus(job?.status)
+    || (state?.localCheckpointMode === "PER_CUSTOMER_V1"
+      && job?.status === "SENT"
+      && job?.localCheckpoint?.status !== "SUCCEEDED");
+}
+
+export function campaignResumeSummary(state) {
+  const session = state?.resumeSession;
+  if (!session || !Array.isArray(session.jobIds)) return null;
+  const wanted = new Set(session.jobIds);
+  const targets = (state.assignments || []).filter((job) => wanted.has(job.id));
+  const total = Number(session.total || targets.length || 0);
+  const remaining = targets.filter((job) => isCampaignResumeCandidate(state, job)).length;
+  return {
+    startedAt: session.startedAt || null,
+    total,
+    processed: Math.max(0, total - remaining),
+    remaining,
+  };
+}
+
 // A template becomes a WhatsApp POLL (tappable options) when its Message Text
 // contains a [[POLL]] marker on its own line. Everything ABOVE the marker is the
 // poll question; each non-empty line BELOW is one option. This lives entirely in
@@ -1394,6 +1416,7 @@ export class CampaignRunner {
             runId: this.state.runId,
             project: this.state.project ?? null,
             mode: this.state.mode,
+            localCheckpointMode: this.state.localCheckpointMode ?? null,
             status: this.state.status,
             createdAt: this.state.createdAt ?? null,
             updatedAt: this.state.updatedAt ?? null,
@@ -1417,6 +1440,7 @@ export class CampaignRunner {
             localAdvance: this.state.localAdvance ?? null,
             notionSync: this.state.notionSync ?? null,
             interruption: this.state.interruption ?? null,
+            resumeProgress: campaignResumeSummary(this.state),
             assignments: this.state.assignments.map((job) => ({
               id: job.id,
               name: job.lead.name,

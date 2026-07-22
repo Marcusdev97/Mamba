@@ -3,6 +3,8 @@ import {
   CampaignRunner,
   RecipientNotOnWhatsAppError,
   campaignOutcomeSummary,
+  campaignResumeSummary,
+  isCampaignResumeCandidate,
   isRecipientNotOnWhatsAppError,
   isResumableJobStatus,
 } from "./campaign_core.mjs";
@@ -49,6 +51,27 @@ assert.equal(isRecipientNotOnWhatsAppError(new Error('send failed: {"exists":fal
 assert.equal(isRecipientNotOnWhatsAppError({ error: "不是 WhatsApp 号码 (not on WhatsApp)" }), true);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("HTTP 500 provider unavailable")), false);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("Could not send WhatsApp message: HTTP 500")), false);
+
+{
+  const state = {
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    resumeSession: { startedAt: "2026-07-22T13:00:00.000Z", total: 3, jobIds: ["done", "queued", "checkpoint"] },
+    assignments: [
+      { id: "done", status: "SENT", localCheckpoint: { status: "SUCCEEDED" } },
+      { id: "queued", status: "QUEUED" },
+      { id: "checkpoint", status: "SENT", localCheckpoint: { status: "FAILED" } },
+      { id: "old", status: "SENT", localCheckpoint: { status: "SUCCEEDED" } },
+    ],
+  };
+  assert.equal(isCampaignResumeCandidate(state, state.assignments[1]), true);
+  assert.equal(isCampaignResumeCandidate(state, state.assignments[2]), true);
+  assert.deepEqual(campaignResumeSummary(state), {
+    startedAt: "2026-07-22T13:00:00.000Z",
+    total: 3,
+    processed: 1,
+    remaining: 2,
+  }, "resume progress must exclude historical customers and survive a page refresh");
+}
 
 function queuedAssignments(count) {
   return Array.from({ length: count }, (_, index) => ({
