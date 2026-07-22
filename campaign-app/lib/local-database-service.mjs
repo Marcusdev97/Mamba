@@ -909,6 +909,7 @@ SELECT COALESCE(
     startedAt = null,
     finishedAt = null,
     assignments = [],
+    notionSyncJob = null,
   } = {}) {
     const id = clean(runId);
     const code = clean(projectCode);
@@ -942,6 +943,12 @@ SELECT COALESCE(
     const senderSet = [...new Set(rows.map((row) => row.instanceName).filter(Boolean))].join(",");
     const runPayload = JSON.stringify({ source: "run-json", localFirst: true, flowLabel: sentFlow });
     const statements = ["PRAGMA foreign_keys = ON;", "BEGIN IMMEDIATE;", `
+INSERT INTO projects(project_code, project_name, aliases_json, active, created_at, updated_at)
+VALUES (${sqlText(code)}, ${sqlText(projectName || code)}, '[]', 1, ${sqlText(now)}, ${sqlText(now)})
+ON CONFLICT(project_code) DO UPDATE SET
+  project_name=CASE WHEN excluded.project_name<>'' THEN excluded.project_name ELSE projects.project_name END,
+  active=1, updated_at=excluded.updated_at;
+
 INSERT INTO campaign_runs(
   run_id, notion_page_id, name, project_code, flow_topic, flow_no, sender_set, mode,
   status, requested_count, sent_count, failed_count, device_key, started_at,
@@ -962,22 +969,48 @@ ON CONFLICT(run_id) DO UPDATE SET
       const leadKey = `${code}:${row.phone}`;
       // sentAt 是硬证据。旧 run 重放时不能把已经走得更远的客户倒退。
       statements.push(`
-UPDATE project_leads SET
-  name=CASE WHEN name='' AND ${sqlText(row.name)}<>'' THEN ${sqlText(row.name)} ELSE name END,
-  sequence_status=${sqlText(sequenceStatus)},
-  last_flow_sent=${sqlText(sentFlow)},
-  next_flow=${sqlText(nextFlow)},
-  cohort_day=${cohortNumber(cohortDay) === null ? "NULL" : sqlNumber(cohortNumber(cohortDay))},
-  follow_up_due=${sqlNullable(row.dueDate)},
-  last_blast_at=${sqlText(row.sentAt)},
-  assigned_sender_key=COALESCE(${sqlNullable(row.senderKey)}, assigned_sender_key),
-  last_sender_key=COALESCE(${sqlNullable(row.senderKey)}, last_sender_key),
-  last_sender_phone=CASE WHEN ${sqlText(row.senderPhone)}<>'' THEN ${sqlText(row.senderPhone)} ELSE last_sender_phone END,
-  last_sent_by_device=COALESCE(${sqlNullable(deviceId)}, last_sent_by_device),
-  campaign_run_id=${sqlText(id)},
-  updated_at=${sqlText(now)}
-WHERE project_code=${sqlText(code)} AND phone=${sqlText(row.phone)}
-  AND (last_blast_at IS NULL OR last_blast_at<=${sqlText(row.sentAt)} OR campaign_run_id=${sqlText(id)});
+INSERT INTO contacts(
+  contact_key, phone, display_name, stop_flag, stop_reason, reply_count,
+  last_reply_text, created_at, updated_at
+) VALUES (
+  ${sqlText(row.phone)}, ${sqlText(row.phone)}, ${sqlText(row.name)}, 0, '', 0, '', ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(contact_key) DO UPDATE SET
+  display_name=CASE WHEN contacts.display_name='' AND excluded.display_name<>'' THEN excluded.display_name ELSE contacts.display_name END,
+  updated_at=excluded.updated_at;
+
+INSERT INTO project_leads(
+  project_lead_key, notion_page_id, contact_key, project_code, phone, name,
+  sequence_status, status, last_flow_sent, next_flow, cohort_day, follow_up_due,
+  first_blast_at, last_blast_at, assigned_sender_key, last_sender_key,
+  last_sender_phone, last_sent_by_device, campaign_run_id,
+  payload_json, source_updated_at, created_at, updated_at
+) VALUES (
+  ${sqlText(leadKey)}, NULL, ${sqlText(row.phone)}, ${sqlText(code)}, ${sqlText(row.phone)}, ${sqlText(row.name)},
+  ${sqlText(sequenceStatus)}, 'Blasted', ${sqlText(sentFlow)}, ${sqlText(nextFlow)},
+  ${cohortNumber(cohortDay) === null ? "NULL" : sqlNumber(cohortNumber(cohortDay))}, ${sqlNullable(row.dueDate)},
+  ${sqlNullable(row.part1SentAt || row.sentAt)}, ${sqlText(row.sentAt)},
+  ${sqlNullable(row.senderKey)}, ${sqlNullable(row.senderKey)}, ${sqlText(row.senderPhone)},
+  ${sqlNullable(deviceId)}, ${sqlText(id)}, ${sqlText(JSON.stringify({ source: "campaign-checkpoint", localFirst: true }))},
+  NULL, ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(project_lead_key) DO UPDATE SET
+  name=CASE WHEN project_leads.name='' AND excluded.name<>'' THEN excluded.name ELSE project_leads.name END,
+  sequence_status=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.sequence_status ELSE project_leads.sequence_status END,
+  status=CASE WHEN project_leads.status='' THEN excluded.status ELSE project_leads.status END,
+  last_flow_sent=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.last_flow_sent ELSE project_leads.last_flow_sent END,
+  next_flow=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.next_flow ELSE project_leads.next_flow END,
+  cohort_day=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.cohort_day ELSE project_leads.cohort_day END,
+  follow_up_due=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.follow_up_due ELSE project_leads.follow_up_due END,
+  first_blast_at=COALESCE(project_leads.first_blast_at, excluded.first_blast_at),
+  last_blast_at=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.last_blast_at ELSE project_leads.last_blast_at END,
+  assigned_sender_key=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN COALESCE(excluded.assigned_sender_key, project_leads.assigned_sender_key) ELSE project_leads.assigned_sender_key END,
+  last_sender_key=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN COALESCE(excluded.last_sender_key, project_leads.last_sender_key) ELSE project_leads.last_sender_key END,
+  last_sender_phone=CASE WHEN (COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id) AND excluded.last_sender_phone<>'' THEN excluded.last_sender_phone ELSE project_leads.last_sender_phone END,
+  last_sent_by_device=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN COALESCE(excluded.last_sent_by_device, project_leads.last_sent_by_device) ELSE project_leads.last_sent_by_device END,
+  campaign_run_id=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.campaign_run_id ELSE project_leads.campaign_run_id END,
+  payload_json=CASE WHEN COALESCE(project_leads.last_blast_at,'')<=excluded.last_blast_at OR project_leads.campaign_run_id=excluded.campaign_run_id THEN excluded.payload_json ELSE project_leads.payload_json END,
+  updated_at=excluded.updated_at;
 
 INSERT INTO send_jobs(
   id, run_id, project_lead_key, connection_key, flow_topic, part_no, template_key,
@@ -1000,6 +1033,27 @@ SELECT ${sqlText(`${id}:${row.phone}:2`)}, ${sqlText(id)}, project_lead_key,
 FROM project_leads WHERE project_lead_key=${sqlText(leadKey)}
 ON CONFLICT(id) DO UPDATE SET status='SENT', sent_at=excluded.sent_at, updated_at=excluded.updated_at;`);
       }
+    }
+    if (notionSyncJob?.idempotencyKey && notionSyncJob?.entityType && notionSyncJob?.entityId) {
+      const availableAt = notionSyncJob.availableAt || now;
+      const payloadJson = JSON.stringify(notionSyncJob.payload || {});
+      statements.push(`
+INSERT INTO sync_jobs(
+  idempotency_key, direction, entity_type, entity_id, status, attempt_count,
+  available_at, last_error_code, last_error_message, payload_json, created_at, updated_at
+) VALUES (
+  ${sqlText(notionSyncJob.idempotencyKey)}, 'LOCAL_TO_NOTION', ${sqlText(notionSyncJob.entityType)},
+  ${sqlText(notionSyncJob.entityId)}, 'PENDING', 0, ${sqlText(availableAt)}, '', '',
+  ${sqlText(payloadJson)}, ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(idempotency_key) DO UPDATE SET
+  payload_json=excluded.payload_json,
+  status=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE sync_jobs.status END,
+  attempt_count=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN 0 ELSE sync_jobs.attempt_count END,
+  available_at=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN excluded.available_at ELSE sync_jobs.available_at END,
+  last_error_code=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE sync_jobs.last_error_code END,
+  last_error_message=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE sync_jobs.last_error_message END,
+  updated_at=excluded.updated_at;`);
     }
     statements.push("COMMIT;");
     await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 120000);

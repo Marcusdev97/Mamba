@@ -316,4 +316,120 @@ function queuedAssignments(count) {
   });
 }
 
+{
+  const events = [];
+  const runner = new CampaignRunner({
+    config,
+    env: {},
+    customerCheckpoint: async (_runner, job) => {
+      events.push(`sqlite:${job.id}`);
+      job.localCheckpoint = { status: "SUCCEEDED" };
+    },
+  });
+  runner.state = {
+    mode: "LIVE",
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: queuedAssignments(2).map((job) => ({ ...job, scheduledAt: new Date(0).toISOString() })),
+  };
+  runner.saveState = async () => {};
+  runner.processJob = async (job) => {
+    events.push(`send:${job.id}`);
+    job.part1 = { sentAt: new Date().toISOString() };
+    job.status = "SENT";
+  };
+  await runner.runQueue();
+  assert.deepEqual(events, [
+    "send:lead-1", "sqlite:lead-1",
+    "send:lead-2", "sqlite:lead-2",
+  ], "each customer must commit SQLite before the next customer starts");
+}
+
+{
+  const events = [];
+  const runner = new CampaignRunner({
+    config,
+    env: {},
+    customerCheckpoint: async (_runner, job) => {
+      events.push(`sqlite:${job.id}`);
+      throw new Error("database locked");
+    },
+  });
+  runner.state = {
+    mode: "LIVE",
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: queuedAssignments(2).map((job) => ({ ...job, scheduledAt: new Date(0).toISOString() })),
+  };
+  runner.saveState = async () => {};
+  runner.processJob = async (job) => {
+    events.push(`send:${job.id}`);
+    job.part1 = { sentAt: new Date().toISOString() };
+    job.status = "SENT";
+  };
+  await assert.rejects(() => runner.runQueue(), /database locked/);
+  assert.deepEqual(events, ["send:lead-1", "sqlite:lead-1"]);
+  assert.equal(runner.state.assignments[1].status, "QUEUED", "SQLite failure must pause before the next customer");
+  assert.equal(runner.state.interruption.code, "LOCAL_CUSTOMER_CHECKPOINT_FAILED");
+}
+
+{
+  const events = [];
+  const runner = new CampaignRunner({
+    config,
+    env: {},
+    customerCheckpoint: async (_runner, job) => {
+      events.push(`sqlite:${job.id}`);
+      job.localCheckpoint = { status: "SUCCEEDED" };
+    },
+  });
+  runner.state = {
+    mode: "LIVE",
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [
+      { ...queuedAssignments(1)[0], status: "SENT", part1: { sentAt: new Date().toISOString() }, scheduledAt: new Date(0).toISOString() },
+      { id: "lead-2", lead: { name: "Lead 2" }, status: "QUEUED", scheduledAt: new Date(0).toISOString() },
+    ],
+  };
+  runner.saveState = async () => {};
+  runner.processJob = async (job) => {
+    events.push(`send:${job.id}`);
+    job.part1 = { sentAt: new Date().toISOString() };
+    job.status = "SENT";
+  };
+  await runner.runQueue();
+  assert.deepEqual(events, ["sqlite:lead-1", "send:lead-2", "sqlite:lead-2"], "restart must recover the checkpoint without resending an already-SENT customer");
+}
+
+{
+  let checkpoints = 0;
+  const runner = new CampaignRunner({
+    config,
+    env: {},
+    customerCheckpoint: async () => { checkpoints += 1; },
+  });
+  runner.state = {
+    mode: "LIVE",
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    scheduleMode: "FIXED",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [{ id: "partial", lead: { name: "Partial" }, status: "QUEUED", scheduledAt: new Date(0).toISOString() }],
+  };
+  runner.saveState = async () => {};
+  runner.processJob = async (job) => {
+    job.part1 = { sentAt: new Date().toISOString() };
+    job.status = "PART1_ONLY_END_TIME";
+  };
+  await runner.runQueue();
+  assert.equal(checkpoints, 0, "a customer must not advance Flow until every required Part completes");
+}
+
 console.log("✅ all campaign-schedule tests passed");

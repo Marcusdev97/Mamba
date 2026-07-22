@@ -1,12 +1,11 @@
 // Notion 回写的 outbox（先写本机，再非同步推出去）。
 //
 // 事故背景 (2026-07-21)：campaign 中途 STOP 就完全不回写 Notion，已经收到讯息的人
-// 在名单上看起来从没发过，隔天重开整批重发。现在 run 一结束就立刻回写，但「立刻」
-// 还是可能失败 —— Notion timeout、token 过期、网路断。失败了要有人记得重试，
-// 不能靠人肉。
+// 在名单上看起来从没发过，隔天重开整批重发。现在每位客户完成时先把 Notion 待办
+// 跟 Flow 状态一起写入 SQLite；晚上 22:00 或人工按钮才真正上传。
 //
-// 这就是 outbox：run 结束 -> 排一笔 job -> 马上试着推 -> 成功就结案，
-// 失败就留在队列里，晚上 10 点或你按按钮的时候再推。
+// 这就是 outbox：SQLite commit -> 排一笔 job -> 到指定时机推 -> 成功就结案，
+// 失败继续留在队列里。
 //
 // sync_jobs / sync_worker_state 两张表在 schema v3 就设计好了(idempotency_key
 // UNIQUE、attempt_count、available_at 退避)，只是一直没人实作。这里把它用起来。
@@ -45,8 +44,8 @@ export function createNotionOutboxService({
     return cliPromise;
   }
 
-  // idempotencyKey 撞到就当作已经排过 —— 同一个 run 结束两次(续跑、重启恢复)
-  // 不该变成两笔待办。
+  // idempotencyKey 撞到仍然只有一笔。若 Campaign 刚完成，则把之前因为「仍在发送」
+  // 延后的 PENDING job 提前到现在；FAILED/COMPLETED 也可安全重开以补最新客户。
   async function enqueue({
     entityType,
     entityId,
@@ -61,10 +60,18 @@ export function createNotionOutboxService({
     const nowIso = clock().toISOString();
     const database = await cli();
     await database.exec(`
-INSERT OR IGNORE INTO sync_jobs
+INSERT INTO sync_jobs
   (idempotency_key, direction, entity_type, entity_id, status, attempt_count, available_at, payload_json, created_at, updated_at)
 VALUES
-  (${sqlValue(key)}, ${sqlValue(direction)}, ${sqlValue(type)}, ${sqlValue(id)}, 'PENDING', 0, ${sqlValue(nowIso)}, ${sqlValue(JSON.stringify(payload))}, ${sqlValue(nowIso)}, ${sqlValue(nowIso)});`);
+  (${sqlValue(key)}, ${sqlValue(direction)}, ${sqlValue(type)}, ${sqlValue(id)}, 'PENDING', 0, ${sqlValue(nowIso)}, ${sqlValue(JSON.stringify(payload))}, ${sqlValue(nowIso)}, ${sqlValue(nowIso)})
+ON CONFLICT(idempotency_key) DO UPDATE SET
+  payload_json=excluded.payload_json,
+  status=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE sync_jobs.status END,
+  attempt_count=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN 0 ELSE sync_jobs.attempt_count END,
+  available_at=CASE WHEN sync_jobs.status IN ('PENDING','COMPLETED','FAILED') THEN excluded.available_at ELSE sync_jobs.available_at END,
+  last_error_code=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE sync_jobs.last_error_code END,
+  last_error_message=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE sync_jobs.last_error_message END,
+  updated_at=excluded.updated_at;`);
     return { queued: true, idempotencyKey: key };
   }
 
@@ -94,6 +101,17 @@ LIMIT ${Math.max(1, Math.min(Number(limit) || 25, 500))};`);
     await database.exec(`
 UPDATE sync_jobs SET status='COMPLETED', last_error_code='', last_error_message='', updated_at=${sqlValue(nowIso)}
 WHERE id=${sqlValue(id)};`);
+  }
+
+  async function markDeferred(job, { availableAt = null, delayMs = 5 * 60_000 } = {}) {
+    const database = await cli();
+    const nowMs = clock().getTime();
+    const nextAt = availableAt || new Date(nowMs + Math.max(1_000, Number(delayMs) || 0)).toISOString();
+    const nowIso = new Date(nowMs).toISOString();
+    await database.exec(`
+UPDATE sync_jobs SET status='PENDING', available_at=${sqlValue(nextAt)}, updated_at=${sqlValue(nowIso)}
+WHERE id=${sqlValue(job.id)};`);
+    return { availableAt: nextAt };
   }
 
   async function markCompletedByKey(idempotencyKey) {
@@ -131,7 +149,7 @@ WHERE id=${sqlValue(job.id)};`);
   // 把到期的推一轮。handler 回 false 代表「这笔现在处理不了但不算错」(例如 run
   // 档不见了)，直接结案不重试。
   async function drain(handler, { limit = 25, onProgress = null } = {}) {
-    const report = { processed: 0, completed: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
+    const report = { processed: 0, completed: 0, deferred: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
     if (typeof handler !== "function") return report;
     const jobs = await due({ limit });
     for (let index = 0; index < jobs.length; index += 1) {
@@ -145,7 +163,11 @@ WHERE id=${sqlValue(job.id)};`);
       let outcome = "completed";
       try {
         const result = await handler(hydratedJob);
-        if (result === false) {
+        if (result?.defer === true) {
+          await markDeferred(job, result);
+          report.deferred += 1;
+          outcome = "deferred";
+        } else if (result === false) {
           await markCompleted(job.id);
           report.skipped += 1;
           outcome = "skipped";

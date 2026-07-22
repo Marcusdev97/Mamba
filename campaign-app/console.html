@@ -814,7 +814,8 @@ async function pollStatus() {
   // Interrupted multi-part jobs (WAITING/SENDING_PART3+) are resumable too.
   const resumable = Number(c.QUEUED || 0) + Object.entries(c)
     .filter(([key]) => /^(WAITING|SENDING)_PART\d+$/.test(key))
-    .reduce((sum, [, count]) => sum + Number(count || 0), 0);
+    .reduce((sum, [, count]) => sum + Number(count || 0), 0) +
+    (s.assignments || []).filter((job) => s.localCheckpointMode === "PER_CUSTOMER_V1" && job.status === "SENT" && job.localCheckpoint?.status !== "SUCCEEDED").length;
   $("btnResume").classList.toggle("hidden", snap.running || resumable === 0);
   $("btnRetryFailed").dataset.count = outcomes.failed || 0;
   $("btnRetryFailed").textContent = "重试发送异常 (" + outcomes.failed + ")";

@@ -560,7 +560,7 @@ function renderCampaignLane(status, queue) {
   const failed = outcomes.failed;
   const waiting = outcomes.pending;
   const running = status?.running === true || state?.status === "RUNNING";
-  const resumable = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "")).length;
+  const resumable = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "") || (state.localCheckpointMode === "PER_CUSTOMER_V1" && item.status === "SENT" && item.localCheckpoint?.status !== "SUCCEEDED")).length;
   const displayStatus = !running && state.status === "COMPLETED" && resumable > 0 ? "INCOMPLETE" : state.status;
   const percent = outcomes.percent;
   const project = typeof state?.project === "string" ? state.project : state?.project?.name;
@@ -692,11 +692,14 @@ function finishOutboxSyncOverlay(result) {
   const overlay = document.getElementById("syncOverlay");
   const failed = Number(result?.failed || 0);
   const retried = Number(result?.retried || 0);
+  const deferred = Number(result?.deferred || 0);
   overlay.classList.add(failed ? "failed" : "succeeded");
-  document.getElementById("syncIcon").textContent = failed ? "!" : "✓";
-  document.getElementById("syncTitle").textContent = failed ? "部分没同步成功" : "已同步到 Notion";
+  document.getElementById("syncIcon").textContent = failed ? "!" : deferred ? "…" : "✓";
+  document.getElementById("syncTitle").textContent = failed ? "部分没同步成功" : deferred ? "等待 Campaign 完成" : "已同步到 Notion";
   document.getElementById("syncMessage").textContent = failed
     ? `${failed} 笔试到上限仍然失败，${retried} 笔会自动再试。`
+    : deferred
+      ? `${deferred} 批仍在发送，Notion 待办保留在 SQLite，完成后可手动同步或等晚上 22:00。`
     : retried
       ? `成功 ${result.completed} 笔，${retried} 笔稍后自动重试。`
       : `成功 ${result?.completed ?? 0} 笔，队列已清空。`;

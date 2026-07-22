@@ -152,6 +152,80 @@ const localRunRows = JSON.parse(execFileSync(detected.binary, [
 ], { encoding: "utf8" }));
 assert.deepEqual(localRunRows, [{ runs: 1, jobs: 2 }]);
 
+// Flow 1 often starts from a fresh listing rather than an existing Notion row.
+// The customer, Flow advance, Part evidence and Notion outbox must still commit together.
+const flow1Checkpoint = await service.recordCampaignFlowProgress({
+  runId: "run_local_first_flow_1",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  flowLabel: "Flow 1 - Project Template",
+  nextFlow: "Flow 2 - Layout",
+  cohortDay: "Day 0",
+  sequenceStatus: "Running",
+  mode: "LIVE",
+  runStatus: "RUNNING",
+  deviceId: device.id,
+  startedAt: "2026-07-22T10:00:00.000Z",
+  assignments: [{
+    phone: "60129999999",
+    name: "Fresh Flow 1 Lead",
+    instanceName: "wa_01",
+    senderPhone: senderPolicy.expectedSenderPhone,
+    senderKey: "mamba-test-device::60168568756",
+    part1SentAt: "2026-07-22T10:01:00.000Z",
+    part2SentAt: "2026-07-22T10:02:00.000Z",
+    sentAt: "2026-07-22T10:02:00.000Z",
+    dueDate: "2026-07-22",
+  }],
+  notionSyncJob: {
+    entityType: "campaign_run",
+    entityId: "run_local_first_flow_1",
+    idempotencyKey: "LOCAL_TO_NOTION:campaign_run:run_local_first_flow_1:flow1_upload",
+    payload: { runId: "run_local_first_flow_1", projectId: "binastra" },
+  },
+});
+assert.equal(flow1Checkpoint.recorded, 1);
+assert.equal(flow1Checkpoint.advanced, 1);
+const freshFlow1Lead = (await service.readLeadCache()).records.find((row) => row.phone === "60129999999");
+assert.equal(freshFlow1Lead?.notionPageId || freshFlow1Lead?.id || null, null, "fresh Flow 1 lead does not need a Notion page first");
+assert.equal(freshFlow1Lead?.lastFlowSent, "Flow 1 - Project Template");
+assert.equal(freshFlow1Lead?.nextFlow, "Flow 2 - Layout");
+const flow1Rows = JSON.parse(execFileSync(detected.binary, [
+  "-batch", "-json", service.databasePath,
+  "SELECT (SELECT COUNT(*) FROM campaign_runs WHERE run_id='run_local_first_flow_1') AS runs, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_1') AS jobs, (SELECT COUNT(*) FROM sync_jobs WHERE idempotency_key='LOCAL_TO_NOTION:campaign_run:run_local_first_flow_1:flow1_upload' AND status='PENDING') AS queued;",
+], { encoding: "utf8" }));
+assert.deepEqual(flow1Rows, [{ runs: 1, jobs: 2, queued: 1 }]);
+
+// Replaying the same checkpoint after a crash is idempotent.
+await service.recordCampaignFlowProgress({
+  runId: "run_local_first_flow_1",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  flowLabel: "Flow 1 - Project Template",
+  nextFlow: "Flow 2 - Layout",
+  cohortDay: "Day 0",
+  mode: "LIVE",
+  assignments: [{
+    phone: "60129999999",
+    name: "Fresh Flow 1 Lead",
+    senderKey: "mamba-test-device::60168568756",
+    part1SentAt: "2026-07-22T10:01:00.000Z",
+    part2SentAt: "2026-07-22T10:02:00.000Z",
+    sentAt: "2026-07-22T10:02:00.000Z",
+  }],
+  notionSyncJob: {
+    entityType: "campaign_run",
+    entityId: "run_local_first_flow_1",
+    idempotencyKey: "LOCAL_TO_NOTION:campaign_run:run_local_first_flow_1:flow1_upload",
+    payload: { runId: "run_local_first_flow_1", projectId: "binastra" },
+  },
+});
+const replayRows = JSON.parse(execFileSync(detected.binary, [
+  "-batch", "-json", service.databasePath,
+  "SELECT (SELECT COUNT(*) FROM project_leads WHERE project_code='binastra' AND phone='60129999999') AS leads, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_1') AS jobs, (SELECT COUNT(*) FROM sync_jobs WHERE idempotency_key='LOCAL_TO_NOTION:campaign_run:run_local_first_flow_1:flow1_upload') AS queued;",
+], { encoding: "utf8" }));
+assert.deepEqual(replayRows, [{ leads: 1, jobs: 2, queued: 1 }]);
+
 // A stale Notion refresh must not roll the locally acknowledged send backward.
 await service.syncNotionRecords([
   {
@@ -196,7 +270,7 @@ service.configureNotionImport({
   resolveProjectCode: (name) => ({ Binastra: "binastra", Enlace: "enlace" })[name] || "",
 });
 await assert.rejects(service.applyNotionImport(), (error) => error.code === "NOTION_IMPORT_CHANGED_AFTER_DRY_RUN");
-assert.equal((await service.readLeadCache()).records.length, 2, "Rejected Apply must preserve the current SQLite dataset");
+assert.equal((await service.readLeadCache()).records.length, 3, "Rejected Apply must preserve imported rows plus the locally checkpointed Flow 1 customer");
 
 assert.equal((await service.setStorageMode("shadow")).storageMode, "shadow");
 

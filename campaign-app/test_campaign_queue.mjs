@@ -64,6 +64,15 @@ assert.equal(campaignQueueBlockReason(state({ flowLabel: "Flow 2 - Layout", adva
 assert.match(campaignQueueBlockReason(state({ notionSync: { status: "RUNNING" } })), /更新 Notion/);
 assert.match(campaignQueueBlockReason(state({ notionSync: { status: "FAILED" } })), /上传失败/);
 assert.equal(campaignQueueBlockReason(state({ notionSync: { status: "SUCCEEDED" } })), null);
+assert.equal(campaignQueueBlockReason(state({
+  flowLabel: "Flow 2 - Layout",
+  advanceStatus: "WAITING",
+  localAdvance: { status: "SUCCEEDED" },
+})), null, "Flow 2-10 must free the sender lane after SQLite commits, without waiting for Notion");
+assert.equal(campaignQueueBlockReason(state({
+  notionSync: { status: "WAITING" },
+  localAdvance: { status: "SUCCEEDED" },
+})), null, "Flow 1 must use the same local-first queue rule");
 
 const restorePath = path.join(rootDir, "campaign-data", "runs", "run_restore.json");
 await fs.mkdir(path.dirname(restorePath), { recursive: true });

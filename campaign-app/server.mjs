@@ -269,6 +269,7 @@ const campaignRunService = createCampaignRunService({
 });
 const {
   recordLocalFlowProgress,
+  checkpointCompletedCustomer,
   autoAdvanceFlow,
   autoNotionUpload,
   recoverPendingUpdates,
@@ -527,11 +528,17 @@ const runtime = await loadRuntime({
     resolveTime,
     formatTime,
     getTestLeads,
-    createRunner: (config) => new CampaignRunner({ config, env, systemLogs: systemLogService, conversationLog }),
+    createRunner: (config) => new CampaignRunner({
+      config, env, systemLogs: systemLogService, conversationLog,
+      customerCheckpoint: checkpointCompletedCustomer,
+    }),
     restoreRunner: async ({ runId, projectId }) => {
       if (!/^run_[A-Za-z0-9_.-]+$/.test(String(runId || ""))) throw new Error("Queue runId 不合法。");
       const { config } = await getProject(projectId);
-      const restored = new CampaignRunner({ config, env, systemLogs: systemLogService, conversationLog });
+      const restored = new CampaignRunner({
+        config, env, systemLogs: systemLogService, conversationLog,
+        customerCheckpoint: checkpointCompletedCustomer,
+      });
       const expectedPath = path.join(paths.runsDir, `${runId}.json`);
       await restored.restore(expectedPath);
       return restored;
@@ -542,6 +549,7 @@ const runtime = await loadRuntime({
     applyTemplateOverrides,
     assertFirstConsoleRunUsesFlow1Only,
     autoAdvanceFlow,
+    checkpointCompletedCustomer,
     recordLocalFlowProgress,
     creditSentCounts,
     autoNotionUpload,
@@ -589,8 +597,8 @@ const runtime = await loadRuntime({
 
 // ---------- Notion 回写队列（outbox）----------
 //
-// run 结束当下会直接回写 Notion；这里只收「那次失败的」。晚上 22:00 兜底跑一轮，
-// 急的时候按控制台的「立即同步」。没有这层的话，回写失败 = 那批人下次会被重发。
+// 每位客户完成时先把 Flow + 这笔待办一起 commit 到 SQLite。Notion 不阻塞
+// WhatsApp 发送，只在晚上 22:00 或人工按「立即同步」时处理。
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
 runtime.notionOutboxWorker = createNotionOutboxWorker({
   outbox: runtime.notionOutbox,
@@ -615,7 +623,13 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
     }
     const { runId, projectId } = job.payload ?? {};
     if (!runId) return false;
-    const runner = await runtime.campaign.restoreRunner({ runId, projectId }).catch(() => null);
+    const activeRunner = runtime.campaign.getRunner(runId);
+    if (activeRunner?.running) {
+      return { defer: true, delayMs: 5 * 60_000, reason: "campaign_still_running" };
+    }
+    const runner = activeRunner?.state
+      ? activeRunner
+      : await runtime.campaign.restoreRunner({ runId, projectId }).catch(() => null);
     if (!runner?.state) return false;   // run 档不见了：结案，不重试
     // 走哪条路по run 自己的状态判断，不看排队当下存的旗标 —— 旗标可能是旧的，
     // 而 flowLabel 是这个 run 的事实。Flow 1 没有 flowLabel 走上传，
@@ -626,6 +640,7 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
       if (runner.state.advanceStatus !== "SUCCEEDED") {
         throw new Error(runner.state.advanceError || `Notion Flow 推进状态是 ${runner.state.advanceStatus || "UNKNOWN"}`);
       }
+      await creditSentCounts(runner);
     }
     else {
       const result = await autoNotionUpload(runner, { allowPartial: true });
@@ -696,7 +711,7 @@ async function restoreActiveCampaign() {
       }
       const recovery = await runtime.campaign.recoverPendingUpdates(restored);
       if (recovery?.recovered) {
-        console.log(`Recovered pending Notion update for ${saved.runId}: ${recovery.kind} ${recovery.status || ""}`);
+        console.log(`Recovered local campaign checkpoint for ${saved.runId}; Notion remains queued: ${recovery.kind} ${recovery.status || ""}`);
       }
       results.push({ runId: saved.runId, restored: true, recovery });
     } catch (error) {

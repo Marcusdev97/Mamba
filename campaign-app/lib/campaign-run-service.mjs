@@ -51,18 +51,121 @@ export function createCampaignRunService({
     ].filter(Boolean).sort().at(-1) || null;
   }
 
+  function completedForFlow(state, job) {
+    if (job?.status !== "SENT" || !job?.part1?.sentAt) return false;
+    // 新 run 必须有逐客户 SQLite commit 证据；旧 run 没有这个模式旗标，
+    // 继续按历史 SENT 状态恢复，避免升级后无法补旧账。
+    return state?.localCheckpointMode !== "PER_CUSTOMER_V1"
+      || job?.localCheckpoint?.status === "SUCCEEDED";
+  }
+
+  function deferredNotionJob(state) {
+    const runId = state?.runId || "";
+    const flowLabel = state?.flowLabel || "";
+    const suffix = flowLabel ? "flow_advance" : "flow1_upload";
+    return {
+      entityType: "campaign_run",
+      entityId: runId,
+      idempotencyKey: `LOCAL_TO_NOTION:campaign_run:${runId}:${suffix}`,
+      payload: {
+        runId,
+        projectId: state?.projectId || state?.campaignId || "",
+        project: typeof state?.project === "string" ? state.project : state?.project?.name || "",
+        flowLabel,
+        autoAdvance: Boolean(flowLabel),
+        reason: "customer_checkpoint",
+      },
+    };
+  }
+
+  async function checkpointCompletedCustomer(runner, job) {
+    const state = runner?.state;
+    if (!localDatabase || !state || state.mode !== "LIVE" || job?.status !== "SENT" || !job?.part1?.sentAt) {
+      return { recorded: 0, reason: "not_completed_live_customer" };
+    }
+    const flow = flowByLabel(state.flowLabel || state.templateFlow);
+    const after = flow ? flowStateAfter(flow.key) : null;
+    if (!flow || !after) throw new Error(`无法识别客户完成的 Flow: ${state.flowLabel || state.templateFlow || "(empty)"}`);
+    const senderPhone = senderPhoneForInstance(state.instances, job.instanceName);
+    const sentAt = latestSentAt(job) || job.part1.sentAt;
+    const result = await localDatabase.recordCampaignFlowProgress({
+      runId: state.runId,
+      projectCode: state.projectId || state.campaignId,
+      projectName: typeof state.project === "string" ? state.project : state.project?.name,
+      flowLabel: flow.label,
+      nextFlow: after.nextFlowLabel,
+      cohortDay: after.cohortDay,
+      sequenceStatus: after.nextFlowLabel === "Completed" ? "Completed" : "Running",
+      mode: state.mode,
+      runStatus: "RUNNING",
+      deviceId: state.deviceId || deviceIdentity.id || "",
+      startedAt: state.startAt || state.createdAt || null,
+      finishedAt: null,
+      assignments: [{
+        phone: normalizePhone(job.lead?.phone),
+        name: job.lead?.name || "",
+        instanceName: job.instanceName || "",
+        senderPhone,
+        senderKey: buildSenderKey(state.deviceId, senderPhone),
+        part1SentAt: job.part1?.sentAt || null,
+        part2SentAt: job.part2?.sentAt || null,
+        sentAt,
+        dueDate: after.nextFlowLabel === "Completed" ? null : klDateAfter(sentAt, after.dueDays),
+      }],
+      // Flow 状态与 Notion 待办在同一个 SQLite transaction 里 commit。
+      // 任何一边写失败都不能继续下一位客户。
+      notionSyncJob: deferredNotionJob(state),
+    });
+    if (Number(result.recorded || 0) !== 1) {
+      const error = new Error(`客户 ${job.lead?.name || job.lead?.phone || ""} 的本机 Flow 没有完整写入，Campaign 已暂停。`);
+      error.code = "LOCAL_CUSTOMER_CHECKPOINT_INCOMPLETE";
+      throw error;
+    }
+    job.localCheckpoint = {
+      status: "SUCCEEDED",
+      flowLabel: flow.label,
+      nextFlow: after.nextFlowLabel,
+      committedAt: new Date().toISOString(),
+    };
+    const completed = state.assignments.filter((item) => item?.localCheckpoint?.status === "SUCCEEDED").length;
+    const remaining = state.assignments.some((item) => isResumableJobStatus(item.status));
+    state.localAdvance = {
+      status: remaining ? "RUNNING" : "SUCCEEDED",
+      recorded: completed,
+      total: state.assignments.length,
+      flowLabel: flow.label,
+      nextFlow: after.nextFlowLabel,
+      updatedAt: new Date().toISOString(),
+    };
+    if (state.flowLabel) {
+      state.advanceStatus = "WAITING";
+      state.advanceDone = false;
+    } else {
+      state.notionSync = {
+        ...(state.notionSync || {}),
+        status: "WAITING",
+        stage: "queued",
+        message: "SQLite 已保存；等待晚上 22:00 或手动同步 Notion。",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    await runner.saveState();
+    runner.pushLog?.(`SQLite 已完成 ${job.lead?.name || job.lead?.phone} · ${flow.label} → ${after.nextFlowLabel}；Notion 已排队。`);
+    return { ...result, checkpoint: job.localCheckpoint };
+  }
+
   // Actual provider acknowledgements are the source of truth. Persist them to
   // SQLite before any Notion query/PATCH so a STOP, crash or timeout cannot put
   // already-contacted customers back into the old Flow.
   async function recordLocalFlowProgress(runner, sentFlow = null, nextState = null) {
     const state = runner?.state;
-    const flow = sentFlow || flowByLabel(state?.flowLabel);
+    const flow = sentFlow || flowByLabel(state?.flowLabel || state?.templateFlow);
     const after = nextState || (flow ? flowStateAfter(flow.key) : null);
     if (!localDatabase || !state || state.mode !== "LIVE" || !flow || !after) {
       return { recorded: 0, reason: "not_live_flow_run" };
     }
     const sentFlowLabel = flow.label || state.flowLabel || after.lastFlowLabel || "";
-    const assignments = (state.assignments || []).filter((job) => job?.part1?.sentAt).map((job) => {
+    const assignments = (state.assignments || []).filter((job) => completedForFlow(state, job)).map((job) => {
       const senderPhone = senderPhoneForInstance(state.instances, job.instanceName);
       const sentAt = latestSentAt(job) || job.part1.sentAt;
       return {
@@ -107,6 +210,7 @@ export function createCampaignRunService({
       startedAt: state.startAt || state.createdAt || null,
       finishedAt: state.endAt || null,
       assignments,
+      notionSyncJob: deferredNotionJob(state),
     });
     if (Number(result.recorded || 0) < assignments.length) {
       const error = new Error(`本机 Flow 只记到 ${result.recorded || 0}/${assignments.length} 位已发送客户；Notion 同步已暂停。`);
@@ -136,7 +240,7 @@ export function createCampaignRunService({
     const sentFlow = flowByLabel(runner.state.flowLabel);
     if (!sentFlow) throw new Error(`无法识别已发送 Flow: ${runner.state.flowLabel || "(empty)"}`);
     const nextState = flowStateAfter(sentFlow.key);
-    const notionJobs = runner.state.assignments.filter((job) => job.part1?.sentAt && normalizePhone(job.lead?.phone));
+    const notionJobs = runner.state.assignments.filter((job) => completedForFlow(runner.state, job) && normalizePhone(job.lead?.phone));
     let notionCurrent = 0;
 
     runner.state.advanceDone = false;
@@ -160,7 +264,7 @@ export function createCampaignRunService({
       runner.state.advanceProgress.updatedAt = new Date().toISOString();
       await runner.saveState();
       for (const job of runner.state.assignments) {
-        if (!job.part1?.sentAt) continue;
+        if (!completedForFlow(runner.state, job)) continue;
         const phone = normalizePhone(job.lead?.phone);
         if (!phone) continue;
         let outcome = "CHECKING";
@@ -336,7 +440,7 @@ export function createCampaignRunService({
       progress: {
         status: "RUNNING",
         current: 0,
-        total: (runner.state.assignments || []).filter((job) => job.part1?.sentAt && normalizePhone(job.lead?.phone)).length,
+        total: (runner.state.assignments || []).filter((job) => completedForFlow(runner.state, job) && normalizePhone(job.lead?.phone)).length,
         currentItem: null,
       },
     });
@@ -429,15 +533,35 @@ export function createCampaignRunService({
     }
     const pending = (state.assignments || []).filter((job) => isResumableJobStatus(job.status)).length;
     if (pending) return { recovered: false, reason: "unfinished-campaign", pending };
-    if (state.flowLabel) {
-      if (state.advanceStatus === "SUCCEEDED") return { recovered: false, reason: "flow-already-synced" };
-      await autoAdvanceFlow(runner);
-      await creditSentCounts(runner);
-      return { recovered: true, kind: "flow-advance", status: runner.state.advanceStatus };
+    if (state.flowLabel && state.advanceStatus === "SUCCEEDED") {
+      return { recovered: false, reason: "flow-already-synced" };
     }
-    if (state.notionSync?.status === "SUCCEEDED") return { recovered: false, reason: "notion-already-synced" };
-    const result = await autoNotionUpload(runner);
-    return { recovered: true, kind: "flow-1-upload", status: result?.status || null };
+    if (!state.flowLabel && state.notionSync?.status === "SUCCEEDED") {
+      return { recovered: false, reason: "notion-already-synced" };
+    }
+
+    // 服务重启只补齐 SQLite 与 outbox，不直接碰 Notion。这样 Flow 1 与
+    // Flow 2-10 都遵守同一条规则：晚上 22:00 或用户手动触发才上传。
+    const local = await recordLocalFlowProgress(runner);
+    if (state.flowLabel) {
+      state.advanceStatus = "WAITING";
+      state.advanceDone = false;
+    } else {
+      state.notionSync = {
+        ...(state.notionSync || {}),
+        status: "WAITING",
+        stage: "queued",
+        message: "SQLite 已恢复完成；等待晚上 22:00 或手动同步 Notion。",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    await runner.saveState();
+    return {
+      recovered: true,
+      kind: state.flowLabel ? "flow-advance-queued" : "flow-1-upload-queued",
+      status: "WAITING",
+      recorded: local.recorded || 0,
+    };
   }
 
   async function incPageNumber(pageIdValue, prop, delta) {
@@ -459,7 +583,7 @@ export function createCampaignRunService({
     const tally = {};
 
     for (const job of runner.state.assignments) {
-      if (!job.part1?.sentAt) continue;
+      if (!completedForFlow(runner.state, job)) continue;
       let credits = job.tplCredit;
       if (!credits) {
         const language = String(job.language || "en").toUpperCase();
@@ -510,6 +634,7 @@ export function createCampaignRunService({
 
   return {
     recordLocalFlowProgress,
+    checkpointCompletedCustomer,
     autoAdvanceFlow,
     autoNotionUpload,
     recoverPendingUpdates,

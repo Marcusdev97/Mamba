@@ -133,7 +133,7 @@ function markNotionSyncWaiting(runner) {
   runner.state.notionSync = {
     status: "WAITING",
     stage: "campaign",
-    message: "发送完成后将自动更新 Notion。",
+    message: "每位客户会先保存 SQLite；Notion 等待晚上 22:00 或手动同步。",
     startedAt: null,
     finishedAt: null,
     error: null,
@@ -171,6 +171,9 @@ export function campaignQueueBlockReason(runner) {
   if (state.status === "STOPPED") return "当前 Campaign 已手动停止；请确认后再启动下一批。";
   if (state.status === "INTERRUPTED") return "当前 Campaign 因连接异常安全暂停；请恢复或结束这批后再启动下一批。";
   if (["READY", "READY_TEST"].includes(state.status)) return "当前还有一个尚未启动的预览。";
+  // SQLite 已经逐客户 commit 后，Notion 只是异步镜像，不再占用 WhatsApp
+  // sender lane，也不该挡住下一批。失败任务会留在 outbox 继续重试。
+  if (state.mode === "LIVE" && state.localAdvance?.status === "SUCCEEDED") return null;
   if (state.mode === "LIVE" && state.flowLabel && ["WAITING", "RUNNING"].includes(state.advanceStatus)) {
     return `当前 ${state.flowLabel} 仍在更新 Notion（${state.advanceStatus}）；完成后 Queue 会自动继续。`;
   }
@@ -247,61 +250,40 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
   (async () => {
     try {
       await runner.run();
-      if (runner.state?.status !== "COMPLETED") {
-        const assignments = runner.state?.assignments || [];
-        const pending = assignments.filter((job) => isResumableJobStatus(job.status)).length;
-        const sent = assignments.filter((job) => job.part1?.sentAt).length;
-        if (!sent) {
-          runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；没有人收到讯息，不需要收尾。`);
-          return;
-        }
-        // 2026-07-21 事故：中途 STOP 之后完全不回写 Notion，已经收到讯息的人
-        // 在名单上看起来从没发过，隔天重开就整批重发。已发的那部分必须当场记帐，
-        // 剩下的等续跑时再补。creditSentCounts 不能在这里跑 —— 它是一次性旗标，
-        // 提早烧掉的话续跑那批的模板用量就永远算不到了。
-        runner.pushLog(`Campaign 尚未完成（${runner.state?.status || "UNKNOWN"}，待处理 ${pending}）；先把已发出的 ${sent} 位回写 Notion，避免下一批重发。`);
-        try {
-          if (autoAdvance) {
-            await campaign.autoAdvanceFlow(runner);
-            if (runner.state.advanceStatus !== "SUCCEEDED") {
-              await queueNotionFinalise(runtime, runner, { reason: "partial_finalise_incomplete", autoAdvance });
-              runner.pushLog(`本机进度已保存；Notion 仍有 ${runner.state.advanceStatus} 项目，已排入重试队列。`);
-            }
-          }
-          else {
-            const notionResult = await campaign.autoNotionUpload(runner, { allowPartial: true });
-            if (notionResult?.status === "FAILED") {
-              await queueNotionFinalise(runtime, runner, { reason: "partial_flow1_upload_failed", autoAdvance: false });
-            }
-          }
-        } catch (error) {
-          // 推不出去就排进 outbox：晚上兜底那轮或你按「立即同步」时会再试。
-          // 不能只留一行 log 就算了 —— 没写进 Notion = 这批人下次会被重发。
-          await queueNotionFinalise(runtime, runner, { reason: "partial_finalise_failed", autoAdvance, error });
-          runner.pushLog(`部分回写失败：${error.message}。已排入 Notion 同步队列，会自动重试；急的话按「立即同步」。`);
-          await runner.systemLog?.("error", "partial_finalise_failed", "Partial Notion write-back after an unfinished campaign failed; queued for retry.", {
-            runId: runner.state?.runId ?? null, sent, error: error.message,
-          });
-        }
+      const assignments = runner.state?.assignments || [];
+      const pending = assignments.filter((job) => isResumableJobStatus(job.status)).length;
+      const committed = assignments.filter((job) => job.localCheckpoint?.status === "SUCCEEDED").length;
+      if (!committed) {
+        runner.pushLog(`Campaign ${runner.state?.status || "UNKNOWN"}；没有完成 SQLite checkpoint 的客户，不建立 Notion 上传。`);
         return;
       }
-      try {
-        if (autoAdvance) {
-          await campaign.autoAdvanceFlow(runner);
-          if (runner.state.advanceStatus !== "SUCCEEDED") {
-            await queueNotionFinalise(runtime, runner, { reason: "finalise_incomplete", autoAdvance });
-          }
-        }
-        if (autoAdvance) await campaign.creditSentCounts(runner);
-        const notionResult = await campaign.autoNotionUpload(runner);
-        if (!autoAdvance && notionResult?.status === "FAILED") {
-          await queueNotionFinalise(runtime, runner, { reason: "flow1_upload_failed", autoAdvance: false });
-        }
-      } catch (error) {
-        await queueNotionFinalise(runtime, runner, { reason: "finalise_failed", autoAdvance, error });
-        runner.pushLog(`Notion 收尾失败：${error.message}。已排入同步队列，会自动重试。`);
-        throw error;
+      // 每位客户完成时已经把 Flow + outbox 原子写进 SQLite。这里不碰 Notion，
+      // 只用同一个幂等 key 再确认待办存在；晚上 22:00 或人工按钮才会上传。
+      await queueNotionFinalise(runtime, runner, {
+        reason: runner.state?.status === "COMPLETED" ? "deferred_complete" : "deferred_partial",
+        autoAdvance,
+      });
+      runner.state.localAdvance = {
+        ...(runner.state.localAdvance || {}),
+        status: pending ? "RUNNING" : "SUCCEEDED",
+        recorded: committed,
+        total: assignments.length,
+        updatedAt: new Date().toISOString(),
+      };
+      if (autoAdvance) {
+        runner.state.advanceStatus = "WAITING";
+        runner.state.advanceDone = false;
+      } else {
+        runner.state.notionSync = {
+          ...(runner.state.notionSync || {}),
+          status: "WAITING",
+          stage: "queued",
+          message: "SQLite 已完成；等待晚上 22:00 或手动同步 Notion。",
+          updatedAt: new Date().toISOString(),
+        };
       }
+      await runner.saveState();
+      runner.pushLog(`SQLite 已逐客户完成 ${committed} 位；Notion 已排队，晚上 22:00 或手动同步。`);
     } catch (error) {
       runner.pushLog(`运行出错：${error.message}`);
       await runner.systemLog?.("error", errorEvent, "Campaign background run failed.", { error: error.message });
@@ -530,7 +512,8 @@ export function registerCampaignRoutes(router) {
     if (!runner || !runner.state) throw httpError(400, "没有可继续的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
-    const remaining = runner.state.assignments.filter((job) => isResumableJobStatus(job.status)).length;
+    const remaining = runner.state.assignments.filter((job) => isResumableJobStatus(job.status)
+      || (runner.state.localCheckpointMode === "PER_CUSTOMER_V1" && job.status === "SENT" && job.localCheckpoint?.status !== "SUCCEEDED")).length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
@@ -721,7 +704,7 @@ export function registerCampaignRoutes(router) {
         ? "同步正在进行中，请稍候。"
         : result.processed === 0
           ? "队列是空的，没有东西要同步。"
-          : `处理 ${result.processed} 笔 · 成功 ${result.completed} · 无需处理 ${result.skipped} · 待重试 ${result.retried} · 放弃 ${result.failed}`,
+          : `处理 ${result.processed} 笔 · 成功 ${result.completed} · 等待 Campaign 完成 ${result.deferred || 0} · 无需处理 ${result.skipped} · 待重试 ${result.retried} · 放弃 ${result.failed}`,
     });
   });
 

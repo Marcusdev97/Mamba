@@ -41,6 +41,9 @@ const lastSentAt = (job) => {
   const extras = Array.isArray(job.extraParts) ? job.extraParts.map((e) => e?.sentInfo?.sentAt).filter(Boolean) : [];
   return extras[extras.length - 1] ?? job.part2?.sentAt ?? job.part1?.sentAt ?? job.scheduledAt;
 };
+const completedForNotion = (run, job) => job?.status === "SENT"
+  && job?.part1?.sentAt
+  && (run?.localCheckpointMode !== "PER_CUSTOMER_V1" || job?.localCheckpoint?.status === "SUCCEEDED");
 
 async function notion(method, pathname, body, attempt = 0) {
   const res = await fetch(`https://api.notion.com/v1${pathname}`, {
@@ -262,7 +265,7 @@ function buildProperties(job, phone, projectName, schema, runPageId, run) {
 async function upsertCampaignRun(run, projectName) {
   if (!runsDbId) return null;
   const startIso = run.startAt || run.createdAt || new Date().toISOString();
-  const sentCount = run.assignments.filter((j) => j.part1?.sentAt).length;
+  const sentCount = run.assignments.filter((job) => completedForNotion(run, job)).length;
   const name = `${projectName} | ${klDate(startIso)} | Flow 1 (${klTime(startIso)})`;
   const notes = [
     `runId=${run.runId ?? "?"}`,
@@ -303,7 +306,7 @@ async function main() {
   const runFiles = await pickRuns();
   const selectedRuns = [];
   for (const runFile of runFiles) selectedRuns.push({ runFile, run: await readJson(runFile) });
-  const total = selectedRuns.reduce((count, item) => count + (item.run?.assignments || []).filter((job) => normalizePhone(job.lead?.phone) && job.part1?.sentAt).length, 0);
+  const total = selectedRuns.reduce((count, item) => count + (item.run?.assignments || []).filter((job) => normalizePhone(job.lead?.phone) && completedForNotion(item.run, job)).length, 0);
 
   console.log("\nUPLOAD BLAST LEADS -> NOTION");
   console.log("===========================");
@@ -333,7 +336,7 @@ async function main() {
 
     for (const job of run.assignments) {
       const phone = normalizePhone(job.lead?.phone);
-      if (!phone || !job.part1?.sentAt) continue; // only actually-blasted leads
+      if (!phone || !completedForNotion(run, job)) continue; // only fully completed + locally committed leads
       try {
         if (await existsInNotion(phone)) {
           skipped += 1;

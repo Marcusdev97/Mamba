@@ -1,8 +1,7 @@
 // Notion outbox 的测试。
 //
-// 这层的存在理由：run 结束当下会直接回写 Notion，但那一下可能失败(timeout /
-// token 过期 / 断网)。失败却没人记得重试的话，那批人在 Notion 里看起来没发过，
-// 下一批就会重发 —— 就是 2026-07-21 那次事故。
+// 这层的存在理由：每位客户完成时先把待办写进 SQLite；Notion 只在晚上
+// 22:00 或人工按钮触发。若同步遇到 timeout / token 过期 / 断网，待办不能消失。
 //
 // 所以这里要证的是：失败会留下来、会退避重试、重试成功会结案、
 // 试到放弃不会每晚洗版、而且同一个 run 排两次不会变成两笔。
@@ -146,6 +145,23 @@ assert.equal(manual.completed, 1);
 assert.deepEqual(handled, ["run_M"]);
 assert.equal(worker.status().lastResult.reason, "manual");
 assert.notEqual(manual.busy, true, "跑完了就不该说自己还在忙");
+
+// Campaign 仍在发送时，人工同步不能上传半批，也不能把这笔算失败。
+await workerOutbox.enqueue({ entityType: "campaign_run", entityId: "run_active", idempotencyKey: "k_active" });
+const deferredWorker = createNotionOutboxWorker({
+  outbox: workerOutbox,
+  clock: () => workerNow,
+  handler: async () => ({ defer: true, delayMs: 5 * 60_000 }),
+});
+const deferred = await deferredWorker.drainAll({ reason: "manual" });
+assert.equal(deferred.deferred, 1);
+assert.equal(deferred.completed, 0);
+assert.equal(deferred.retried, 0);
+assert.equal(deferredWorker.status().progress.status, "WAITING");
+assert.equal((await workerOutbox.due()).length, 0, "deferred job must wait until its next available time");
+await workerOutbox.enqueue({ entityType: "campaign_run", entityId: "run_active", idempotencyKey: "k_active" });
+assert.equal((await workerOutbox.due()).length, 1, "campaign completion must make a previously deferred job immediately available");
+await workerOutbox.drain(async () => {});
 
 // 「已经在跑」用 busy 表示，不能跟 skipped(无需处理的笔数)同名 ——
 // 撞名的话 skipped=1 会被画面当成「还在同步中」，明明做完了却骗人。

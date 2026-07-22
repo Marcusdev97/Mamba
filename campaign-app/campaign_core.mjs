@@ -531,7 +531,7 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
 // Drives one campaign run. Holds state in memory and mirrors it to disk so the
 // web console can poll progress and other tools can read active-run.json.
 export class CampaignRunner {
-  constructor({ config, env, onLog, systemLogs, conversationLog } = {}) {
+  constructor({ config, env, onLog, systemLogs, conversationLog, customerCheckpoint } = {}) {
     this.config = config;
     this.env = env;
     this.api = makeApi(env);
@@ -540,6 +540,9 @@ export class CampaignRunner {
     // 发出去的每一条也要留一份进本机数据库，conversation 才凑得完整。
     // 没传就是不记录 —— 测试和一次性脚本不必被迫接数据库。
     this.conversationLog = conversationLog ?? null;
+    // LIVE campaign 在继续下一位以前，必须先把刚完成的客户 commit 到 SQLite。
+    // callback 由 server 注入，core 测试/一次性脚本可以不接。
+    this.customerCheckpoint = customerCheckpoint ?? null;
     this.state = null;
     this.runPath = null;
     this.stopped = false;
@@ -620,6 +623,7 @@ export class CampaignRunner {
       project: project ?? null,
       campaignId: this.config.campaignId,
       mode,
+      localCheckpointMode: mode === "LIVE" && this.customerCheckpoint ? "PER_CUSTOMER_V1" : null,
       status: mode === "LIVE" ? "READY" : "READY_TEST",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1155,6 +1159,46 @@ export class CampaignRunner {
     }
   }
 
+  async checkpointCustomer(job) {
+    if (this.state?.mode !== "LIVE" || job?.status !== "SENT" || !this.customerCheckpoint) return null;
+    if (job?.localCheckpoint?.status === "SUCCEEDED") return job.localCheckpoint;
+    job.localCheckpoint = {
+      ...(job.localCheckpoint || {}),
+      status: "RUNNING",
+      startedAt: job.localCheckpoint?.startedAt || new Date().toISOString(),
+      error: null,
+    };
+    await this.saveState();
+    try {
+      return await this.customerCheckpoint(this, job);
+    } catch (error) {
+      job.localCheckpoint = {
+        ...(job.localCheckpoint || {}),
+        status: "FAILED",
+        error: error.message,
+        failedAt: new Date().toISOString(),
+      };
+      this.interrupted = true;
+      this.stopped = true;
+      this.state.status = "INTERRUPTED";
+      this.state.interruption = {
+        code: "LOCAL_CUSTOMER_CHECKPOINT_FAILED",
+        message: `客户已发送，但 SQLite Flow 写入失败。系统已在继续下一位前暂停：${error.message}`,
+        failedJobId: job.id,
+        failedAt: new Date().toISOString(),
+      };
+      await this.saveState().catch(() => {});
+      this.showProgress(`⛔ SQLite 写入失败，已暂停在 ${job.lead?.name || job.lead?.phone}：${error.message}`);
+      await this.systemLog("error", "local_customer_checkpoint_failed", "Campaign paused before the next customer because SQLite checkpoint failed.", {
+        jobId: job.id,
+        name: job.lead?.name,
+        phone: job.lead?.phone,
+        error: error.message,
+      });
+      throw error;
+    }
+  }
+
   retryFailedOnly() {
     if (!this.state?.assignments) throw new Error("没有可补发的 run。");
     let count = 0;
@@ -1172,10 +1216,18 @@ export class CampaignRunner {
   async runQueue() {
     for (let index = 0; index < this.state.assignments.length; index += 1) {
       if (this.stopped) return;
+      const current = this.state.assignments[index];
+      // Crash window recovery: Parts 已完成但 checkpoint marker 尚未写回 run JSON，
+      // 先幂等补 SQLite commit，绝不重发这个客户。
+      if (current.status === "SENT" && current?.localCheckpoint?.status !== "SUCCEEDED") {
+        await this.checkpointCustomer(current);
+      }
       // Resume-safe: continue both untouched QUEUED jobs and a job interrupted
       // between Parts. SENT / FAILED / skipped jobs are never resent.
-      if (!isResumableJobStatus(this.state.assignments[index].status)) continue;
-      await this.processJob(this.state.assignments[index]);
+      if (!isResumableJobStatus(current.status)) continue;
+      await this.processJob(current);
+      // 只有全部必要 Parts 完成(SENT)才推进本机 Flow。
+      if (current.status === "SENT") await this.checkpointCustomer(current);
       if (this.stopped || index === this.state.assignments.length - 1) return;
       const next = this.state.assignments.slice(index + 1).find((job) => isResumableJobStatus(job.status));
       if (!next) return;
@@ -1380,6 +1432,7 @@ export class CampaignRunner {
               extraPartsAt: Array.isArray(job.extraParts) ? job.extraParts.map((ep) => ep?.sentInfo?.sentAt ?? null) : [],
               status: job.status,
               error: job.error,
+              localCheckpoint: job.localCheckpoint ?? null,
             })),
           }
         : null,

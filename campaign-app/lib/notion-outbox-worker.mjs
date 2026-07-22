@@ -1,8 +1,7 @@
 // Outbox 的排程器：每晚固定时间兜底一次，平常按按钮就立刻推。
 //
-// 为什么不是每 5 分钟一直推：run 一结束就已经直接回写过一次了(见
-// campaign.routes.mjs 的收尾段)，outbox 只收「那次失败的」。所以定时的角色是兜底，
-// 不是主力，一天一次够；急的时候人工按按钮。
+// 为什么不是每 5 分钟一直推：发送期间每位客户只写 SQLite，Notion 待办集中在
+// 晚上 22:00 处理；急的时候由人工按钮触发。这样 Notion 的延迟不会拖慢 WhatsApp。
 //
 // 时间用吉隆坡时区算，跟 daily-campaign 那支同一套逻辑 —— 不然换日光节约或
 // 机器时区不同就会在错的时间跑。
@@ -47,9 +46,9 @@ export function createNotionOutboxWorker({
   async function drainAll({ reason = "manual", maxBatches = 20 } = {}) {
     // 用 busy 而不是 skipped：drain 报告里的 skipped 是「无需处理的笔数」，
     // 两个同名的话 skipped=1 会被当成「正在跑」，画面就会骗人说还没做完。
-    if (running) return { busy: true, reason: "already_running", processed: 0, completed: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
+    if (running) return { busy: true, reason: "already_running", processed: 0, completed: 0, deferred: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
     running = true;
-    const total = { processed: 0, completed: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
+    const total = { processed: 0, completed: 0, deferred: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
     try {
       await outbox.requeueStuckRunning().catch(() => {});
       const planned = await outbox.due({ limit: batchLimit * maxBatches }).catch(() => []);
@@ -59,6 +58,7 @@ export function createNotionOutboxWorker({
         current: 0,
         total: planned.length,
         completed: 0,
+        deferred: 0,
         retried: 0,
         failed: 0,
         skipped: 0,
@@ -76,6 +76,7 @@ export function createNotionOutboxWorker({
               current: before + current,
               total: Math.max(progress?.total || 0, before + (batchReport?.processed || 0)),
               completed: total.completed + Number(batchReport?.completed || 0),
+              deferred: total.deferred + Number(batchReport?.deferred || 0),
               retried: total.retried + Number(batchReport?.retried || 0),
               failed: total.failed + Number(batchReport?.failed || 0),
               skipped: total.skipped + Number(batchReport?.skipped || 0),
@@ -94,6 +95,7 @@ export function createNotionOutboxWorker({
         });
         total.processed += report.processed;
         total.completed += report.completed;
+        total.deferred += report.deferred;
         total.retried += report.retried;
         total.failed += report.failed;
         total.skipped += report.skipped;
@@ -103,17 +105,18 @@ export function createNotionOutboxWorker({
       lastResult = { at: clock().toISOString(), reason, ...total };
       progress = {
         ...progress,
-        status: total.failed ? "FAILED" : total.retried ? "RETRY" : "SUCCEEDED",
+        status: total.failed ? "FAILED" : total.retried ? "RETRY" : total.deferred ? "WAITING" : "SUCCEEDED",
         current: total.processed,
         total: Math.max(progress?.total || 0, total.processed),
         completed: total.completed,
+        deferred: total.deferred,
         retried: total.retried,
         failed: total.failed,
         skipped: total.skipped,
         finishedAt: clock().toISOString(),
       };
       if (total.processed) {
-        onLog(`[notion-outbox] ${reason}: 处理 ${total.processed} · 成功 ${total.completed} · 待重试 ${total.retried} · 放弃 ${total.failed}`);
+        onLog(`[notion-outbox] ${reason}: 处理 ${total.processed} · 成功 ${total.completed} · 等待发送完成 ${total.deferred} · 待重试 ${total.retried} · 放弃 ${total.failed}`);
       }
       return total;
     } finally {

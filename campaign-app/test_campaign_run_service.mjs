@@ -29,7 +29,7 @@ function makeFlowRunner() {
     project: "Binastra",
     flowLabel: "Flow 2 - Layout",
     instances: [{ name: "wa_01", owner: "60111111111" }],
-    assignments: [{ instanceName: "wa_01", lead: { name: "Test Lead", phone: "60123456789" }, part1: { sentAt: "2026-07-13T04:00:00.000Z" } }],
+    assignments: [{ status: "SENT", instanceName: "wa_01", lead: { name: "Test Lead", phone: "60123456789" }, part1: { sentAt: "2026-07-13T04:00:00.000Z" } }],
   };
   return runner;
 }
@@ -102,14 +102,97 @@ function makeRunner() {
 }
 
 {
-  const service = makeService((_node, _args, _options, callback) => callback(null, "recovered 1 row\n", ""));
+  let notionCalled = false;
+  const localWrites = [];
+  const service = makeService(() => { notionCalled = true; }, {
+    localDatabase: {
+      async recordCampaignFlowProgress(payload) {
+        localWrites.push(payload);
+        return { recorded: 1, skipped: 0 };
+      },
+    },
+    flowByLabel: (label) => label === "Flow 1 - Project Template"
+      ? { key: "flow_1", label }
+      : null,
+    flowStateAfter: () => ({
+      lastFlowLabel: "Flow 1 - Project Template",
+      nextFlowLabel: "Flow 2 - Layout",
+      cohortDay: "Day 0",
+      dueDays: 0,
+    }),
+  });
   const runner = makeRunner();
   runner.state.status = "COMPLETED";
+  runner.state.runId = "run-flow-1-recovery";
+  runner.state.projectId = "binastra";
+  runner.state.project = "Binastra";
+  runner.state.templateFlow = "Flow 1 - Project Template";
+  runner.state.assignments = [{
+    status: "SENT",
+    instanceName: "wa_01",
+    lead: { name: "Recovered Lead", phone: "60128888888" },
+    part1: { sentAt: "2026-07-22T08:00:00.000Z" },
+  }];
   runner.state.notionSync = { status: "FAILED" };
   const result = await service.recoverPendingUpdates(runner);
   assert.equal(result.recovered, true);
-  assert.equal(result.kind, "flow-1-upload");
-  assert.equal(runner.state.notionSync.status, "SUCCEEDED");
+  assert.equal(result.kind, "flow-1-upload-queued");
+  assert.equal(result.status, "WAITING");
+  assert.equal(runner.state.notionSync.status, "WAITING");
+  assert.equal(localWrites.length, 1);
+  assert.equal(localWrites[0].flowLabel, "Flow 1 - Project Template");
+  assert.equal(localWrites[0].nextFlow, "Flow 2 - Layout");
+  assert.equal(localWrites[0].notionSyncJob.idempotencyKey, "LOCAL_TO_NOTION:campaign_run:run-flow-1-recovery:flow1_upload");
+  assert.equal(notionCalled, false, "restart recovery must leave Notion queued");
+}
+
+{
+  const localWrites = [];
+  const service = makeService(() => {}, {
+    localDatabase: {
+      async recordCampaignFlowProgress(payload) {
+        localWrites.push(payload);
+        return { recorded: 1, advanced: 1, skipped: 0 };
+      },
+    },
+    flowByLabel: (label) => label === "Flow 1 - Project Template"
+      ? { key: "flow_1", label }
+      : null,
+    flowStateAfter: () => ({
+      lastFlowLabel: "Flow 1 - Project Template",
+      nextFlowLabel: "Flow 2 - Layout",
+      cohortDay: "Day 0",
+      dueDays: 0,
+    }),
+  });
+  const runner = makeRunner();
+  runner.state = {
+    runId: "run-flow-1-checkpoint",
+    deviceId: "upstairs-mac",
+    mode: "LIVE",
+    status: "RUNNING",
+    projectId: "binastra",
+    project: "Binastra",
+    templateFlow: "Flow 1 - Project Template",
+    instances: [{ name: "wa_01", owner: "60111111111" }],
+    assignments: [],
+  };
+  const job = {
+    status: "SENT",
+    instanceName: "wa_01",
+    lead: { name: "New Flow 1 Lead", phone: "60129999999" },
+    part1: { sentAt: "2026-07-22T08:01:00.000Z" },
+    part2: { sentAt: "2026-07-22T08:02:00.000Z" },
+  };
+  runner.state.assignments = [job];
+  await service.checkpointCompletedCustomer(runner, job);
+  assert.equal(job.localCheckpoint.status, "SUCCEEDED");
+  assert.equal(runner.state.localAdvance.status, "SUCCEEDED");
+  assert.equal(runner.state.notionSync.status, "WAITING");
+  assert.equal(localWrites[0].flowLabel, "Flow 1 - Project Template");
+  assert.equal(localWrites[0].nextFlow, "Flow 2 - Layout");
+  assert.equal(localWrites[0].assignments[0].phone, "60129999999");
+  assert.equal(localWrites[0].notionSyncJob.idempotencyKey, "LOCAL_TO_NOTION:campaign_run:run-flow-1-checkpoint:flow1_upload");
 }
 
 {
