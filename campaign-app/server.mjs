@@ -21,7 +21,7 @@ import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
 import { createGoldenConversationLedgerService } from "./lib/golden-conversation-ledger-service.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
-import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
+import { includeLocalInstancePhones, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
@@ -76,12 +76,13 @@ const deviceIdentity = await loadDeviceIdentity(env, { dataDir: paths.dataDir })
 const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
 deviceIdentity.senderPhones = deviceSenderPolicy.configured ? [deviceSenderPolicy.expectedSenderPhone] : [];
 deviceIdentity.senderPolicyConfigured = deviceSenderPolicy.configured;
-const deviceOpenInstances = async () => filterInstancesForDevice(await openInstances(api), deviceSenderPolicy);
-const deviceListInstances = async () => (await listInstances(api)).map((item) => ({
-  ...item,
-  allowedOnThisDevice: !deviceSenderPolicy.configured
-    || filterInstancesForDevice([item], deviceSenderPolicy).length === 1,
-}));
+const deviceOpenInstances = async () => includeLocalInstancePhones(deviceIdentity, await openInstances(api));
+const deviceListInstances = async () => includeLocalInstancePhones(deviceIdentity, await listInstances(api));
+// 先做一次 best-effort discovery，让 Customer Desk 即使早于 Settings 打开，也已经
+// 知道这台电脑所有本机 WhatsApp 号码。Evolution 离线时不阻塞 Mamba 启动。
+listInstances(api)
+  .then((items) => includeLocalInstancePhones(deviceIdentity, items))
+  .catch(() => { /* 后续 Phone Health 刷新时会再发现。 */ });
 const notionService = createNotionService({ env });
 const {
   notionTokenValue,
@@ -324,7 +325,7 @@ async function localJson(pathname, options = {}) {
 const telegramHub = makeHub(env);
 const telegramFilterService = createTelegramFilterService({
   rootDir: paths.rootDir,
-  getConnectedPhones: async () => filterInstancesForDevice(await listInstances(api), deviceSenderPolicy).map((item) => item.number),
+  getConnectedPhones: async () => (await deviceListInstances()).map((item) => item.number),
 });
 const dailyCampaignService = createDailyCampaignService({
   rootDir: paths.rootDir,

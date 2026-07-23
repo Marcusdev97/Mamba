@@ -25,8 +25,8 @@ if (matches.length !== 1) {
 
 await saveDeviceSenderPolicy({ dataDir: paths.dataDir, deviceId: device.id, expectedSenderPhone: phone });
 console.log(`已绑定 Device ${device.id}`);
-console.log(`唯一允许号码：${phone}`);
+console.log(`SQLite 客户群主号码：${phone}`);
 console.log(`Evolution connection：${matches[0].name}`);
 const blocked = open.filter((item) => item !== matches[0]);
-if (blocked.length) console.log(`其他 OPEN connection 将被 Mamba 阻止：${blocked.map((item) => item.name).join(", ")}`);
+if (blocked.length) console.log(`其他本机 OPEN connection 仍可用于多号码发送：${blocked.map((item) => item.name).join(", ")}`);
 console.log("请重新打开 Mamba，让发送、扫描与 Customer Desk 全部载入这个绑定。");

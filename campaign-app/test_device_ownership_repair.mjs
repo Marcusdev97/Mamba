@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildSenderKey, loadDeviceIdentity } from "./lib/device-identity.mjs";
-import { filterInstancesForDevice, loadDeviceSenderPolicy, nextDeviceInstanceName, saveDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
+import { filterInstancesForDevice, includeLocalInstancePhones, loadDeviceSenderPolicy, nextDeviceInstanceName, saveDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 
 import {
   analyzeDeviceOwnership,
@@ -194,6 +194,19 @@ test("a device sender policy persists and blocks every other phone", async () =>
   ], policy);
   assert.deepEqual(filtered.map((item) => item.name), ["marcus_wa_01"]);
   assert.equal(nextDeviceInstanceName([], { name: "Marcus MacBook Local" }), "marcus-macbook-local_wa_01");
+});
+
+test("local Evolution connections extend device scope without replacing the primary sender", () => {
+  const localDevice = { id: "marcus-device", senderPhones: ["60168568756"] };
+  const instances = [
+    { name: "wa_01", number: "+60168568756" },
+    { name: "wa_03", number: "+60148801997" },
+    { name: "not-ready", number: "Not connected" },
+  ];
+  const localInstances = includeLocalInstancePhones(localDevice, instances);
+  assert.deepEqual(localDevice.senderPhones, ["60168568756", "60148801997"]);
+  assert.deepEqual(localInstances.map((item) => item.allowedOnThisDevice), [true, true, true]);
+  assert.deepEqual(localInstances.map((item) => item.name), ["wa_01", "wa_03", "not-ready"]);
 });
 
 test("authorized current WhatsApp evidence can claim a unique legacy row", () => {

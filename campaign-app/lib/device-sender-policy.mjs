@@ -44,6 +44,23 @@ export function instanceSenderPhone(instance) {
   return normalizeSenderPhone(instance?.number || instance?.owner || instance?.senderPhone);
 }
 
+// Evolution 跑在这台电脑的 127.0.0.1；能从本机 Evolution 列出的 connection
+// 就是本机 transport，不应该因为它不是 SQLite 的 primary sender 而被 BLOCKED。
+// primary sender 仍留在 policy.expectedSenderPhone，负责客户群默认归属；这里仅把
+// 实际存在的本机号码加入 Device scope，发送 checkpoint 会再记录真实 sender phone。
+export function includeLocalInstancePhones(device, instances = []) {
+  const phones = new Set((device?.senderPhones || []).map(normalizeSenderPhone).filter(Boolean));
+  for (const instance of instances || []) {
+    const phone = instanceSenderPhone(instance);
+    if (phone) phones.add(phone);
+  }
+  if (device && typeof device === "object") device.senderPhones = [...phones];
+  return (instances || []).map((instance) => ({
+    ...instance,
+    allowedOnThisDevice: true,
+  }));
+}
+
 export function filterInstancesForDevice(instances, policy) {
   if (!policy?.configured) return (instances || []).slice();
   return (instances || []).filter((item) => instanceSenderPhone(item) === policy.expectedSenderPhone);
