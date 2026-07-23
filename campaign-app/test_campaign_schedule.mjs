@@ -3,6 +3,7 @@ import {
   CampaignRunner,
   RecipientNotOnWhatsAppError,
   campaignOutcomeSummary,
+  campaignRestartDecision,
   campaignResumeSummary,
   isCampaignResumeCandidate,
   isRecipientNotOnWhatsAppError,
@@ -51,6 +52,48 @@ assert.equal(isRecipientNotOnWhatsAppError(new Error('send failed: {"exists":fal
 assert.equal(isRecipientNotOnWhatsAppError({ error: "不是 WhatsApp 号码 (not on WhatsApp)" }), true);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("HTTP 500 provider unavailable")), false);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("Could not send WhatsApp message: HTTP 500")), false);
+
+{
+  const complete = campaignRestartDecision({
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    assignments: [
+      { id: "done-1", status: "SENT", localCheckpoint: { status: "SUCCEEDED" } },
+      { id: "done-2", status: "SKIPPED_REPLIED" },
+    ],
+  });
+  assert.equal(complete.action, "COMPLETE", "重启时全部有完成证据应自动结案");
+
+  const safe = campaignRestartDecision({
+    localCheckpointMode: "PER_CUSTOMER_V1",
+    assignments: [
+      { id: "queued", status: "QUEUED" },
+      { id: "waiting", status: "WAITING_PART2", part1: { sentAt: "2026-07-23T01:00:00.000Z" } },
+      { id: "sent-part2", status: "SENDING_PART2", part2: { sentAt: "2026-07-23T01:01:00.000Z" } },
+      { id: "checkpoint", status: "SENT", localCheckpoint: { status: "FAILED" } },
+    ],
+  });
+  assert.equal(safe.action, "RESUME");
+  assert.equal(safe.safe, 4);
+  assert.deepEqual(safe.safeJobIds, ["queued", "waiting", "sent-part2", "checkpoint"]);
+
+  const uncertain = campaignRestartDecision({
+    assignments: [
+      { id: "maybe-sent", status: "SENDING_PART1", part1: null },
+      { id: "safe-queued", status: "QUEUED" },
+    ],
+  });
+  assert.equal(uncertain.action, "CONFIRM", "没有 sentAt 的 SENDING 绝不能自动重发");
+  assert.deepEqual(uncertain.ambiguousJobIds, ["maybe-sent"]);
+
+  const extraSent = campaignRestartDecision({
+    assignments: [{
+      id: "part3-confirmed",
+      status: "SENDING_PART3",
+      extraParts: [{ sentInfo: { sentAt: "2026-07-23T01:02:00.000Z" } }],
+    }],
+  });
+  assert.equal(extraSent.action, "RESUME", "Part 3 已有发送证据时应安全越过，不再发送同一个 Part");
+}
 
 {
   const state = {
@@ -453,6 +496,37 @@ function queuedAssignments(count) {
   };
   await runner.runQueue();
   assert.equal(checkpoints, 0, "a customer must not advance Flow until every required Part completes");
+}
+
+{
+  const savedStatuses = [];
+  let statusSeenBySender = "";
+  const runner = new CampaignRunner({ config, env: {} });
+  const job = {
+    id: "extra-part",
+    lead: { name: "Extra Part", phone: "60123456789" },
+    instanceName: "wa_01",
+    status: "WAITING_PART3",
+    scheduledAt: new Date(0).toISOString(),
+    part1: { sentAt: "2026-07-23T01:00:00.000Z" },
+    extraParts: [{ text: "Part 3", media: "", sentInfo: null }],
+  };
+  runner.state = {
+    mode: "TEST",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [job],
+  };
+  runner.saveState = async () => { savedStatuses.push(job.status); };
+  runner.waitBetweenParts = async (current, number) => { current.status = `WAITING_PART${number}`; };
+  runner.sendMediaWithRetry = async () => {
+    statusSeenBySender = savedStatuses.at(-1);
+    return { sentAt: "2026-07-23T01:03:00.000Z" };
+  };
+  await runner.processJob(job);
+  assert.equal(statusSeenBySender, "SENDING_PART3", "Part 3+ 必须先落盘 SENDING 才能呼叫 WhatsApp");
+  assert.equal(job.status, "SENT");
 }
 
 console.log("✅ all campaign-schedule tests passed");

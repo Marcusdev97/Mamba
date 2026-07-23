@@ -53,7 +53,9 @@ import {
   klDateTime,
   personalize,
   CampaignRunner,
+  campaignRestartDecision,
 } from "./campaign_core.mjs";
+import { runCampaignInBackground, startNextQueued } from "./routes/campaign.routes.mjs";
 import { FLOW_SEQUENCE, flowByLabel, flowStateAfter, classifyReplyText } from "./flow_sequence.mjs";
 import { collectMessageObjects, extractText, phoneFromJid, messageTime } from "./morning_followup.mjs";
 import { describeMessage, resolvePhone } from "./reply_intake.mjs";
@@ -696,18 +698,64 @@ async function restoreActiveCampaign() {
       const latest = saved.runId === index.latestRunId || !runner;
       setCurrentRunner(restored, { latest });
       if (saved.status === "RUNNING" || restored.state.status === "RUNNING") {
-        restored.state.status = "INTERRUPTED";
-        restored.pushLog("检测到上次运行期间服务中断。已停止自动发送；请人工检查后再按 Resume。已发送记录不会重发。");
-        await restored.saveState();
-        await systemLogService.write({
-          level: "warn",
-          area: "campaign",
-          event: "campaign_interrupted_recovered",
-          message: "Recovered an interrupted campaign without resuming sends.",
-          context: { runId: saved.runId, project: saved.project || null },
-        }).catch(() => {});
-        results.push({ runId: saved.runId, restored: true, interrupted: true });
-        continue;
+        const decision = campaignRestartDecision(restored.state);
+        if (decision.action === "COMPLETE") {
+          restored.state.status = "COMPLETED";
+          restored.state.interruption = null;
+          restored.pushLog("重启检查：所有客户都已有完成证据，已自动结案并释放号码，不需要人工确认。");
+          await restored.saveState();
+          await systemLogService.write({
+            level: "info",
+            area: "campaign",
+            event: "campaign_restart_auto_completed",
+            message: "Restart recovery found no unfinished customers and completed the campaign automatically.",
+            context: { runId: saved.runId, project: saved.project || null },
+          }).catch(() => {});
+        } else if (decision.action === "RESUME") {
+          restored.state.resumeSession = {
+            startedAt: new Date().toISOString(),
+            total: decision.safe,
+            jobIds: decision.safeJobIds,
+            source: "restart-auto-resume",
+          };
+          restored.state.interruption = null;
+          restored.pushLog(`重启检查：${decision.safe} 位都有明确安全状态，已自动继续；已完成的客户不会重发。`);
+          await restored.saveState();
+          await systemLogService.write({
+            level: "info",
+            area: "campaign",
+            event: "campaign_restart_auto_resumed",
+            message: "Restart recovery automatically resumed only customers with unambiguous local state.",
+            context: { runId: saved.runId, project: saved.project || null, resumed: decision.safe, jobIds: decision.safeJobIds },
+          }).catch(() => {});
+          runCampaignInBackground(runtime, restored, Boolean(restored.state.flowLabel), "campaign_restart_auto_resume_failed");
+          results.push({ runId: saved.runId, restored: true, autoResumed: true, decision });
+          continue;
+        } else {
+          restored.state.status = "INTERRUPTED";
+          restored.state.interruption = {
+            code: "UNCONFIRMED_SEND_AFTER_RESTART",
+            message: `${decision.ambiguous} 位客户停在发送确认窗口，WhatsApp 可能已经收到。请人工核对后再决定，系统不会自动重发。`,
+            jobIds: decision.ambiguousJobIds,
+            interruptedAt: new Date().toISOString(),
+          };
+          restored.pushLog(`重启检查：${decision.ambiguous} 位客户的发送结果无法确认，已安全暂停；其余明确状态不会重发。`);
+          await restored.saveState();
+          await systemLogService.write({
+            level: "warn",
+            area: "campaign",
+            event: "campaign_interrupted_recovered",
+            message: "Restart recovery paused because one or more WhatsApp sends have no local confirmation evidence.",
+            context: {
+              runId: saved.runId,
+              project: saved.project || null,
+              ambiguous: decision.ambiguous,
+              jobIds: decision.ambiguousJobIds,
+            },
+          }).catch(() => {});
+          results.push({ runId: saved.runId, restored: true, interrupted: true, decision });
+          continue;
+        }
       }
       const recovery = await runtime.campaign.recoverPendingUpdates(restored);
       if (recovery?.recovered) {
@@ -730,6 +778,18 @@ async function restoreActiveCampaign() {
     if (latest) setCurrentRunner(latest, { latest: true });
   }
   await campaignRunnerRegistry.persist().catch(() => {});
+  // Queue 已经由使用者确认过。程序重启后重新检查号码车道：安全就自动接着跑；
+  // 若旧 run 有 SENDING 未确认状态，campaignQueueBlockReason 仍会维持暂停。
+  await startNextQueued(runtime).catch(async (error) => {
+    await campaignQueueService.setHold(`重启后启动下一批失败: ${error.message}`).catch(() => {});
+    await systemLogService.write({
+      level: "error",
+      area: "campaign",
+      event: "campaign_queue_restart_failed",
+      message: "Could not restart the saved Campaign Queue after Mamba launched.",
+      context: { error: error.message },
+    }).catch(() => {});
+  });
   return results;
 }
 

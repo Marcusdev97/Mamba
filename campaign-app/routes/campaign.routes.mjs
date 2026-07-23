@@ -243,7 +243,7 @@ async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error
   }).catch(() => {});
 }
 
-function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error") {
+export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error") {
   const campaign = requireCampaign(runtime);
   campaign.setRunner(runner);
   campaign.persistRunners?.().catch(() => {});
@@ -300,7 +300,7 @@ function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "cam
   })();
 }
 
-async function startNextQueued(runtime, { force = false } = {}) {
+export async function startNextQueued(runtime, { force = false } = {}) {
   const campaign = requireCampaign(runtime);
   const queueSnapshot = await campaign.queue.snapshot();
   if (!queueSnapshot.count) {

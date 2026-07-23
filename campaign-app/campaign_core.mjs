@@ -133,6 +133,37 @@ export function isCampaignResumeCandidate(state, job) {
       && job?.localCheckpoint?.status !== "SUCCEEDED");
 }
 
+export function sentEvidenceForPart(job, partNumber) {
+  const number = Number(partNumber);
+  if (number === 1) return Boolean(job?.part1?.sentAt);
+  if (number === 2) return Boolean(job?.part2?.sentAt);
+  if (number >= 3) return Boolean(job?.extraParts?.[number - 3]?.sentInfo?.sentAt);
+  return false;
+}
+
+// 服务重启时，只让真正不确定的 WhatsApp send 停下来：
+// QUEUED / WAITING 尚未调用发送；SENT 但没 checkpoint 只需补 SQLite；
+// SENDING 若已有该 Part 的 sentAt，也能由 processJob 安全跳过该 Part。
+export function campaignRestartDecision(state) {
+  const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
+  const remaining = assignments.filter((job) => isCampaignResumeCandidate(state, job));
+  const ambiguous = remaining.filter((job) => {
+    const match = String(job?.status || "").match(/^SENDING_PART(\d+)$/);
+    return match ? !sentEvidenceForPart(job, Number(match[1])) : false;
+  });
+  const ambiguousIds = new Set(ambiguous.map((job) => job));
+  const safe = remaining.filter((job) => !ambiguousIds.has(job));
+
+  return {
+    action: ambiguous.length ? "CONFIRM" : remaining.length ? "RESUME" : "COMPLETE",
+    remaining: remaining.length,
+    safe: safe.length,
+    ambiguous: ambiguous.length,
+    safeJobIds: safe.map((job) => String(job?.id || "")).filter(Boolean),
+    ambiguousJobIds: ambiguous.map((job) => String(job?.id || "")).filter(Boolean),
+  };
+}
+
 export function campaignResumeSummary(state) {
   const session = state?.resumeSession;
   if (!session || !Array.isArray(session.jobIds)) return null;
@@ -1126,6 +1157,9 @@ export class CampaignRunner {
         }
         if (this.pastFixedEnd()) { job.status = "SENT"; await this.saveState(); return; }
         job.status = `SENDING_PART${k + 3}`;
+        // Part 3+ 也必须跟 Part 1/2 一样，在呼叫 WhatsApp 前先记录 SENDING。
+        // 若程序在 API 确认回来前中断，重启恢复才能识别为不确定状态并停止盲目补发。
+        await this.saveState();
         this.showProgress(`Part ${k + 3} → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
         ep.sentInfo = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, ep.text, ep.media);
         await this.saveState();
