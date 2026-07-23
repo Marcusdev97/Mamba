@@ -13,6 +13,7 @@ import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
@@ -120,6 +121,7 @@ const goldenLedgerService = createGoldenConversationLedgerService({
 });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const campaignModeService = createCampaignModeService({ dataDir: paths.dataDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
 const remoteMambaService = createRemoteMambaService({ rootDir: paths.rootDir, consolePort: PORT });
@@ -602,6 +604,7 @@ const runtime = await loadRuntime({
 //
 // 每位客户完成时先把 Flow + 这笔待办一起 commit 到 SQLite。Notion 不阻塞
 // WhatsApp 发送，只在晚上 22:00 或人工按「立即同步」时处理。
+runtime.campaignMode = campaignModeService;
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
 runtime.notionOutboxWorker = createNotionOutboxWorker({
   outbox: runtime.notionOutbox,

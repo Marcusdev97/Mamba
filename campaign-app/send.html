@@ -30,6 +30,59 @@
   .spacer { flex: 1; }
   .sendbar a { color: var(--muted, #94a3b8); text-decoration: none; font-size: 13px; }
   .sendbar a:hover { color: var(--text, #e2e8f0); }
+
+  /* 发送模式 —— 这台电脑的号码用什么节奏发 */
+  .mode-pill {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 7px 13px; border-radius: 10px; border: 1px solid var(--line, #334155);
+    background: var(--panel-2, #1e293b); color: var(--text, #e2e8f0);
+    font-weight: 700; font-size: 13px; font-family: inherit;
+  }
+  .mode-pill:hover { border-color: #64748b; }
+  .mode-pill.mode-conservative { border-color: #3f6212; }
+  .mode-pill.mode-normal { border-color: #0e7490; }
+  .mode-pill.mode-crazy { border-color: #b91c1c; }
+  .mode-pill .mode-emoji { font-size: 15px; }
+  .mode-pill .mode-sub { color: var(--muted, #94a3b8); font-weight: 500; font-size: 11.5px; }
+  .mode-pill .mode-caret { color: var(--muted, #64748b); font-size: 10px; }
+
+  .mode-pop {
+    position: fixed; inset: 0; z-index: 9998; display: grid; place-items: center;
+    padding: 24px; background: rgba(3, 7, 18, .78); backdrop-filter: blur(8px);
+  }
+  .mode-pop.hidden { display: none; }
+  .mode-sheet {
+    width: min(560px, calc(100vw - 48px)); padding: 22px;
+    border: 1px solid #334155; border-radius: 12px; background: #111827;
+    color: #e5e7eb; box-shadow: 0 24px 70px rgba(0, 0, 0, .5);
+  }
+  .mode-sheet-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .mode-sheet-head h2 { margin: 0; font-size: 18px; }
+  .mode-sheet-head button { background: none; border: 0; color: #94a3b8; font-size: 22px; cursor: pointer; line-height: 1; }
+  .mode-sheet > p { margin: 0 0 16px; color: #94a3b8; font-size: 13px; line-height: 1.5; }
+  .mode-options { display: grid; gap: 14px; max-height: 60vh; overflow-y: auto; }
+  .mode-number { padding: 13px 14px; border-radius: 10px; border: 1px solid #263244; background: #0f172a; }
+  .mode-number-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .mode-number-head b { font-size: 15px; }
+  .mode-number-cur { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid #334155; color: #cbd5e1; }
+  .mode-number-cur.mode-conservative { border-color: #3f6212; color: #a3e635; }
+  .mode-number-cur.mode-normal { border-color: #0e7490; color: #38bdf8; }
+  .mode-number-cur.mode-crazy { border-color: #b91c1c; color: #fca5a5; }
+  .mode-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .mode-choice {
+    display: grid; gap: 2px; justify-items: center; padding: 11px 8px; cursor: pointer;
+    border-radius: 8px; border: 1px solid #263244; background: #0b1220; color: #cbd5e1; font-family: inherit;
+  }
+  .mode-choice:hover { border-color: #475569; }
+  .mode-choice .mc2-emoji { font-size: 20px; }
+  .mode-choice .mc2-label { font-size: 13px; font-weight: 800; }
+  .mode-choice .mc2-pace { font-size: 11px; color: #7c8aa0; }
+  .mode-choice.selected.conservative { border-color: #65a30d; background: #14210a; }
+  .mode-choice.selected.normal { border-color: #38bdf8; background: #0e1a2b; }
+  .mode-choice.selected.crazy { border-color: #ef4444; background: #1c1113; }
+  .mode-choice.selected .mc2-label { color: #fff; }
+  .mode-warn { margin-top: 14px; padding: 11px 13px; border-radius: 8px; background: #2a1517; color: #fca5a5; font-size: 12.5px; line-height: 1.55; }
+  .mode-note { margin-top: 14px; color: #64748b; font-size: 11.5px; line-height: 1.5; }
   .monitor-toggle {
     display: inline-flex; align-items: center; gap: 7px; min-height: 34px;
     padding: 7px 11px; border: 1px solid #334155; border-radius: 8px;
@@ -229,7 +282,13 @@
     <div class="tabs">
       <button class="tab active" id="tab-flow1" onclick="show('flow1')"><span class="dot"></span>① Flow 1 · 新名单群发</button>
       <button class="tab" id="tab-next" onclick="show('next')"><span class="dot"></span>② Flow 2-10 · 跟进</button>
+      <button class="tab" id="tab-lanes" onclick="show('lanes')"><span class="dot"></span>🎚️ 多号码并行</button>
     </div>
+    <button type="button" class="mode-pill mode-normal" id="modePill" title="这台电脑的发送节奏">
+      <span class="mode-emoji" id="modePillEmoji">🐍</span>
+      <span><span id="modePillLabel">普通</span> <span class="mode-sub" id="modePillSub">45-75s</span></span>
+      <span class="mode-caret">▾</span>
+    </button>
     <div class="spacer"></div>
     <div class="queuebar hidden" id="queueBar">
       <strong id="queueCount"></strong>
@@ -275,7 +334,22 @@
   <div class="frames">
     <iframe id="frame-flow1" src="/flow-1"></iframe>
     <iframe id="frame-next" class="hidden" data-src="/next-flow"></iframe>
+    <iframe id="frame-lanes" class="hidden" data-src="/lanes"></iframe>
   </div>
+  <!-- 发送模式选择。这台电脑的号码用什么节奏；每台各自设，不影响另一台。 -->
+  <div class="mode-pop hidden" id="modePop" role="dialog" aria-modal="true">
+    <div class="mode-sheet">
+      <div class="mode-sheet-head">
+        <h2>发送模式 · 每个号码各自设</h2>
+        <button type="button" id="modeClose" aria-label="关闭">×</button>
+      </div>
+      <p>每个号码各自选一个节奏。老号可以开 Crazy 冲量，新号用保守养着，同时并行、互不影响。</p>
+      <div class="mode-options" id="modeOptions"></div>
+      <div class="mode-warn" id="modeWarn" hidden>⚠️ Crazy 只给用了很久的老号。新号或刚被限制过的号用这个很容易被封 —— 那种请选「保守」。</div>
+      <div class="mode-note">改了之后，下一批 campaign 就会用新节奏。正在跑的那批不受影响。</div>
+    </div>
+  </div>
+
   <div class="sync-overlay hidden" id="syncOverlay" role="dialog" aria-modal="true" aria-live="assertive">
     <div class="sync-dialog">
       <div class="sync-head">
@@ -297,15 +371,21 @@
 // 第二个 tab 懒加载 (第一次点才载入), 之后一直活着 — 切 tab 不打断任何进行中的发送。
 function show(which) {
   const next = document.getElementById("frame-next");
+  const lanes = document.getElementById("frame-lanes");
+  // iframe 懒加载：切到哪个 tab 才载入哪个页面。
   if (which === "next" && !next.src) next.src = next.dataset.src;
+  if (which === "lanes" && !lanes.src) lanes.src = lanes.dataset.src;
   document.getElementById("frame-flow1").classList.toggle("hidden", which !== "flow1");
   next.classList.toggle("hidden", which !== "next");
+  lanes.classList.toggle("hidden", which !== "lanes");
   document.getElementById("tab-flow1").classList.toggle("active", which === "flow1");
   document.getElementById("tab-next").classList.toggle("active", which === "next");
+  document.getElementById("tab-lanes").classList.toggle("active", which === "lanes");
   try { history.replaceState(null, "", "#" + which); } catch {}
 }
-// 深链接: /send#next 直接开第二个 tab (launcher 用)
+// 深链接: /send#next 或 #lanes 直接开对应 tab
 if (location.hash === "#next") show("next");
+if (location.hash === "#lanes") show("lanes");
 
 let syncBusy = false;
 let successTimer = null;
@@ -650,6 +730,125 @@ function hideSyncOverlay() {
   document.getElementById("syncOverlay").classList.add("hidden");
 }
 
+// ---- 发送模式（保守 / 普通 / Crazy）----
+//
+// 每个号码各自一个节奏。800 客户分 3 群、3 个号码各跑各的：老号 crazy 冲量、
+// 新号保守养着，同时并行。这里管「哪个号选了什么」，存在本机。
+let modeState = null;
+
+function modeByKey(key) {
+  return (modeState?.modes || []).find((m) => m.key === key) || (modeState?.modes || [])[0];
+}
+function paceLabel(mode) {
+  const g = mode?.contactGapSeconds || {};
+  return `${g.min}-${g.max}s`;
+}
+
+async function loadCampaignMode() {
+  try {
+    const r = await fetch("/api/campaign/mode", { cache: "no-store" });
+    if (!r.ok) return;
+    modeState = await r.json();
+    renderModePill();
+  } catch { /* 功能没启用就不显示，不影响发送台其他部分 */ }
+}
+
+// 顶栏那颗药丸：号码不多时逐个显示模式，多了就汇总。
+function renderModePill() {
+  if (!modeState) return;
+  const list = modeState.instances || [];
+  const pill = document.getElementById("modePill");
+  const emoji = document.getElementById("modePillEmoji");
+  const label = document.getElementById("modePillLabel");
+  const sub = document.getElementById("modePillSub");
+  if (!list.length) {
+    pill.className = "mode-pill mode-normal";
+    emoji.textContent = "⚙️"; label.textContent = "发送模式"; sub.textContent = "每号设定";
+    return;
+  }
+  if (list.length === 1) {
+    const m = modeByKey(list[0].mode);
+    pill.className = `mode-pill mode-${m.key}`;
+    emoji.textContent = m.emoji; label.textContent = m.label; sub.textContent = list[0].instance;
+    return;
+  }
+  // 多个号码：药丸显示「N 个号」，各自颜色在弹窗里看。
+  const uniqueModes = [...new Set(list.map((i) => i.mode))];
+  pill.className = uniqueModes.length === 1 ? `mode-pill mode-${uniqueModes[0]}` : "mode-pill";
+  emoji.textContent = "🎚️"; label.textContent = "发送模式"; sub.textContent = `${list.length} 个号`;
+}
+
+// 弹窗：每个号码一区块，各自三选一。
+function renderModeOptions() {
+  if (!modeState) return;
+  const list = modeState.instances || [];
+  const container = document.getElementById("modeOptions");
+  if (!list.length) {
+    container.innerHTML = '<div class="mode-note">目前没有在线的号码。到 Settings 连接号码后，这里会逐个列出让你各自选模式。</div>';
+    return;
+  }
+  container.innerHTML = list.map((row) => `
+    <div class="mode-number">
+      <div class="mode-number-head">
+        <b>${escapeModeHtml(row.instance)}</b>
+        <span class="mode-number-cur mode-${row.mode}">${modeByKey(row.mode).emoji} ${modeByKey(row.mode).label}${row.explicit ? "" : "（预设）"}</span>
+      </div>
+      <div class="mode-choices">
+        ${(modeState.modes || []).map((m) => `
+          <button type="button" class="mode-choice ${m.key} ${m.key === row.mode ? "selected" : ""}"
+            data-instance="${escapeModeHtml(row.instance)}" data-mode="${m.key}"
+            title="${escapeModeHtml(m.description)}">
+            <span class="mc2-emoji">${m.emoji}</span>
+            <span class="mc2-label">${m.label}</span>
+            <span class="mc2-pace">${paceLabel(m)}</span>
+          </button>`).join("")}
+      </div>
+    </div>`).join("");
+  const crazyPicked = list.some((row) => row.mode === "crazy");
+  document.getElementById("modeWarn").hidden = !crazyPicked;
+  container.querySelectorAll(".mode-choice").forEach((btn) => {
+    btn.addEventListener("click", () => selectMode(btn.dataset.instance, btn.dataset.mode));
+  });
+}
+
+function escapeModeHtml(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function selectMode(instance, key) {
+  const row = (modeState?.instances || []).find((i) => i.instance === instance);
+  if (row && row.mode === key && row.explicit) return;   // 已经是这个了
+  try {
+    const r = await fetch("/api/campaign/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance, mode: key }),
+    });
+    const result = await r.json();
+    if (!r.ok || !result.ok) throw new Error(result.error || "切换模式失败");
+    modeState = result;
+    renderModePill();
+    renderModeOptions();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+function openModePop() {
+  if (!modeState) { loadCampaignMode(); return; }
+  renderModeOptions();
+  document.getElementById("modePop").classList.remove("hidden");
+}
+function closeModePop() {
+  document.getElementById("modePop").classList.add("hidden");
+}
+
+document.getElementById("modePill").addEventListener("click", openModePop);
+document.getElementById("modeClose").addEventListener("click", closeModePop);
+document.getElementById("modePop").addEventListener("click", (event) => {
+  if (event.target.id === "modePop") closeModePop();
+});
+
 // Notion 同步队列（手动按「立即同步」或晚上 22:00 那轮）跑起来时，用同一个
 // 弹窗告诉使用者「现在在同步哪一批」。以前只有 campaign 跑完那次收尾会弹，
 // 队列在背景做事时画面完全没反应，看起来像当掉。
@@ -963,6 +1162,7 @@ document.getElementById("queueRelease").addEventListener("click", async () => {
   await refreshCampaignQueue();
 });
 pollRunning();
+loadCampaignMode();
 </script>
 </body>
 </html>

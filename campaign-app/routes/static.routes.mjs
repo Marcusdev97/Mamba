@@ -4,6 +4,7 @@ import { json, text } from "../lib/http.mjs";
 
 const HTML_ROUTES = {
   "/flow-1": "console.html",
+  "/lanes": "lanes.html",
   "/control-center": "control-center.html",
   "/next-flow": "next-flow.html",
   "/templates": "templates.html",
@@ -21,6 +22,7 @@ const HTML_ROUTES = {
   "/send": "send.html",
   "/campaign-todo": "campaign-todo.html",
   "/remote-mamba": "remote-mamba.html",
+  "/ai-changes": "ai-changes.html",
 };
 
 async function serveHtml(res, appDir, filename) {
@@ -39,6 +41,7 @@ async function serveAsset(res, runtime, url) {
     ".css": "text/css; charset=utf-8",
     ".woff2": "font/woff2",
     ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
   };
   try {

@@ -643,6 +643,37 @@ export function registerCampaignRoutes(router) {
     json(res, 200, { ok: true, result, queue: await campaign.queue.snapshot() });
   });
 
+  // 现有 OPEN 的号码名字。读不到就回空 —— 号码清单只是让 UI 多显示没设过的号,
+  // 拿不到也不该让「看/改模式」整个失败。
+  async function onlineInstanceNames(runtime) {
+    try {
+      const open = await requireCampaign(runtime).openInstances();
+      return (open || []).map((item) => item?.name).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  // 发送模式（保守 / 普通 / Crazy）—— 每个号码各自一个，存在本机。
+  // 号码清单从 Evolution 现有的连接来，这样没设过的号也能在 UI 显示预设。
+  router.get("/api/campaign/mode", async (_req, res, runtime) => {
+    if (!runtime.campaignMode) throw httpError(503, "发送模式功能尚未启用。", "CAMPAIGN_MODE_UNAVAILABLE");
+    const names = await onlineInstanceNames(runtime);
+    json(res, 200, { ok: true, ...(await runtime.campaignMode.snapshot(names)) });
+  });
+
+  router.post("/api/campaign/mode", async (req, res, runtime) => {
+    if (!runtime.campaignMode) throw httpError(503, "发送模式功能尚未启用。", "CAMPAIGN_MODE_UNAVAILABLE");
+    const body = await readJson(req);
+    await runtime.campaignMode.setMode(String(body?.instance || ""), String(body?.mode || ""));
+    const names = await onlineInstanceNames(runtime);
+    json(res, 200, {
+      ok: true,
+      ...(await runtime.campaignMode.snapshot(names)),
+      message: `号码 ${String(body?.instance || "").trim()} 的发送模式已设为「${String(body?.mode || "")}」。`,
+    });
+  });
+
   // 把已结束的 campaign 从监控清单移除。
   //
   // 画面上那个「×」以前只写浏览器 localStorage —— 换个浏览器或换台电脑，卡片全部

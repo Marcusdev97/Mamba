@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>多号码并行 · Mamba</title>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #0f172a; --panel-2: #1e293b; --panel-3: #172033;
+    --line: #1f2a3d; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b;
+    --blue: #38bdf8; --green: #2dd36f; --amber: #fbbf24; --red: #ff5f67;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif; font-size: 14px; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 6px; }
+  .head h1 { margin: 0; font-size: 19px; }
+  .head .sub { color: var(--muted); font-size: 13px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 18px; }
+  .proj-sel { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; font-size: 13px; font-family: inherit; }
+  .btn { border: 1px solid var(--line); background: var(--panel-3); color: var(--text); border-radius: 9px;
+    padding: 9px 15px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .btn:hover { border-color: var(--dim); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.primary { background: #0ea5e9; border-color: #0ea5e9; color: #04121e; }
+  .btn.go { background: var(--green); border-color: var(--green); color: #04160c; }
+  .btn.danger { background: transparent; border-color: #7f1d1d; color: #fca5a5; }
+  .spacer { flex: 1; }
+
+  .lanes { display: grid; gap: 16px; }
+  .lane {
+    border: 1px solid var(--line); border-radius: 13px; background: var(--panel);
+    padding: 0; overflow: hidden;
+  }
+  .lane-top {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
+    padding: 14px 18px; border-bottom: 1px solid var(--line);
+  }
+  .lane.mode-conservative .lane-top { background: linear-gradient(90deg, rgba(101,163,13,.10), transparent); }
+  .lane.mode-normal .lane-top { background: linear-gradient(90deg, rgba(56,189,248,.10), transparent); }
+  .lane.mode-crazy .lane-top { background: linear-gradient(90deg, rgba(239,68,68,.12), transparent); }
+  .lane-num { display: flex; align-items: center; gap: 10px; }
+  .lane-num .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
+  .lane.running .lane-num .dot { background: var(--green); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .lane-num b { font-size: 16px; }
+  .lane-num .phone { color: var(--muted); font-size: 12px; }
+  .lane-mode {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+    border: 1px solid var(--line); font-size: 12.5px; font-weight: 700; cursor: pointer; background: var(--panel-2);
+  }
+  .lane.mode-conservative .lane-mode { border-color: #3f6212; color: #a3e635; }
+  .lane.mode-normal .lane-mode { border-color: #0e7490; color: var(--blue); }
+  .lane.mode-crazy .lane-mode { border-color: #b91c1c; color: #fca5a5; }
+  .lane-state { text-align: right; font-size: 12px; color: var(--muted); }
+  .lane-state .badge { display: inline-block; padding: 3px 9px; border-radius: 6px; font-weight: 800; font-size: 11px; }
+  .badge.idle { background: #1e293b; color: var(--muted); }
+  .badge.ready { background: #0c2a3d; color: var(--blue); }
+  .badge.running { background: #0f2f23; color: var(--green); }
+  .badge.done { background: #10241a; color: var(--green); }
+  .badge.stopped { background: #3a2410; color: var(--amber); }
+
+  .lane-body { padding: 16px 18px; display: grid; gap: 14px; }
+  .lane-setup { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: end; }
+  .fld { display: grid; gap: 5px; }
+  .fld span { font-size: 11.5px; color: var(--muted); }
+  .fld select, .fld input { background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: 9px 11px; font-size: 13.5px; font-family: inherit; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--muted); padding: 9px 15px; font-weight: 700; cursor: pointer; font-family: inherit; font-size: 13px; }
+  .seg button.active { background: var(--panel-2); color: var(--text); }
+  .seg button.active[data-live="LIVE"] { background: #3a1a1a; color: #fca5a5; }
+
+  .lane-progress { display: none; gap: 12px; }
+  .lane.running .lane-progress, .lane.done .lane-progress, .lane.stopped .lane-progress { display: grid; }
+  .lane.running .lane-setup, .lane.done .lane-setup { opacity: .5; pointer-events: none; }
+  .track { height: 8px; border-radius: 5px; background: #1e293b; overflow: hidden; }
+  .track span { display: block; height: 100%; width: 0; background: var(--green); transition: width .4s ease; }
+  .prog-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .prog-nums { display: flex; gap: 18px; font-size: 12.5px; color: var(--muted); }
+  .prog-nums b { color: var(--text); font-size: 15px; }
+  .prog-nums .reached b { color: var(--green); }
+  .prog-nums .failed b { color: var(--red); }
+
+  .lane-empty { padding: 26px 18px; text-align: center; color: var(--dim); }
+  .add-note { margin-top: 18px; color: var(--dim); font-size: 12px; line-height: 1.6; }
+  .banner { padding: 11px 14px; border-radius: 9px; font-size: 13px; line-height: 1.5; margin-bottom: 14px; }
+  .banner.warn { background: #2a1517; color: #fca5a5; }
+  .banner.info { background: #0c2233; color: #9fd8f5; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div>
+      <h1>🎚️ 多号码并行发送</h1>
+      <div class="sub">每个号码一条独立车道：各自的名单、各自的节奏，同时开跑。客户已按号码分好群，互不重叠。</div>
+    </div>
+  </div>
+
+  <div class="banner info" id="wipBanner">🚧 框架预览：车道、名单选择、模式都能看，但「开跑」还没接上真正的发送核心（下一步做）。</div>
+
+  <div class="toolbar">
+    <label class="fld" style="gap:4px"><span>项目</span>
+      <select class="proj-sel" id="projectSel"></select>
+    </label>
+    <div class="spacer"></div>
+    <button class="btn" id="refreshBtn">↻ 刷新号码/名单</button>
+    <button class="btn go" id="startAllBtn" disabled title="核心接上后可用">▶▶ 三条一起开跑</button>
+  </div>
+
+  <div class="lanes" id="lanes">
+    <div class="lane-empty">读取号码中…</div>
+  </div>
+
+  <div class="add-note">
+    想加号码？到 <a href="/settings" style="color:var(--blue)">Settings</a> 扫码连接，回来这里刷新即可。<br>
+    每个号码的默认模式可在<a href="/send" style="color:var(--blue)">发送台</a>顶栏的「发送模式」里设；这里开跑时也能临时改。
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let modeCatalog = [];
+let modeByInstance = {};   // wa_01 -> "crazy"
+let groups = [];
+let currentProject = "";
+
+async function jget(url) { const r = await fetch(url, { cache: "no-store" }); return r.json(); }
+
+function paceOf(key) {
+  const m = modeCatalog.find((x) => x.key === key);
+  const g = m && m.contactGapSeconds || {};
+  return { emoji: m ? m.emoji : "🐍", label: m ? m.label : "普通", pace: g.min ? g.min + "-" + g.max + "s" : "" };
+}
+
+async function loadProjects() {
+  const data = await jget("/api/projects").catch(() => ({ projects: [] }));
+  const list = data.projects || data || [];
+  $("projectSel").innerHTML = list.map((p) => `<option value="${p.id}">${escapeHtml(p.name || p.id)}</option>`).join("");
+  currentProject = list[0] && list[0].id || "";
+}
+
+async function loadModes() {
+  const data = await jget("/api/campaign/mode").catch(() => null);
+  if (!data || !data.ok) return;
+  modeCatalog = data.modes || [];
+  modeByInstance = {};
+  (data.instances || []).forEach((i) => { modeByInstance[i.instance] = i.mode; });
+  return data.instances || [];
+}
+
+async function loadGroups() {
+  if (!currentProject) { groups = []; return; }
+  const data = await jget("/api/lead-groups?project=" + encodeURIComponent(currentProject)).catch(() => ({ groups: [] }));
+  groups = data.groups || [];
+}
+
+async function loadInstances() {
+  const data = await jget("/api/instances").catch(() => ({ instances: [] }));
+  return (data.instances || []).filter((i) => i.status === "OPEN" && i.allowedOnThisDevice !== false);
+}
+
+function groupOptions(selectedId) {
+  const opts = ['<option value="">— 选一个客户群 —</option>'];
+  for (const g of groups) {
+    opts.push(`<option value="${g.id}" ${g.id === selectedId ? "selected" : ""}>${escapeHtml(g.name)} · ${g.memberCount} 人</option>`);
+  }
+  return opts.join("");
+}
+
+function renderLanes(instances) {
+  const container = $("lanes");
+  if (!instances.length) {
+    container.innerHTML = '<div class="lane-empty">目前没有在线的号码。到 Settings 扫码连接后回来刷新。</div>';
+    return;
+  }
+  container.innerHTML = instances.map((inst) => {
+    const key = modeByInstance[inst.name] || "normal";
+    const p = paceOf(key);
+    return `
+      <div class="lane mode-${key}" data-instance="${escapeHtml(inst.name)}" data-mode="${key}">
+        <div class="lane-top">
+          <div class="lane-num">
+            <span class="dot"></span>
+            <b>${escapeHtml(inst.name)}</b>
+            <span class="phone">${escapeHtml(inst.number || inst.owner || "")}</span>
+          </div>
+          <div>
+            <button class="lane-mode" data-act="mode" title="改这个号码的模式">${p.emoji} ${p.label} · ${p.pace} ▾</button>
+          </div>
+          <div class="lane-state"><span class="badge idle">未开始</span></div>
+        </div>
+        <div class="lane-body">
+          <div class="lane-setup">
+            <label class="fld"><span>客户群（这条车道发给谁）</span>
+              <select data-act="group">${groupOptions("")}</select>
+            </label>
+            <label class="fld"><span>模式</span>
+              <div class="seg mode-seg">
+                <button data-live="TEST" class="active">TEST</button>
+                <button data-live="LIVE">LIVE</button>
+              </div>
+            </label>
+            <button class="btn go" data-act="start" disabled title="核心接上后可用">▶ 开跑</button>
+          </div>
+          <div class="lane-progress">
+            <div class="prog-row">
+              <div class="prog-nums">
+                <span class="reached">已触达 <b class="v-reached">0</b></span>
+                <span>待处理 <b class="v-pending">0</b></span>
+                <span>已跳过 <b class="v-skipped">0</b></span>
+                <span class="failed">异常 <b class="v-failed">0</b></span>
+              </div>
+              <button class="btn danger" data-act="stop">停止这条</button>
+            </div>
+            <div class="track"><span class="v-bar"></span></div>
+          </div>
+        </div>
+      </div>`;
+  }).join("");
+  wireLanes();
+}
+
+function wireLanes() {
+  document.querySelectorAll(".lane").forEach((lane) => {
+    lane.querySelectorAll(".mode-seg button").forEach((b) => {
+      b.addEventListener("click", () => {
+        lane.querySelectorAll(".mode-seg button").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+      });
+    });
+    const start = lane.querySelector('[data-act="start"]');
+    const group = lane.querySelector('[data-act="group"]');
+    // 选了客户群才亮起「开跑」——但核心还没接，先保持 disabled 并给提示。
+    group.addEventListener("change", () => {
+      start.title = group.value ? "核心接上后即可开跑这条车道" : "先选一个客户群";
+    });
+  });
+}
+
+function escapeHtml(v) {
+  return String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function refreshAll() {
+  $("lanes").innerHTML = '<div class="lane-empty">读取中…</div>';
+  await loadModes();
+  await loadGroups();
+  const instances = await loadInstances();
+  renderLanes(instances);
+}
+
+async function boot() {
+  await loadProjects();
+  $("projectSel").addEventListener("change", async (e) => { currentProject = e.target.value; await refreshAll(); });
+  $("refreshBtn").addEventListener("click", refreshAll);
+  await refreshAll();
+}
+boot();
+</script>
+</body>
+</html>
