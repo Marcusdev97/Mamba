@@ -13,7 +13,7 @@
     { title: "Campaigns", links: [
       { code: "CP", label: "Campaign Center", href: "/send", paths: ["/send", "/flow-1", "/next-flow"] },
       { code: "TF", label: "Templates & Flows", href: "/templates", paths: ["/templates"] },
-      { code: "NC", label: "Next Campaign · TODO", href: "/campaign-todo", paths: ["/campaign-todo"] },
+      { code: "CA", label: "Campaign Automations", href: "/campaign-todo", paths: ["/campaign-todo"], wip: true },
     ] },
     { title: "Mamba Brain", links: [
       { code: "PB", label: "Project Brain", href: "/project-brain", paths: ["/project-brain", "/knowledge"] },
@@ -22,6 +22,7 @@
       { code: "FM", label: "Flow Map", href: "/flow-map", paths: ["/flow-map"] },
     ] },
     { title: "System", links: [
+      { code: "AI", label: "AI Changes", href: "/ai-changes", paths: ["/ai-changes"] },
       { code: "LG", label: "System Logs", href: "/logs", paths: ["/logs"] },
       { code: "RM", label: "Remote Mamba", href: "/remote-mamba", paths: ["/remote-mamba"] },
       { code: "ST", label: "Settings", href: "/settings", paths: ["/settings", "/numbers"] },
@@ -42,7 +43,7 @@
       <div class="mamba-shell-group-title">${escapeHtml(group.title)}</div>
       ${group.links.map((link) => {
         const active = link.paths.includes(current);
-        return `<a class="mamba-shell-link${active ? " active" : ""}" href="${link.href}" title="${escapeHtml(link.label)}">
+        return `<a class="mamba-shell-link${active ? " active" : ""}${link.wip ? " wip" : ""}" href="${link.href}" title="${escapeHtml(link.label)}">
           <span class="mamba-shell-icon" aria-hidden="true">${link.code}</span>
           <span class="mamba-shell-link-label">${escapeHtml(link.label)}</span>
         </a>`;

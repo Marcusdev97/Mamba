@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI 改动记录 · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .change-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .change-filters { display:flex; gap:8px; flex-wrap:wrap; }
+  .filter-btn { min-height:34px; padding:7px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); color:var(--muted); font:inherit; font-size:12px; cursor:pointer; }
+  .filter-btn.active { border-color:rgba(37,211,102,.5); background:var(--green-bg); color:var(--green); }
+  .change-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+  .summary-box { padding:14px; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
+  .summary-box small { display:block; color:var(--muted); font-size:11px; }
+  .summary-box strong { display:block; margin-top:4px; font-size:22px; }
+  .change-list { display:grid; gap:14px; }
+  .change-card { overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
+  .change-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 18px; border-bottom:1px solid var(--line); }
+  .change-title { margin:0; font-size:16px; letter-spacing:0; text-transform:none; }
+  .change-summary-text { margin-top:5px; color:var(--muted); font-size:12.5px; }
+  .change-meta { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:wrap; color:var(--faint); font-size:11px; }
+  .change-tag { padding:3px 7px; border:1px solid var(--line-2); border-radius:999px; background:var(--panel-2); color:var(--muted); font-weight:700; }
+  .change-compare { display:grid; grid-template-columns:minmax(0,1fr) 42px minmax(0,1fr); gap:12px; align-items:stretch; padding:16px 18px; }
+  .compare-box { min-width:0; padding:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
+  .compare-box.before { border-color:rgba(245,179,66,.3); }
+  .compare-box.after { border-color:rgba(37,211,102,.35); }
+  .compare-label { color:var(--muted); font-size:10.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+  .compare-box.before .compare-label { color:var(--amber); }
+  .compare-box.after .compare-label { color:var(--green); }
+  .compare-text { margin-top:7px; color:var(--text); font-size:13px; line-height:1.65; }
+  .compare-arrow { display:grid; place-items:center; color:var(--blue); font-size:22px; font-weight:900; }
+  .change-files { padding:0 18px 16px; color:var(--faint); font-family:var(--font-mono); font-size:10.5px; line-height:1.65; overflow-wrap:anywhere; }
+  .empty { padding:30px; border:1px dashed var(--line-2); border-radius:var(--radius-l); color:var(--muted); text-align:center; }
+  @media (max-width:760px) {
+    .change-summary { grid-template-columns:1fr; }
+    .change-head { flex-direction:column; }
+    .change-meta { justify-content:flex-start; }
+    .change-compare { grid-template-columns:1fr; }
+    .compare-arrow { min-height:24px; transform:rotate(90deg); }
+  }
+</style>
+<script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>AI 改动记录</h1>
+      <div class="sub">看 AI 把什么 UI、结构或逻辑，从什么样子改成什么样子。</div>
+    </div>
+    <span class="badge b-sent" id="updatedAt">读取中</span>
+  </header>
+
+  <div class="change-summary" aria-label="AI change summary">
+    <div class="summary-box"><small>总改动</small><strong id="totalCount">0</strong></div>
+    <div class="summary-box"><small>UI 改动</small><strong id="uiCount">0</strong></div>
+    <div class="summary-box"><small>结构 / Data 改动</small><strong id="structureCount">0</strong></div>
+  </div>
+
+  <div class="change-toolbar">
+    <div class="change-filters" id="filters" aria-label="Change type filters">
+      <button class="filter-btn active" data-filter="All">全部</button>
+      <button class="filter-btn" data-filter="UI">UI</button>
+      <button class="filter-btn" data-filter="Structure">结构</button>
+      <button class="filter-btn" data-filter="Logic">逻辑</button>
+      <button class="filter-btn" data-filter="Data">Data</button>
+      <button class="filter-btn" data-filter="Safety">Safety</button>
+    </div>
+    <div class="muted" id="visibleCount">0 条</div>
+  </div>
+
+  <main class="change-list" id="changeList" data-testid="ai-change-list">
+    <div class="empty">正在读取改动记录…</div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;",
+})[char]);
+let changes = [];
+let activeFilter = "All";
+
+function render() {
+  const visible = activeFilter === "All"
+    ? changes
+    : changes.filter((item) => (item.types || []).includes(activeFilter));
+  $("visibleCount").textContent = `${visible.length} 条`;
+  $("changeList").innerHTML = visible.length ? visible.map((item) => `
+    <article class="change-card" data-change-id="${esc(item.id)}">
+      <div class="change-head">
+        <div>
+          <h2 class="change-title">${esc(item.title)}</h2>
+          <div class="change-summary-text">${esc(item.summary)}</div>
+        </div>
+        <div class="change-meta">
+          ${(item.types || []).map((type) => `<span class="change-tag">${esc(type)}</span>`).join("")}
+          <span>${esc(item.date)}</span>
+          ${item.commit ? `<span>commit ${esc(item.commit)}</span>` : ""}
+        </div>
+      </div>
+      <div class="change-compare">
+        <section class="compare-box before">
+          <div class="compare-label">${esc(item.before?.label || "以前")}</div>
+          <div class="compare-text">${esc(item.before?.text || "")}</div>
+        </section>
+        <div class="compare-arrow" aria-hidden="true">→</div>
+        <section class="compare-box after">
+          <div class="compare-label">${esc(item.after?.label || "现在")}</div>
+          <div class="compare-text">${esc(item.after?.text || "")}</div>
+        </section>
+      </div>
+      <div class="change-files">相关文件：${esc((item.files || []).join(" · ") || "未记录")}</div>
+    </article>`).join("") : '<div class="empty">这个分类还没有改动记录。</div>';
+}
+
+async function loadChanges() {
+  try {
+    const response = await fetch("/assets/ai-changes.json", { cache:"no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    changes = Array.isArray(payload.changes) ? payload.changes : [];
+    $("totalCount").textContent = changes.length;
+    $("uiCount").textContent = changes.filter((item) => (item.types || []).includes("UI")).length;
+    $("structureCount").textContent = changes.filter((item) => (item.types || []).some((type) => ["Structure","Data"].includes(type))).length;
+    $("updatedAt").textContent = payload.updatedAt
+      ? `更新 ${new Date(payload.updatedAt).toLocaleDateString("en-MY")}`
+      : "尚未记录日期";
+    render();
+  } catch (error) {
+    $("updatedAt").textContent = "读取失败";
+    $("changeList").innerHTML = `<div class="empty">无法读取 AI 改动记录：${esc(error.message)}</div>`;
+  }
+}
+
+$("filters").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-filter]");
+  if (!button) return;
+  activeFilter = button.dataset.filter;
+  document.querySelectorAll("[data-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  render();
+});
+
+loadChanges();
+</script>
+</body>
+</html>

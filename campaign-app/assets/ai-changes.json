@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "updatedAt": "2026-07-23T21:00:00+08:00",
+  "changes": [
+    {
+      "id": "per-number-send-modes",
+      "date": "2026-07-23",
+      "title": "每个号码各自一个发送节奏",
+      "summary": "保守 / 普通 / Crazy 三档，每个 WhatsApp 号码独立设定，老号冲量的同时新号还能慢慢养。",
+      "types": [
+        "UI",
+        "Logic",
+        "Safety"
+      ],
+      "commit": "13951ed",
+      "before": {
+        "label": "以前",
+        "text": "发送节奏是全局一个值。多个号码被迫同速 —— 想让老号跑快，新号就只能跟着一起快；想保护新号，老号就得一起慢下来。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "发送台顶栏可以逐个号码选节奏：保守 90-150 秒、普通 45-75 秒、Crazy 20-30 秒。选 Crazy 会提醒只适合用了很久的老号。设定存在本机，每台电脑各自管自己的号码。"
+      },
+      "files": [
+        "campaign-app/lib/campaign-mode-service.mjs",
+        "campaign-app/send.html",
+        "campaign-app/routes/campaign.routes.mjs"
+      ]
+    },
+    {
+      "id": "parallel-lanes-scaffold",
+      "date": "2026-07-23",
+      "title": "多号码并行发送（框架）",
+      "summary": "新增「多号码并行」页面：一个号码一条车道，各自选客户群、各自的节奏、各自的进度。",
+      "types": [
+        "UI",
+        "Structure"
+      ],
+      "commit": "13951ed",
+      "before": {
+        "label": "以前",
+        "text": "一次只能开一个 campaign。勾选多个号码只是把同一份名单分给它们，实际仍然共用一条发送管道、一个节奏，总速度不会变快。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "每个号码一条独立车道，各自绑一个客户群和一个节奏，同时并行。目前是框架预览：车道、名单、模式都能看，「开跑」还没接上发送核心，原本的单批发送流程完全没有改动。"
+      },
+      "files": [
+        "campaign-app/lanes.html",
+        "campaign-app/send.html",
+        "campaign-app/routes/static.routes.mjs"
+      ]
+    },
+    {
+      "id": "readable-failure-explanations",
+      "date": "2026-07-23",
+      "title": "错误讯息改成说人话",
+      "summary": "每个错误都回答四件事：发生什么、为什么、影响谁、现在该做什么。",
+      "types": [
+        "Logic",
+        "Safety"
+      ],
+      "commit": "29cf9b0",
+      "before": {
+        "label": "以前",
+        "text": "System Logs 里一半的错误只有原始技术讯息，例如「读取 Notion Next Flow 名单失败: The operation was aborted due to timeout」。看得到出事，但看不出严不严重、要不要马上处理。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "同一个错误会写成「连不上 Evolution」＋为什么（装置可能被登出）＋影响（完全发不出讯息）＋处理（检查 Evolution、必要时重扫 QR），原始讯息仍然保留在最后。写不回 Notion 这类错误会明写「下一批可能重复发送」，发送 timeout 会明写「不代表没送出去」。"
+      },
+      "files": [
+        "campaign-app/lib/error-explainer.mjs",
+        "campaign-app/lib/http.mjs",
+        "campaign-app/routes/next-flow.routes.mjs"
+      ]
+    },
+    {
+      "id": "notion-sync-queue-visible",
+      "date": "2026-07-23",
+      "title": "Notion 同步会显示在同步哪一批",
+      "summary": "手动或每晚 22:00 自动同步时弹窗显示进度，并讲得出是 Flow 几在写回。",
+      "types": [
+        "UI",
+        "Safety"
+      ],
+      "commit": "7fdfe34",
+      "before": {
+        "label": "以前",
+        "text": "同步队列在背景默默跑。按「立即同步」没有任何反应，看起来像当掉；状态列也只显示还有几笔在等，不知道是哪一批。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "同步时弹窗显示「Flow 2 - Layout · Flow 10 - Surrounding 的发送结果正在写回 Notion」。成功会自己关掉，失败则留在画面上 —— 因为那正是下一批可能重复发送的状态。"
+      },
+      "files": [
+        "campaign-app/lib/notion-outbox-service.mjs",
+        "campaign-app/send.html",
+        "campaign-app/console.html"
+      ]
+    },
+    {
+      "id": "stale-run-cleanup-tools",
+      "date": "2026-07-23",
+      "title": "卡住的 Campaign 可以真的清掉",
+      "summary": "新增清理工具与诊断脚本，并让监控卡片的「×」真的移除而不只是本机隐藏。",
+      "types": [
+        "Logic",
+        "Safety"
+      ],
+      "commit": "a0ac232",
+      "before": {
+        "label": "以前",
+        "text": "一个从没启动的旧预览会永远占住号码车道，之后每一批都被挡下「这个号码正在跑另一批 Campaign」，而且介面上没有任何地方能清掉它。监控卡片的「×」只写进浏览器本机，换台电脑又全部跑出来。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "clear_stale_runs 可以先预览再清掉卡住的 run，发送纪录一律保留；已结束的 campaign 能真的从清单移除，还在跑的则挡下不给移除。另有 diagnose_campaign_state 一次印出判断「到底发出去没有」需要的全部状态。"
+      },
+      "files": [
+        "campaign-app/clear_stale_runs.mjs",
+        "campaign-app/diagnose_campaign_state.mjs",
+        "campaign-app/send.html"
+      ]
+    },
+    {
+      "id": "campaign-progress-history-resume",
+      "date": "2026-07-22",
+      "title": "Campaign 进度拆成上一轮与本次继续",
+      "summary": "刷新页面不再把历史进度清零，同时把剩余客户和 Resume 本轮进度分开显示。",
+      "types": [
+        "UI",
+        "Logic"
+      ],
+      "commit": "4237f4c",
+      "before": {
+        "label": "以前",
+        "text": "只显示一个总进度，例如 108/123。刷新或继续发送时，很难判断这是历史进度还是本轮进度。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "显示“上一轮 108/123”、“当前待继续 15 位”和“本次继续 0/15”，刷新页面后仍然保留。"
+      },
+      "files": [
+        "campaign-app/next-flow.html",
+        "campaign-app/send.html",
+        "campaign-app/console.html"
+      ]
+    },
+    {
+      "id": "campaign-local-first-checkpoints",
+      "date": "2026-07-22",
+      "title": "Flow 1 到 Flow 10 统一逐客户写入 SQLite",
+      "summary": "每位客户完成全部必要 Part 后，先保存本机 Flow 状态，再继续下一位。",
+      "types": [
+        "Structure",
+        "Data"
+      ],
+      "commit": "fe310ff",
+      "before": {
+        "label": "以前",
+        "text": "Campaign 整批结束或停止后才统一处理状态；途中关闭时，已经发送的客户可能仍停留在旧 Flow。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "WhatsApp 确认成功 → 保存 Part 证据 → SQLite 推进客户 Flow → 建立 Notion 待办 → 才继续下一位。"
+      },
+      "files": [
+        "campaign-app/campaign_core.mjs",
+        "campaign-app/lib/local-database-service.mjs",
+        "campaign-app/lib/campaign-run-service.mjs"
+      ]
+    },
+    {
+      "id": "sqlite-notion-progress-dock",
+      "date": "2026-07-22",
+      "title": "增加 SQLite 与 Notion 同步进度",
+      "summary": "操作员可以看见资料现在停在本机、排队中，还是已经进入 Notion。",
+      "types": [
+        "UI",
+        "Structure"
+      ],
+      "commit": "415c31d",
+      "before": {
+        "label": "以前",
+        "text": "页面只显示 Notion 同步结果，不清楚 SQLite 是否完成，也不知道当前正在处理哪一个 Flow。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "顶部固定显示 SQLite 保存进度、Notion 队列、当前 Flow，以及晚上 22:00 / 手动同步状态。"
+      },
+      "files": [
+        "campaign-app/send.html",
+        "campaign-app/server.mjs",
+        "campaign-app/lib/notion-outbox-worker.mjs"
+      ]
+    },
+    {
+      "id": "campaign-resend-guard",
+      "date": "2026-07-22",
+      "title": "增加本机防重复发送闸门",
+      "summary": "即使 Notion 暂时没更新，也会先查看本机发送证据，避免重复联系同一个客户。",
+      "types": [
+        "Logic",
+        "Safety"
+      ],
+      "commit": "a0ac232",
+      "before": {
+        "label": "以前",
+        "text": "主要依赖 Notion 的 Flow 栏位判断是否已经发过；Notion 延迟或中断时可能再次发送。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "发送前先检查 SQLite conversation ledger；找到同 Flow 的近期发送证据就自动跳过。"
+      },
+      "files": [
+        "campaign-app/campaign_core.mjs",
+        "campaign-app/lib/conversation-log-service.mjs"
+      ]
+    },
+    {
+      "id": "local-conversation-memory",
+      "date": "2026-07-21",
+      "title": "客户对话改为本机长期保存",
+      "summary": "客户聊天与 Campaign 发送记录进入统一的本机 conversation ledger，供搜索与 Brain 回读。",
+      "types": [
+        "Structure",
+        "Data"
+      ],
+      "commit": "09c1901",
+      "before": {
+        "label": "以前",
+        "text": "对话资料分散在 WhatsApp、run JSON 和不同缓存中，难以稳定回读完整上下文。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "Inbound、Outbound、Campaign Part 和客户资料统一进入 SQLite conversation ledger。"
+      },
+      "files": [
+        "campaign-app/lib/conversation-log-service.mjs",
+        "campaign-app/routes/conversations.routes.mjs"
+      ]
+    }
+  ]
+}

@@ -75,6 +75,10 @@
   letter-spacing: .3px;
 }
 .mamba-shell-link.active .mamba-shell-icon { color: var(--green); background: rgba(37,211,102,.12); }
+.mamba-shell-link.wip { background: #23272f; border: 1px dashed #3a414e; color: var(--muted); }
+.mamba-shell-link.wip:hover { background: #2a2f39; }
+.mamba-shell-link.wip.active { background: #262b34; border-color: #4a5262; color: var(--text); }
+.mamba-shell-link.wip .mamba-shell-icon { background: #3a414e; color: var(--muted); }
 .mamba-shell-footer { padding: 12px 16px; border-top: 1px solid var(--line); }
 .mamba-shell-footer strong { display: block; font-size: 12.5px; }
 .mamba-shell-footer small { color: var(--muted); font-size: 10.5px; }
