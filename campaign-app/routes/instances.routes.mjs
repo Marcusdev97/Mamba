@@ -7,8 +7,39 @@ function requireWhatsapp(runtime) {
   return runtime.whatsapp;
 }
 
-function readableEvolutionError(error, action) {
+export function isEvolutionInstanceNameConflict(error) {
+  const message = String(error?.message || error || "");
+  return /this name\s+["']?.+?["']?\s+is already in use|instance name.*already in use|名称.*已(被)?使用/i.test(message);
+}
+
+export function suggestedInstanceName(requestedName, items = []) {
+  const requested = String(requestedName || "").trim();
+  const names = new Set((items || []).map((item) => String(item?.name ?? item?.instance?.instanceName ?? "").trim()).filter(Boolean));
+  names.add(requested);
+
+  const match = requested.match(/^(.*?)(\d+)$/);
+  if (!match) return "";
+  const [, prefix, digits] = match;
+  const width = digits.length;
+  let number = Number(digits) + 1;
+  while (number < 10 ** Math.max(width, 2)) {
+    const candidate = `${prefix}${String(number).padStart(width, "0")}`;
+    if (!names.has(candidate)) return candidate;
+    number += 1;
+  }
+  return "";
+}
+
+function instanceConflictMessage(name, items = []) {
+  const suggestion = suggestedInstanceName(name, items);
+  return `${name} 已经被 Evolution 使用，没有建立新号码。请先刷新号码清单；若 ${name} 已出现就直接使用，若要新增请改用${suggestion ? ` ${suggestion}` : "另一个唯一标签"}。`;
+}
+
+export function readableEvolutionError(error, action) {
   const message = String(error?.message || "");
+  if (isEvolutionInstanceNameConflict(error)) {
+    return `${action}失败: 这个号码标签已经被 Evolution 使用。请刷新号码清单，或改用另一个唯一标签。`;
+  }
   if (message.includes("ECONNREFUSED") || message.includes("fetch failed")) {
     return `${action}失败: Evolution API 离线。请先启动 Evolution，然后回 Settings 点「刷新」。`;
   }
@@ -58,13 +89,27 @@ export function registerInstancesRoutes(router) {
     assertInstanceName(name);
     if (!name) name = whatsapp.nextInstanceName(items);
     if (items.some((item) => item.name === name)) {
-      throw httpError(409, `${name} 已存在。请换一个标签，或先删除旧号码。`);
+      throw httpError(409, instanceConflictMessage(name, items), {
+        code: "WHATSAPP_INSTANCE_NAME_CONFLICT",
+        requestedName: name,
+        suggestedName: suggestedInstanceName(name, items),
+      });
     }
 
     let result;
     try {
       result = await whatsapp.createInstance(name);
     } catch (error) {
+      // Evolution 有时不会把尚未连线或其他装置建立的 instance 放进
+      // fetchInstances 清单，但 create 仍会拒绝同名标签。它是正常的名称冲突，
+      // 不是服务故障，更不是 Notion 权限问题。
+      if (isEvolutionInstanceNameConflict(error)) {
+        throw httpError(409, instanceConflictMessage(name, items), {
+          code: "WHATSAPP_INSTANCE_NAME_CONFLICT",
+          requestedName: name,
+          suggestedName: suggestedInstanceName(name, items),
+        });
+      }
       throw httpError(503, readableEvolutionError(error, `创建 ${name}`));
     }
     if (!result.qr) {

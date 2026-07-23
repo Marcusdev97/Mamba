@@ -17,6 +17,20 @@
 // 通用那条仍然会带上原文，绝不吞掉资讯。
 
 const RULES = [
+  // ---------- WhatsApp instance 管理 ----------
+  //
+  // Evolution 的「名称已占用」也是 HTTP 403，但它跟 Notion 完全无关。
+  // 这条必须放在 Notion 的通用 403 规则前面，否则新增号码失败会被误报成
+  // database 没分享给 integration。
+  {
+    code: "WHATSAPP_INSTANCE_NAME_CONFLICT",
+    test: (text) => /this name\s+["']?.+?["']?\s+is already in use|instance name.*already in use|名称.*已(被)?使用/i.test(text),
+    message: "这个 WhatsApp 号码标签已经被 Evolution 使用。",
+    why: "Evolution 里已经存在同名 instance；它可能已在号码清单里，也可能是另一台 Mamba 建立的旧 instance。",
+    impact: "只影响这次新增号码；没有建立新 instance，也没有改动 SQLite、Notion 或任何发送纪录。",
+    action: "回 Settings 刷新号码清单。若该标签已出现就直接使用或重新取二维码；若要新增，请改用画面建议的下一个标签。确认旧 instance 不再使用前不要删除它。",
+  },
+
   // ---------- 本机数据库 ----------
   {
     code: "SQLITE_BUSY",
@@ -54,7 +68,7 @@ const RULES = [
   },
   {
     code: "NOTION_DATABASE_ACCESS_FAILED",
-    test: (text) => /HTTP 403|HTTP 404|object_not_found|database.*not found|could not find/i.test(text),
+    test: (text) => /object_not_found|database.*not found|could not find.*database|notion.*HTTP (403|404)|HTTP (403|404).*notion/i.test(text),
     message: "Notion 找得到服务，但打不开那个 database。",
     why: "database 没有分享给 Mamba 的 integration，或 notion_config.json 里的 id 不对（换过 workspace、复制过 database 都会这样）。",
     impact: "跟那个 database 有关的功能全部失效。若是 Blast Leads，发送结果写不回去，下一批可能重复发送。",

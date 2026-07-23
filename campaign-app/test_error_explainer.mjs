@@ -14,6 +14,7 @@ const samples = [
   new Error("HTTP 401 unauthorized"),
   new Error("object_not_found: could not find database"),
   new Error("HTTP 429 rate limited"),
+  new Error('创建 wa_02失败: /instance/create: HTTP 403 {"message":["This name \\"wa_02\\" is already in use."]}'),
   new Error("The operation was aborted due to timeout"),
   new Error("connect ECONNREFUSED 127.0.0.1:8080"),
   new Error('{"exists":false}'),
@@ -42,6 +43,20 @@ assert.equal(explainError(new Error("HTTP 429 slow down")).code, "NOTION_RATE_LI
 assert.equal(explainError(Object.assign(new Error("x"), { code: "ENOSPC" })).code, "DISK_FULL");
 assert.equal(explainError(new Error("connect ECONNREFUSED 127.0.0.1:8080")).code, "WHATSAPP_NOT_CONNECTED");
 assert.equal(explainError(Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" })).code, "SQLITE_BUSY");
+assert.equal(
+  explainError(new Error('创建 wa_02失败: /instance/create: HTTP 403 {"message":["This name \\"wa_02\\" is already in use."]}')).code,
+  "WHATSAPP_INSTANCE_NAME_CONFLICT",
+  "Evolution 的 403 名称冲突不可以再误判成 Notion database 权限错误",
+);
+assert.equal(
+  explainError(new Error("HTTP 403 Forbidden")).code,
+  "UNEXPECTED_ERROR",
+  "没有 Notion 上下文的普通 403 不可以猜成 Notion database 故障",
+);
+assert.equal(
+  explainError(new Error("Notion GET /v1/databases/x: HTTP 403 forbidden")).code,
+  "NOTION_DATABASE_ACCESS_FAILED",
+);
 
 // --- 判断顺序：具体的要赢过笼统的 ---
 // 401 里也有 "fetch failed" 之类的字眼时，仍然要判成 auth 而不是网路问题。
