@@ -150,7 +150,7 @@ async function whatsappHealth(runtime) {
 }
 
 function healthItem(id, label, state, detail, href = "") {
-  const normalized = ["online", "warning", "offline"].includes(state) ? state : "offline";
+  const normalized = ["online", "warning", "offline", "idle"].includes(state) ? state : "offline";
   return { id, label, state: normalized, ok: normalized === "online", detail: String(detail || ""), href };
 }
 
@@ -236,6 +236,14 @@ export function registerControlCenterRoutes(router) {
     const notionReplyQueue = trackerDetails?.notionQueue || { pendingMessages: 0, manualReviewMessages: 0, pendingPhones: 0 };
     const learning = await learningQueueHealth(runtime, Boolean(settings.notion?.configured));
     const scheduler = await runtime.dailyCampaign?.snapshot?.().catch((error) => ({ error: error.message })) || null;
+    const schedulerMode = scheduler?.schedulerMode || (!scheduler?.config?.enabled ? "OFF" : scheduler?.config?.mode || "TEST");
+    const shiftLabel = scheduler?.shift?.status === "on-shift"
+      ? `on shift until ${scheduler.shift.workEnd}`
+      : scheduler?.shift?.stoppedToday
+        ? "stopped for today"
+        : scheduler?.shift?.status === "off-shift"
+          ? `off shift · ${scheduler.shift.workStart}-${scheduler.shift.workEnd}`
+          : "closed";
     const watchdog = await readJson(path.join(root, "campaign-data", "watchdog", "status.json"), null);
     const watchdogAgeSeconds = watchdog?.heartbeatAt
       ? Math.max(0, Math.round((Date.now() - dateMs(watchdog.heartbeatAt)) / 1000))
@@ -335,9 +343,9 @@ export function registerControlCenterRoutes(router) {
         learning,
         healthItem(
           "scheduler",
-          "Daily Campaign Scheduler",
-          !scheduler || scheduler.error ? "offline" : scheduler.config?.enabled ? "online" : "warning",
-          !scheduler || scheduler.error ? scheduler?.error || "Scheduler service is unavailable" : scheduler.config?.enabled ? `TEST schedule active · daily ${scheduler.config.time}` : "Loaded but disabled · TEST-only safety mode",
+          "Campaign Automations",
+          !scheduler || scheduler.error ? "offline" : schedulerMode === "OFF" ? "idle" : schedulerMode === "LIVE" ? "warning" : "online",
+          !scheduler || scheduler.error ? scheduler?.error || "Automation service is unavailable" : `${schedulerMode} · ${shiftLabel}`,
           "/campaign-todo",
         ),
         healthItem("watchdog", "Remote Watchdog", watchdogFresh ? "online" : "warning", watchdogFresh ? `${watchdog.deviceName || "This Mac"} · checked ${watchdogAgeSeconds}s ago` : "Optional protection is not installed or heartbeat is stale", "/remote-mamba"),

@@ -79,6 +79,7 @@
   .health-state i { width:8px; height:8px; border-radius:50%; background:var(--red); }
   .health-state.online i { background:var(--green); }
   .health-state.warning i { background:var(--amber); }
+  .health-state.idle i { background:var(--muted); }
   .quick-panel { margin-bottom:14px; }
   .quick-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
   .quick { display:flex; align-items:center; gap:11px; min-height:58px; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:var(--panel-2); color:var(--text); text-decoration:none; }
@@ -193,7 +194,7 @@ function renderScope(scope) {
 }
 
 function renderHealth(items, logs) {
-  const labels = { online:"Online", warning:"Warning", offline:"Offline" };
+  const labels = { online:"Online", warning:"Warning", offline:"Offline", idle:"Idle" };
   $("health").innerHTML = items.map((item) => {
     const state = item.state || (item.ok ? "online" : "offline");
     const tag = item.href ? "a" : "div";
