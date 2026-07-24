@@ -39,12 +39,12 @@
 | 02 | 户型 | Layout | Day 2 |
 | 03 | 地点 | Location | Day 4 |
 | 04 | 配套 | Package | Day 6 |
-| 05 | 家私清单 | Furnished List | 条件触发 |
-| 06 | 价格 | Price | Day 9 |
-| 07 | 设施 | Facilities | Day 12 |
-| 08 | 邀约 | Invitation | Day 15（收尾） |
-| 09 | 出租/投资 | Rental | 条件触发 |
-| 10 | 周边环境 | Surrounding | 条件触发 |
+| 05 | 家私清单 | Furnished List | Day 9 |
+| 06 | 价格 | Price | Day 12 |
+| 07 | 设施 | Facilities | Day 15 |
+| 08 | 邀约 | Invitation | Day 18 |
+| 09 | 出租/投资 | Rental | Day 21 |
+| 10 | 周边环境 | Surrounding | Day 24（收尾） |
 | 11–19 | 预留：房产扩展 | — | — |
 | 20+ | 预留：非房产产品线（如 CICI 回访序列） | — | — |
 
