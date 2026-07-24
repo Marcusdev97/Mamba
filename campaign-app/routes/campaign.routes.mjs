@@ -1,6 +1,7 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
 import { isCampaignResumeCandidate, isRecipientNotOnWhatsAppError, isResumableJobStatus } from "../campaign_core.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
+import { applyModeDelivery } from "../lib/campaign-mode-service.mjs";
 import {
   AUTO_SCHEDULE,
   FIXED_SCHEDULE,
@@ -243,9 +244,16 @@ async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error
   }).catch(() => {});
 }
 
-export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error") {
+export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error", { lane = false } = {}) {
   const campaign = requireCampaign(runtime);
-  campaign.setRunner(runner);
+  if (lane) {
+    // 车道模式：只登记进 registry（监控可见），不抢「当前 runner」、不镜像
+    // active-run.json、不触发 campaign 队列 —— 各条车道完全独立并行。
+    runner.mirrorActiveState = false;
+    campaign.registerLaneRunner?.(runner);
+  } else {
+    campaign.setRunner(runner);
+  }
   campaign.persistRunners?.().catch(() => {});
   (async () => {
     try {
@@ -289,13 +297,16 @@ export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent
       await runner.systemLog?.("error", errorEvent, "Campaign background run failed.", { error: error.message });
     } finally {
       await campaign.persistRunners?.().catch(() => {});
-      await startNextQueued(runtime).catch(async (error) => {
-        await campaign.queue.setHold(`启动下一批失败: ${error.message}`, runner.state?.runId).catch(() => {});
-        await writeCampaignLog(runtime, "error", "campaign_queue_start_failed", "Queued campaign failed to start.", {
-          runId: runner.state?.runId ?? null,
-          error: error.message,
+      // 车道不参与 campaign 队列（那是单线流程的排队机制）。
+      if (!lane) {
+        await startNextQueued(runtime).catch(async (error) => {
+          await campaign.queue.setHold(`启动下一批失败: ${error.message}`, runner.state?.runId).catch(() => {});
+          await writeCampaignLog(runtime, "error", "campaign_queue_start_failed", "Queued campaign failed to start.", {
+            runId: runner.state?.runId ?? null,
+            error: error.message,
+          });
         });
-      });
+      }
     }
   })();
 }
@@ -671,6 +682,93 @@ export function registerCampaignRoutes(router) {
       ok: true,
       ...(await runtime.campaignMode.snapshot(names)),
       message: `号码 ${String(body?.instance || "").trim()} 的发送模式已设为「${String(body?.mode || "")}」。`,
+    });
+  });
+
+  // 多号码并行：启动一条车道（单一号码 + 单一客户群 + 该号码的节奏），并发跑。
+  //
+  // 跟单线 /api/prepare 的差别：这里绑死一个号码、直接载入指定客户群、套上那个号码
+  // 的 mode 节奏，然后一步到位启动（不经过预览确认那一步）。引擎本来就允许不同号码
+  // 同时跑，所以三条车道各自独立、互不阻挡。
+  router.post("/api/campaign/lane/launch", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    const instanceName = String(body?.instance || "").trim();
+    const sendMode = body?.mode === "LIVE" ? "LIVE" : "TEST";
+    const paceKey = String(body?.pace || "normal").trim() || "normal";
+    if (!instanceName) throw httpError(400, "缺少号码，无法启动车道。", "LANE_INSTANCE_REQUIRED");
+
+    const { project, config } = await campaign.getProject(body.project);
+
+    // 这个号码必须是本机 OPEN 的。selectedOpenInstances 会验证并回带 owner 的完整物件。
+    const open = await campaign.openInstances();
+    if (!open.length) throw httpError(400, "没有 OPEN 的号码。请到 Settings 检查 Phone Health。", "NO_OPEN_INSTANCE");
+    const instances = selectedOpenInstances(open, [instanceName]);
+
+    // 名单：TEST 用测试收件人；LIVE 直接按 id 载入这条车道的客户群。
+    let leads;
+    let leadGroupId = "";
+    let leadGroupName = "";
+    if (sendMode === "TEST") {
+      leads = campaign.getTestLeads(body.testRecipients || undefined);
+      if (!leads.length) throw httpError(400, "TEST 模式请先填写测试收件人。", "TEST_RECIPIENTS_REQUIRED");
+    } else {
+      if (!body.optIn) throw httpError(400, "LIVE 发送前请先确认客户已 opt-in。", "LANE_OPT_IN_REQUIRED");
+      leadGroupId = String(body.leadGroupId || "").trim();
+      if (!leadGroupId) throw httpError(400, "这条车道还没选客户群。", "LANE_GROUP_REQUIRED");
+      const group = await campaign.readLeadGroup({ groupId: leadGroupId, projectCode: project.id });
+      leads = group?.leads || [];
+      if (!leads.length) throw httpError(400, "这个客户群没有可发送的客户。", "LANE_GROUP_EMPTY");
+      leadGroupName = group.name || "";
+    }
+
+    // 一个号码不能同时跑两批。
+    const conflict = conflictingRunner(campaign, [instanceName], null, { ignoreReadyPreviews: sendMode === "TEST" });
+    if (conflict) throw httpError(409, `号码 ${instanceName} 已经在跑另一批 Campaign：${conflict.state?.runId}`, "LANE_BUSY");
+
+    // 套上这个号码的节奏（crazy 20-30s / 普通 45-75s / 保守 90-150s）。
+    const lanedConfig = applyModeDelivery(config, paceKey);
+    const { startAt, endAt, scheduleMode } = resolveSchedule(campaign, lanedConfig, body, leads.length);
+
+    const runner = campaign.createRunner(lanedConfig);
+    runner.mirrorActiveState = false;   // 车道不镜像 active-run.json
+    try {
+      await runner.prepare({ mode: sendMode, startAt, endAt, scheduleMode, instances, leads, project: project.name });
+      runner.mirrorActiveState = false;   // prepare 会把它设回 true，这里再压掉
+      runner.state.projectId = project.id;
+      runner.state.deviceId = campaign.device?.id || "";
+      runner.state.deviceName = campaign.device?.name || "";
+      runner.state.campaignMode = paceKey;
+      runner.state.laneInstance = instanceName;
+      if (sendMode === "LIVE") { runner.state.leadGroupId = leadGroupId; runner.state.leadGroupName = leadGroupName; }
+    } catch (error) {
+      throw httpError(500, `准备车道失败: ${error.message}`);
+    }
+    try {
+      await campaign.applyNotionFlowTemplatesToState(runner.state, {
+        projectName: project.name, flow: campaign.firstFlowLabel, markFlowRun: false, credit: false,
+      });
+      runner.refreshAutoScheduleEstimate();
+      campaign.assertFirstConsoleRunUsesFlow1Only(runner.config, runner.state);
+    } catch (error) {
+      throw httpError(502, `套用 Flow 1 模板或安全检查失败: ${error.message}`);
+    }
+
+    markNotionSyncWaiting(runner);
+    const autoAdvance = markFlowAdvanceWaiting(runner);
+    runner.mirrorActiveState = false;
+    await runner.saveState();
+    runCampaignInBackground(runtime, runner, autoAdvance, "campaign_lane_error", { lane: true });
+
+    json(res, 200, {
+      ok: true,
+      runId: runner.state.runId,
+      instance: instanceName,
+      mode: sendMode,
+      pace: paceKey,
+      leadCount: leads.length,
+      leadGroupName,
+      snapshot: runner.snapshot(),
     });
   });
 

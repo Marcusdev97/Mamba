@@ -97,15 +97,13 @@
     </div>
   </div>
 
-  <div class="banner info" id="wipBanner">🚧 框架预览：车道、名单选择、模式都能看，但「开跑」还没接上真正的发送核心（下一步做）。</div>
-
   <div class="toolbar">
     <label class="fld" style="gap:4px"><span>项目</span>
       <select class="proj-sel" id="projectSel"></select>
     </label>
     <div class="spacer"></div>
     <button class="btn" id="refreshBtn">↻ 刷新号码/名单</button>
-    <button class="btn go" id="startAllBtn" disabled title="核心接上后可用">▶▶ 三条一起开跑</button>
+    <button class="btn go" id="startAllBtn">▶▶ 全部开跑</button>
   </div>
 
   <div class="lanes" id="lanes">
@@ -200,7 +198,7 @@ function renderLanes(instances) {
                 <button data-live="LIVE">LIVE</button>
               </div>
             </label>
-            <button class="btn go" data-act="start" disabled title="核心接上后可用">▶ 开跑</button>
+            <button class="btn go" data-act="start" disabled title="先选一个客户群">▶ 开跑</button>
           </div>
           <div class="lane-progress">
             <div class="prog-row">
@@ -226,15 +224,145 @@ function wireLanes() {
       b.addEventListener("click", () => {
         lane.querySelectorAll(".mode-seg button").forEach((x) => x.classList.remove("active"));
         b.classList.add("active");
+        updateStartEnabled(lane);
       });
     });
-    const start = lane.querySelector('[data-act="start"]');
     const group = lane.querySelector('[data-act="group"]');
-    // 选了客户群才亮起「开跑」——但核心还没接，先保持 disabled 并给提示。
-    group.addEventListener("change", () => {
-      start.title = group.value ? "核心接上后即可开跑这条车道" : "先选一个客户群";
-    });
+    group.addEventListener("change", () => updateStartEnabled(lane));
+    lane.querySelector('[data-act="start"]').addEventListener("click", () => launchLane(lane));
+    lane.querySelector('[data-act="stop"]').addEventListener("click", () => stopLane(lane));
+    updateStartEnabled(lane);
   });
+}
+
+// 「开跑」什么时候能按：TEST 随时可以；LIVE 要选了客户群。
+function laneSendMode(lane) {
+  return lane.querySelector('.mode-seg button.active')?.dataset.live === "LIVE" ? "LIVE" : "TEST";
+}
+function updateStartEnabled(lane) {
+  const start = lane.querySelector('[data-act="start"]');
+  const group = lane.querySelector('[data-act="group"]');
+  const live = laneSendMode(lane) === "LIVE";
+  const ready = !live || !!group.value;
+  start.disabled = !ready || lane.classList.contains("running");
+  start.title = ready ? "" : "LIVE 发送前先选一个客户群";
+}
+
+async function launchLane(lane) {
+  const instance = lane.dataset.instance;
+  const pace = lane.dataset.mode;
+  const sendMode = laneSendMode(lane);
+  const groupSel = lane.querySelector('[data-act="group"]');
+  const leadGroupId = groupSel.value;
+  const groupLabel = groupSel.options[groupSel.selectedIndex]?.textContent || "";
+
+  if (sendMode === "LIVE") {
+    if (!leadGroupId) { alert("先选一个客户群。"); return; }
+    // startAll 已经统一确认过就带 confirmed 旗标，避免每条 LIVE 都弹一次。
+    if (lane.dataset.confirmed !== "1") {
+      const ok = confirm(`确认用【${instance}】发送？\n\n客户群：${groupLabel}\n节奏：${paceOf(pace).label} ${paceOf(pace).pace}\n\n这是 LIVE，会真的发给客户。`);
+      if (!ok) return;
+    }
+  }
+
+  const start = lane.querySelector('[data-act="start"]');
+  start.disabled = true;
+  const prev = start.textContent;
+  start.textContent = "启动中…";
+  try {
+    const r = await fetch("/api/campaign/lane/launch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: currentProject, instance, pace, mode: sendMode,
+        leadGroupId: sendMode === "LIVE" ? leadGroupId : undefined,
+        optIn: sendMode === "LIVE" ? true : undefined,
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || "启动失败");
+    lane.dataset.runId = data.runId;
+    setLaneRunning(lane, data.leadCount);
+  } catch (error) {
+    alert(instance + " 启动失败：" + error.message);
+    start.disabled = false; start.textContent = prev;
+    updateStartEnabled(lane);
+  }
+}
+
+function setLaneRunning(lane, total) {
+  lane.classList.add("running");
+  const badge = lane.querySelector(".lane-state .badge");
+  badge.className = "badge running"; badge.textContent = "发送中";
+  lane.querySelector(".v-pending").textContent = total ?? 0;
+}
+
+async function stopLane(lane) {
+  const runId = lane.dataset.runId;
+  if (!runId) return;
+  if (!confirm(`停止 ${lane.dataset.instance} 这条车道？已经发出去的不受影响。`)) return;
+  try {
+    await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId }) });
+  } catch (error) { alert("停止失败：" + error.message); }
+}
+
+// 轮询所有 run，把进度回填到对应号码的车道。
+async function pollLanes() {
+  let runs = [];
+  try {
+    const data = await jget("/api/status");
+    runs = Array.isArray(data?.runs) ? data.runs : (data?.state ? [data] : []);
+  } catch { return; }
+  const byInstance = {};
+  for (const run of runs) {
+    const inst = run?.state?.laneInstance || (run?.state?.instances || [])[0]?.name;
+    if (inst) byInstance[inst] = run;
+  }
+  document.querySelectorAll(".lane").forEach((lane) => {
+    const run = byInstance[lane.dataset.instance];
+    if (!run) return;
+    const jobs = run.state?.assignments || [];
+    const reached = jobs.filter((j) => j.part1?.sentAt || j.part1?.messageId).length;
+    const failed = jobs.filter((j) => j.error).length;
+    const skipped = jobs.filter((j) => /^SKIPPED/.test(j.status || "")).length;
+    const pending = jobs.filter((j) => j.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(j.status || "")).length;
+    const total = jobs.length || 1;
+    const done = reached + failed + skipped;
+    lane.dataset.runId = run.state?.runId || lane.dataset.runId;
+    lane.querySelector(".v-reached").textContent = reached;
+    lane.querySelector(".v-pending").textContent = pending;
+    lane.querySelector(".v-skipped").textContent = skipped;
+    lane.querySelector(".v-failed").textContent = failed;
+    lane.querySelector(".v-bar").style.width = Math.round(done / total * 100) + "%";
+    const badge = lane.querySelector(".lane-state .badge");
+    const status = run.state?.status;
+    if (run.running) {
+      lane.classList.add("running"); lane.classList.remove("done", "stopped");
+      badge.className = "badge running"; badge.textContent = "发送中";
+    } else if (status === "COMPLETED") {
+      lane.classList.remove("running"); lane.classList.add("done");
+      badge.className = "badge done"; badge.textContent = "已完成";
+      updateStartEnabled(lane);
+    } else if (["STOPPED", "INTERRUPTED"].includes(status)) {
+      lane.classList.remove("running"); lane.classList.add("stopped");
+      badge.className = "badge stopped"; badge.textContent = "已停止";
+      updateStartEnabled(lane);
+    }
+  });
+}
+
+async function startAll() {
+  const lanes = [...document.querySelectorAll(".lane")].filter((l) => !l.classList.contains("running"));
+  const live = lanes.filter((l) => laneSendMode(l) === "LIVE" && l.querySelector('[data-act="group"]').value);
+  const test = lanes.filter((l) => laneSendMode(l) === "TEST");
+  const runnable = [...live, ...test];
+  if (!runnable.length) { alert("没有可开跑的车道（LIVE 要先选客户群）。"); return; }
+  if (live.length && !confirm(`确认一次开跑 ${live.length} 条 LIVE 车道？会真的发给客户。`)) return;
+  for (const lane of runnable) {
+    // LIVE 已在上面确认过，这里逐条启动时跳过单条确认。
+    if (laneSendMode(lane) === "LIVE") lane.dataset.confirmed = "1";
+    await launchLane(lane);
+    delete lane.dataset.confirmed;
+  }
 }
 
 function escapeHtml(v) {
@@ -253,7 +381,10 @@ async function boot() {
   await loadProjects();
   $("projectSel").addEventListener("change", async (e) => { currentProject = e.target.value; await refreshAll(); });
   $("refreshBtn").addEventListener("click", refreshAll);
+  $("startAllBtn").addEventListener("click", startAll);
   await refreshAll();
+  pollLanes();
+  setInterval(pollLanes, 3000);
 }
 boot();
 </script>
