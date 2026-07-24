@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>聊天室 · Mamba</title>
+<style>
+  :root {
+    --bg:#0b1220; --panel:#0f172a; --panel-2:#1e293b; --panel-3:#172033;
+    --line:#1f2a3d; --text:#e2e8f0; --muted:#94a3b8; --dim:#64748b;
+    --blue:#38bdf8; --green:#2dd36f; --in:#1e293b; --out:#134e33;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text);
+    font-family:-apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif; font-size:14px;
+    display:flex; flex-direction:column; }
+  .head { padding:14px 18px 0; }
+  .head h1 { margin:0; font-size:18px; }
+  .head .sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  .tabs { display:flex; gap:8px; padding:12px 18px 0; flex-wrap:wrap; }
+  .tab { padding:8px 15px; border-radius:10px 10px 0 0; border:1px solid var(--line); border-bottom:0;
+    background:transparent; color:var(--muted); cursor:pointer; font-weight:700; font-size:13.5px; font-family:inherit; }
+  .tab.active { background:var(--panel); color:var(--text); }
+  .tab .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--green); margin-right:6px; vertical-align:1px; }
+  .tab .cnt { color:var(--dim); font-weight:600; margin-left:5px; }
+
+  .layout { flex:1; display:grid; grid-template-columns:320px 1fr; min-height:0;
+    border-top:1px solid var(--line); }
+  .list { border-right:1px solid var(--line); overflow-y:auto; background:var(--panel); }
+  .list-search { position:sticky; top:0; padding:10px; background:var(--panel); border-bottom:1px solid var(--line); }
+  .list-search input { width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line);
+    border-radius:9px; padding:9px 11px; font-size:13px; font-family:inherit; }
+  .row { display:grid; grid-template-columns:1fr auto; gap:6px; padding:11px 13px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .row:hover { background:var(--panel-2); }
+  .row.active { background:var(--panel-3); border-left:3px solid var(--blue); padding-left:10px; }
+  .row .name { font-weight:700; font-size:13.5px; }
+  .row .phone { color:var(--dim); font-size:11px; margin-top:1px; }
+  .row .preview { color:var(--muted); font-size:12px; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
+  .row .preview .me { color:var(--dim); }
+  .row .meta { text-align:right; color:var(--dim); font-size:11px; white-space:nowrap; }
+  .row .rc { display:inline-block; margin-top:4px; background:#0c2a3d; color:var(--blue); border-radius:999px; padding:1px 7px; font-size:10.5px; font-weight:700; }
+  .list-empty { padding:30px 16px; text-align:center; color:var(--dim); font-size:13px; line-height:1.6; }
+
+  .thread { display:flex; flex-direction:column; min-height:0; background:var(--bg); }
+  .thread-head { padding:13px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .thread-head .t-name { font-weight:800; font-size:15px; }
+  .thread-head .t-sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .msgs { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:9px; }
+  .msg { max-width:72%; padding:9px 13px; border-radius:12px; font-size:13.5px; line-height:1.5; word-wrap:break-word; white-space:pre-wrap; }
+  .msg.in { align-self:flex-start; background:var(--in); border-bottom-left-radius:4px; }
+  .msg.out { align-self:flex-end; background:var(--out); border-bottom-right-radius:4px; }
+  .msg .m-meta { display:block; margin-top:5px; font-size:10.5px; color:var(--dim); }
+  .msg.out .m-meta { text-align:right; }
+  .day-sep { align-self:center; color:var(--dim); font-size:11px; background:var(--panel-2); padding:3px 11px; border-radius:999px; margin:6px 0; }
+  .thread-empty { flex:1; display:grid; place-items:center; color:var(--dim); font-size:14px; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>💬 聊天室</h1>
+    <div class="sub">按连接的号码分开。只显示回复过的客户，STOP 的不会出现。客户讲的和我们发的都在。</div>
+  </div>
+  <div class="tabs" id="tabs"><span class="list-empty">读取号码中…</span></div>
+  <div class="layout">
+    <div class="list" id="list"><div class="list-empty">选一个号码…</div></div>
+    <div class="thread" id="thread"><div class="thread-empty">在左边选一个客户查看完整对话。</div></div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let numbers = [];
+let currentInstance = "";
+let threads = [];
+let currentPhone = "";
+let searchText = "";
+
+async function jget(u) { const r = await fetch(u, { cache:"no-store" }); return r.json(); }
+function esc(v){ return String(v ?? "").replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function relTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return d.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", hour12:false });
+  const days = Math.round((now - d) / 86400000);
+  if (days === 1) return "昨天";
+  if (days < 7) return days + " 天前";
+  return d.toLocaleDateString([], { month:"2-digit", day:"2-digit" });
+}
+
+async function loadNumbers() {
+  const data = await jget("/api/inbox/numbers").catch(() => ({ numbers: [] }));
+  numbers = data.numbers || [];
+  if (!numbers.length) {
+    $("tabs").innerHTML = '<span class="list-empty">没有连接中的号码。到 Settings 扫码连接后回来。</span>';
+    return;
+  }
+  currentInstance = numbers[0].instance;
+  renderTabs();
+  await loadThreads();
+}
+
+function renderTabs() {
+  $("tabs").innerHTML = numbers.map((n) => `
+    <button class="tab ${n.instance === currentInstance ? "active" : ""}" data-inst="${esc(n.instance)}">
+      <span class="dot"></span>${esc(n.instance)}
+      <span class="cnt" data-cnt="${esc(n.instance)}"></span>
+    </button>`).join("");
+  document.querySelectorAll("#tabs .tab").forEach((t) => {
+    t.addEventListener("click", async () => {
+      currentInstance = t.dataset.inst; currentPhone = "";
+      renderTabs(); renderThreadEmpty(); await loadThreads();
+    });
+  });
+}
+
+async function loadThreads() {
+  $("list").innerHTML = '<div class="list-empty">读取中…</div>';
+  const data = await jget("/api/inbox/threads?instance=" + encodeURIComponent(currentInstance)).catch(() => ({ threads: [] }));
+  threads = data.threads || [];
+  const cnt = document.querySelector(`[data-cnt="${CSS.escape(currentInstance)}"]`);
+  if (cnt) cnt.textContent = threads.length ? threads.length : "";
+  renderList();
+}
+
+function renderList() {
+  const q = searchText.trim().toLowerCase();
+  const shown = q ? threads.filter((t) => (t.name || "").toLowerCase().includes(q) || (t.phone || "").includes(q)) : threads;
+  const search = `<div class="list-search"><input id="listSearch" type="search" placeholder="搜索客户名字或号码" value="${esc(searchText)}"></div>`;
+  if (!shown.length) {
+    $("list").innerHTML = search + `<div class="list-empty">${threads.length ? "没有符合的客户。" : "这个号码底下还没有回复过的客户。"}</div>`;
+  } else {
+    $("list").innerHTML = search + shown.map((t) => `
+      <div class="row ${t.phone === currentPhone ? "active" : ""}" data-phone="${esc(t.phone)}">
+        <div>
+          <div class="name">${esc(t.name || t.phone)}</div>
+          <div class="phone">${esc(t.phone)}</div>
+          <div class="preview">${t.lastDirection === "outbound" ? '<span class="me">我方: </span>' : ""}${esc((t.lastText || "").replace(/\s+/g, " ").slice(0, 40))}</div>
+        </div>
+        <div class="meta">${relTime(t.lastAt)}<br><span class="rc">${t.replyCount} 回复</span></div>
+      </div>`).join("");
+  }
+  const si = $("listSearch");
+  if (si) si.addEventListener("input", (e) => { searchText = e.target.value; const p = si.selectionStart; renderList(); const n = $("listSearch"); if (n) { n.focus(); n.setSelectionRange(p, p); } });
+  document.querySelectorAll("#list .row").forEach((r) => r.addEventListener("click", () => openThread(r.dataset.phone)));
+}
+
+function renderThreadEmpty() {
+  $("thread").innerHTML = '<div class="thread-empty">在左边选一个客户查看完整对话。</div>';
+}
+
+async function openThread(phone) {
+  currentPhone = phone;
+  document.querySelectorAll("#list .row").forEach((r) => r.classList.toggle("active", r.dataset.phone === phone));
+  $("thread").innerHTML = '<div class="thread-empty">读取对话中…</div>';
+  const data = await jget("/api/inbox/thread?phone=" + encodeURIComponent(phone)).catch(() => null);
+  if (!data || !data.ok) { $("thread").innerHTML = '<div class="thread-empty">读取失败。</div>'; return; }
+  renderThread(data.contact, data.messages || []);
+}
+
+function renderThread(contact, messages) {
+  let lastDay = "";
+  const bubbles = [];
+  for (const m of messages) {
+    const d = new Date(m.sentAt);
+    const day = d.toLocaleDateString([], { year:"numeric", month:"2-digit", day:"2-digit" });
+    if (day !== lastDay) { bubbles.push(`<div class="day-sep">${day}</div>`); lastDay = day; }
+    const side = m.direction === "inbound" ? "in" : "out";
+    const who = m.direction === "inbound" ? "" : (m.source === "brain" ? "AI · " : "群发 · ");
+    const time = d.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", hour12:false });
+    bubbles.push(`<div class="msg ${side}">${esc(m.text || "")}<span class="m-meta">${who}${time}${m.flowTopic && m.direction === "outbound" ? " · " + esc(m.flowTopic) : ""}</span></div>`);
+  }
+  $("thread").innerHTML = `
+    <div class="thread-head">
+      <div class="t-name">${esc(contact.name || contact.phone)}</div>
+      <div class="t-sub">${esc(contact.phone)} · ${contact.replyCount} 次回复${contact.stopFlag ? " · ⛔ 已 STOP" : ""}</div>
+    </div>
+    <div class="msgs" id="msgs">${bubbles.join("") || '<div class="thread-empty">没有讯息。</div>'}</div>`;
+  const m = $("msgs"); if (m) m.scrollTop = m.scrollHeight;
+}
+
+loadNumbers();
+setInterval(async () => { if (currentInstance) { await loadThreads(); if (currentPhone) await openThread(currentPhone); } }, 15000);
+</script>
+</body>
+</html>

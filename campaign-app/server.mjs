@@ -528,6 +528,12 @@ const runtime = await loadRuntime({
     },
     persistRunners: () => campaignRunnerRegistry.persist(),
     getLeadsCache: () => leadsCache,
+    // 多号码并行：直接按 id 载入某个客户群的名单（不经过「当前客户群」缓存，
+    // 因为 3 条车道 3 个群，不可能都是缓存里那一个）。
+    readLeadGroup: (options) => localDatabaseService.readLeadGroup(options),
+    // 把车道 runner 登记进 registry 让监控看得到，但**不**设成「当前 runner」、
+    // 不镜像 active-run.json —— 多条车道各写各的 run 档，绝不互相覆盖。
+    registerLaneRunner: (value) => campaignRunnerRegistry.register(value, { latest: false }),
     getProject,
     openInstances: deviceOpenInstances,
     resolveTime,
@@ -605,6 +611,7 @@ const runtime = await loadRuntime({
 // 每位客户完成时先把 Flow + 这笔待办一起 commit 到 SQLite。Notion 不阻塞
 // WhatsApp 发送，只在晚上 22:00 或人工按「立即同步」时处理。
 runtime.campaignMode = campaignModeService;
+runtime.conversationLog = conversationLog;
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
 runtime.notionOutboxWorker = createNotionOutboxWorker({
   outbox: runtime.notionOutbox,

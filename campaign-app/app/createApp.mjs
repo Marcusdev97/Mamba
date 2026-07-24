@@ -3,6 +3,7 @@ import { registerBotRulesRoutes } from "../routes/bot-rules.routes.mjs";
 import { registerBrainLearningRoutes } from "../routes/brain-learning.routes.mjs";
 import { registerCampaignRoutes } from "../routes/campaign.routes.mjs";
 import { registerConversationsRoutes } from "../routes/conversations.routes.mjs";
+import { registerInboxRoutes } from "../routes/inbox.routes.mjs";
 import { registerControlCenterRoutes } from "../routes/control-center.routes.mjs";
 import { registerDailyCampaignRoutes } from "../routes/daily-campaign.routes.mjs";
 import { registerFollowUpRoutes } from "../routes/follow-up.routes.mjs";
@@ -39,6 +40,7 @@ export function createApp(runtime) {
   registerCampaignRoutes(router);
   registerNextFlowRoutes(router);
   registerConversationsRoutes(router);
+  registerInboxRoutes(router);
   registerFollowUpRoutes(router);
   registerGoldenConversationRoutes(router);
   registerSystemLogsRoutes(router);

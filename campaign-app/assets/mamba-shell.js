@@ -7,6 +7,7 @@
     ] },
     { title: "Customers", links: [
       { code: "IN", label: "Customer Inbox", href: "/conversations", paths: ["/conversations"] },
+      { code: "CR", label: "聊天室", href: "/inbox", paths: ["/inbox"] },
       { code: "FU", label: "Follow-up & Appointments", href: "/follow-up", paths: ["/follow-up"] },
       { code: "CS", label: "Customer Search", href: "/lookup", paths: ["/lookup"] },
     ] },

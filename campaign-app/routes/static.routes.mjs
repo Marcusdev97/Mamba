@@ -5,6 +5,7 @@ import { json, text } from "../lib/http.mjs";
 const HTML_ROUTES = {
   "/flow-1": "console.html",
   "/lanes": "lanes.html",
+  "/inbox": "inbox.html",
   "/control-center": "control-center.html",
   "/next-flow": "next-flow.html",
   "/templates": "templates.html",

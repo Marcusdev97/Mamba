@@ -414,6 +414,70 @@ GROUP BY v.contact_key;`);
     return new Map(rows.map((row) => [row.contactKey, { sentAt: row.sentAt, times: row.times }]));
   }
 
+  // 聊天室的客户列表：某个号码底下、有回复过、而且没被 STOP 的客户。
+  // 每个带最后一条讯息预览，按最近活动排序 —— 越新的排越前面。
+  async function inboxThreads({ instance = "", limit = 200 } = {}) {
+    const database = await cli();
+    const conditions = [
+      "c.reply_count > 0",       // 只要回复过的
+      "c.stop_flag = 0",         // STOP 的不进聊天室
+    ];
+    // 号码归属来自讯息 payload 里的 instanceName（每条讯息记着走哪个号码发/收）。
+    // connection_key 那条路在旧资料里是空的，靠不住 —— payload 才是可靠来源。
+    const inst = clean(instance);
+    const instanceFilter = inst
+      ? `AND EXISTS (
+          SELECT 1 FROM messages im
+          JOIN conversations iv ON iv.id = im.conversation_id
+          WHERE iv.contact_key = c.contact_key
+            AND json_extract(im.payload_json, '$.instanceName') = ${sqlValue(inst)})`
+      : "";
+    const rows = await database.query(`
+SELECT
+  c.contact_key AS phone,
+  c.display_name AS name,
+  c.reply_count AS replyCount,
+  c.last_reply_at AS lastReplyAt,
+  (SELECT m.text FROM messages m
+   JOIN conversations vv ON vv.id = m.conversation_id
+   WHERE vv.contact_key = c.contact_key
+   ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS lastText,
+  (SELECT m.direction FROM messages m
+   JOIN conversations vv ON vv.id = m.conversation_id
+   WHERE vv.contact_key = c.contact_key
+   ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS lastDirection,
+  (SELECT MAX(m.sent_at) FROM messages m
+   JOIN conversations vv ON vv.id = m.conversation_id
+   WHERE vv.contact_key = c.contact_key) AS lastAt
+FROM contacts c
+WHERE EXISTS (SELECT 1 FROM conversations v WHERE v.contact_key = c.contact_key)
+  AND ${conditions.join(" AND ")}
+  ${instanceFilter}
+ORDER BY lastAt DESC
+LIMIT ${Math.max(1, Math.min(Number(limit) || 200, 1000))};`);
+    return rows;
+  }
+
+  // 一整段对话（由旧到新），聊天室点开一个客户时用。
+  async function fullThread(phone, { limit = 500 } = {}) {
+    const contactKey = digits(phone);
+    if (!contactKey) return { contact: null, messages: [] };
+    const database = await cli();
+    const contactRows = await database.query(`
+SELECT contact_key AS phone, display_name AS name, reply_count AS replyCount,
+       stop_flag AS stopFlag, last_reply_at AS lastReplyAt
+FROM contacts WHERE contact_key = ${sqlValue(contactKey)} LIMIT 1;`);
+    const rows = await database.query(`
+SELECT m.direction AS direction, m.text AS text, m.sent_at AS sentAt,
+       m.source AS source, m.flow_topic AS flowTopic, m.payload_json AS payloadJson
+FROM messages m
+JOIN conversations v ON v.id = m.conversation_id
+WHERE v.contact_key = ${sqlValue(contactKey)}
+ORDER BY m.sent_at ASC, m.id ASC
+LIMIT ${Math.max(1, Math.min(Number(limit) || 500, 2000))};`);
+    return { contact: contactRows?.[0] ?? { phone: contactKey, name: "", replyCount: 0, stopFlag: 0 }, messages: rows };
+  }
+
   async function stats() {
     const database = await cli();
     const rows = await database.query(`
@@ -435,6 +499,8 @@ SELECT
     recordOutbounds,
     recentThread,
     sentFlowSince,
+    inboxThreads,
+    fullThread,
     isKnownLead,
     stats,
   };
