@@ -44,3 +44,6 @@ campaign-assets/images/39858de2161381eda1c4f2f8f28003c4_Fast_Pace_Enlace.MP4
 
 # ─── Market Dashboard 机密(Property 213 token,会过期,绝不提交)───
 campaign-app/market-dashboard.secret.js
+.~lock.*
+*_Backup_*.json
+*.bak-*
