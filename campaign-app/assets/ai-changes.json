@@ -1,7 +1,152 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-23T21:00:00+08:00",
+  "updatedAt": "2026-07-25T22:00:00+08:00",
   "changes": [
+    {
+      "id": "chat-room-inbox",
+      "date": "2026-07-25",
+      "title": "聊天室：看客户对话",
+      "summary": "新增聊天室（侧栏 Customer 区）。按连接的号码分 tab，只显示有回复、非 STOP 的客户，客户讲的和我们发的交错显示。",
+      "types": [
+        "UI",
+        "Structure"
+      ],
+      "commit": "dd91473",
+      "before": {
+        "label": "以前",
+        "text": "客户回复只存在本机档案里，一行行看。要看某个客户跟我们聊了什么，没有地方看 —— 只有 Notion 的 lead 状态板，显示状态不显示对话内容。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "聊天室像 WhatsApp 一样：左边客户列表、右边完整对话，绿色是我们发的、灰色是客户讲的，按号码分 tab。"
+      },
+      "files": [
+        "campaign-app/inbox.html",
+        "campaign-app/routes/inbox.routes.mjs",
+        "campaign-app/lib/conversation-log-service.mjs"
+      ]
+    },
+    {
+      "id": "chat-room-interactive",
+      "date": "2026-07-25",
+      "title": "聊天室能回复、发图、看客户照片",
+      "summary": "聊天室从「只能看」变成「能互动」：打字回复、发照片给客户、点开客户发来的照片。",
+      "types": [
+        "UI",
+        "Logic"
+      ],
+      "commit": "21b6cb8",
+      "before": {
+        "label": "以前",
+        "text": "聊天室只能看，不能操作。要回客户还是得开 WhatsApp。客户发来的照片只显示「[image]」，看不到实际图片。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "底部有输入框和 📎 按钮：打字 Enter 回复、附照片发给客户、点「客户发来的图片」按需从 Evolution 抓真图来看。手动发的不受 AI 自动回复开关影响；STOP 的客户不显示输入框，避免误发。"
+      },
+      "files": [
+        "campaign-app/inbox.html",
+        "campaign-app/lib/inbox-send-service.mjs",
+        "campaign-app/routes/inbox.routes.mjs"
+      ]
+    },
+    {
+      "id": "capture-phone-replies",
+      "date": "2026-07-25",
+      "title": "手机打的回复也进聊天室了",
+      "summary": "你从手机 WhatsApp 打的回复、以及非名单客户的回复，现在都会进聊天室。只显示「有来有回」的对话。",
+      "types": [
+        "Logic",
+        "Data"
+      ],
+      "commit": "a1c2c5d",
+      "before": {
+        "label": "以前",
+        "text": "从手机 App 打的回复被系统忽略（当成 fromMe 过滤掉），聊天室看不到你自己回了什么，对话看起来是单边的。不在 blast 名单的客户回复也被跳过。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "手机打的回复也会记进聊天室（标「我方·手机」），非名单客户的回复也记。聊天室只列「有来有回」的对话，单向的陌生号、私人冷发不显示。另外修掉了聊天室每 15 秒整个重画的问题 —— 现在只在真的有新讯息时才更新，打字打到一半不会被清掉。"
+      },
+      "files": [
+        "campaign-app/blaster_tracker.mjs",
+        "campaign-app/lib/conversation-log-service.mjs",
+        "campaign-app/inbox.html"
+      ]
+    },
+    {
+      "id": "evolution-history-sync",
+      "date": "2026-07-25",
+      "title": "一键同步 WhatsApp 完整历史",
+      "summary": "Settings 加「一键同步历史」按钮：觉得聊天室不全时按一下，把 Evolution 的完整历史拉进本机 SQL。",
+      "types": [
+        "UI",
+        "Data"
+      ],
+      "commit": "4055513",
+      "before": {
+        "label": "以前",
+        "text": "聊天室只从某个时间点开始记，之前的历史对话（尤其手机上打的回复）不在数据库里，对话看起来空空的、单边的，没有办法补回来。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "Settings → Local Database → 「一键同步历史」，把 Evolution 存的完整 WhatsApp 历史（两三万条）拉进本机 SQL。背景跑几分钟、实时显示进度，只导入有来有回的客户对话。幂等 —— 随时可以再按补新的，不会写重复。"
+      },
+      "files": [
+        "campaign-app/settings.html",
+        "campaign-app/lib/evolution-history-sync.mjs",
+        "campaign-app/routes/inbox.routes.mjs",
+        "campaign-app/server.mjs"
+      ]
+    },
+    {
+      "id": "kimi-provider",
+      "date": "2026-07-23",
+      "title": "Sales Brain 支援 Kimi (Moonshot)",
+      "summary": "Sales Brain 起草多一个选择：Kimi (Moonshot)，跟 Anthropic / OpenAI / Gemini 并列。",
+      "types": [
+        "Logic"
+      ],
+      "commit": "ca58725",
+      "before": {
+        "label": "以前",
+        "text": "AI 起草只能选 Anthropic、OpenAI、Gemini 三家。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "Settings 多一张 Kimi 卡片，可以填 Key、选型号（K2.6 日常 / K3 复杂）、测试。Auto 模式的备援链也加了 Kimi。这是付费云端 API，不是本机跑的模型，也不会自动开启自动回复。"
+      },
+      "files": [
+        "campaign-app/brain_service.mjs",
+        "campaign-app/brain_core.mjs",
+        "campaign-app/routes/settings.routes.mjs",
+        "campaign-app/settings.html"
+      ]
+    },
+    {
+      "id": "parallel-lanes-launch",
+      "date": "2026-07-24",
+      "title": "多号码并行：真的能开跑了",
+      "summary": "「多号码并行」的「开跑」接上发送核心：一个号码一条车道，各自选客户群和节奏，同时跑。",
+      "types": [
+        "Logic",
+        "Structure"
+      ],
+      "commit": "a4bffba",
+      "before": {
+        "label": "以前",
+        "text": "多号码并行页面只是框架，「开跑」按钮是空的，点了没反应。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "每条车道绑一个号码 + 一个客户群 + 那个号码的节奏，并发跑。一个号码不能同时开两批（会拒绝）；LIVE 要确认；三条车道各写各的进度，不会互相覆盖。"
+      },
+      "files": [
+        "campaign-app/routes/campaign.routes.mjs",
+        "campaign-app/lanes.html",
+        "campaign-app/server.mjs"
+      ]
+    },
     {
       "id": "per-number-send-modes",
       "date": "2026-07-23",
