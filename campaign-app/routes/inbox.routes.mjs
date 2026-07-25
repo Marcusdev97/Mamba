@@ -76,6 +76,24 @@ export function registerInboxRoutes(router) {
     json(res, 200, { ok: true, ...result });
   });
 
+  // ---------- 一键从 Evolution 同步完整历史进 SQL ----------
+  //
+  // 觉得聊天室数据不全时按一下。要几分钟（拉两三万条历史），所以在背景跑，
+  // 前端轮询进度。幂等，重复跑安全。
+
+  router.post("/api/inbox/sync-history", async (req, res, runtime) => {
+    if (!runtime.historySync) throw httpError(503, "历史同步功能尚未启用。请重启 Mamba。", "HISTORY_SYNC_UNAVAILABLE");
+    const state = runtime.historySync.state();
+    if (state.running) { json(res, 200, { ok: true, alreadyRunning: true, ...state }); return; }
+    runtime.historySync.start();   // 不 await —— 背景跑
+    json(res, 200, { ok: true, started: true, ...runtime.historySync.state() });
+  });
+
+  router.get("/api/inbox/sync-history/status", async (_req, res, runtime) => {
+    if (!runtime.historySync) throw httpError(503, "历史同步功能尚未启用。", "HISTORY_SYNC_UNAVAILABLE");
+    json(res, 200, { ok: true, ...runtime.historySync.state() });
+  });
+
   // 按需抓客户发来的一张图。找不到就回 available:false，前端显示占位。
   router.get("/api/inbox/media", async (req, res, runtime) => {
     const send = requireSend(runtime);

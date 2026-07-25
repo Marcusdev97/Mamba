@@ -14,6 +14,7 @@ import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createInboxSendService } from "./lib/inbox-send-service.mjs";
+import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
@@ -614,6 +615,23 @@ const runtime = await loadRuntime({
 runtime.campaignMode = campaignModeService;
 runtime.conversationLog = conversationLog;
 runtime.inboxSend = createInboxSendService({ api, dataDir: paths.dataDir, conversationLog });
+
+// 「一键同步 Evolution 历史」的背景任务。要几分钟，所以记状态让前端轮询进度。
+{
+  const historySync = createEvolutionHistorySync({ api, conversationLog, listInstances: deviceListInstances });
+  let job = { running: false, startedAt: null, finishedAt: null, progress: null, result: null, error: "" };
+  runtime.historySync = {
+    state: () => ({ ...job }),
+    start() {
+      if (job.running) return;
+      job = { running: true, startedAt: new Date().toISOString(), finishedAt: null, progress: null, result: null, error: "" };
+      historySync.syncAll({ onProgress: (p) => { job.progress = p; } })
+        .then((result) => { job.result = result; })
+        .catch((error) => { job.error = error.message; })
+        .finally(() => { job.running = false; job.finishedAt = new Date().toISOString(); });
+    },
+  };
+}
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
 runtime.notionOutboxWorker = createNotionOutboxWorker({
   outbox: runtime.notionOutbox,
