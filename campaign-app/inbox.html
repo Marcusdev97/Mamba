@@ -31,6 +31,13 @@
   .list-search { position:sticky; top:0; padding:10px; background:var(--panel); border-bottom:1px solid var(--line); }
   .list-search input { width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line);
     border-radius:9px; padding:9px 11px; font-size:13px; font-family:inherit; }
+  .list-filters { display:flex; gap:6px; margin-top:8px; }
+  .list-filters .lf { flex:1; padding:6px 9px; border-radius:8px; border:1px solid var(--line); background:transparent;
+    color:var(--muted); font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .list-filters .lf.on { background:var(--panel-3); color:var(--text); border-color:#38bdf8; }
+  .pend-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#f59e0b; margin-left:7px; vertical-align:1px; }
+  .row.pending { border-left:3px solid #f59e0b; padding-left:10px; }
+  .row.pending.active { border-left-color:var(--blue); }
   .row { display:grid; grid-template-columns:1fr auto; gap:6px; padding:11px 13px; border-bottom:1px solid var(--line); cursor:pointer; }
   .row:hover { background:var(--panel-2); }
   .row.active { background:var(--panel-3); border-left:3px solid var(--blue); padding-left:10px; }
@@ -93,6 +100,7 @@ let currentInstance = "";
 let threads = [];
 let currentPhone = "";
 let searchText = "";
+let listFilter = "all";   // all = 全部回复过 / pending = 待跟进（客户说了最后一句）
 
 async function jget(u) { const r = await fetch(u, { cache:"no-store" }); return r.json(); }
 function esc(v){ return String(v ?? "").replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -139,11 +147,11 @@ let threadsSig = "";       // 上次画出来的客户列表签名，一样就�
 async function loadThreads({ silent = false } = {}) {
   // 静默刷新（轮询）不显示「读取中」，也不在没变化时动 DOM —— 否则每 15 秒闪一次。
   if (!silent) { $("list").innerHTML = '<div class="list-empty">读取中…</div>'; threadsSig = ""; }
-  const data = await jget("/api/inbox/threads?instance=" + encodeURIComponent(currentInstance)).catch(() => ({ threads: [] }));
+  const data = await jget(`/api/inbox/threads?instance=${encodeURIComponent(currentInstance)}&filter=${listFilter}`).catch(() => ({ threads: [] }));
   threads = data.threads || [];
   const cnt = document.querySelector(`[data-cnt="${CSS.escape(currentInstance)}"]`);
   if (cnt) cnt.textContent = threads.length ? threads.length : "";
-  const sig = threads.map((t) => `${t.phone}:${t.lastAt}:${t.replyCount}`).join("|") + "::" + searchText;
+  const sig = listFilter + "|" + threads.map((t) => `${t.phone}:${t.lastAt}:${t.replyCount}`).join("|") + "::" + searchText;
   if (silent && sig === threadsSig) return;   // 没有新变化，别碰列表
   // 正在搜索框里打字时别重画，免得抢走焦点。
   if (silent && document.activeElement === $("listSearch")) return;
@@ -154,22 +162,37 @@ async function loadThreads({ silent = false } = {}) {
 function renderList() {
   const q = searchText.trim().toLowerCase();
   const shown = q ? threads.filter((t) => (t.name || "").toLowerCase().includes(q) || (t.phone || "").includes(q)) : threads;
-  const search = `<div class="list-search"><input id="listSearch" type="search" placeholder="搜索客户名字或号码" value="${esc(searchText)}"></div>`;
+  const search = `
+    <div class="list-search">
+      <input id="listSearch" type="search" placeholder="搜索客户名字或号码" value="${esc(searchText)}">
+      <div class="list-filters">
+        <button class="lf ${listFilter === "all" ? "on" : ""}" data-filter="all">全部回复</button>
+        <button class="lf ${listFilter === "pending" ? "on" : ""}" data-filter="pending">待跟进</button>
+      </div>
+    </div>`;
   if (!shown.length) {
-    $("list").innerHTML = search + `<div class="list-empty">${threads.length ? "没有符合的客户。" : "这个号码底下还没有回复过的客户。"}</div>`;
+    $("list").innerHTML = search + `<div class="list-empty">${listFilter === "pending" ? "没有待跟进的客户 —— 都回过了 👍" : threads.length ? "没有符合的客户。" : "这个号码底下还没有回复过的客户。"}</div>`;
   } else {
-    $("list").innerHTML = search + shown.map((t) => `
-      <div class="row ${t.phone === currentPhone ? "active" : ""}" data-phone="${esc(t.phone)}">
+    $("list").innerHTML = search + shown.map((t) => {
+      const pending = t.lastDirection === "inbound";   // 客户说了最后一句 = 等你回
+      return `
+      <div class="row ${t.phone === currentPhone ? "active" : ""} ${pending ? "pending" : ""}" data-phone="${esc(t.phone)}">
         <div>
-          <div class="name">${esc(t.name || t.phone)}</div>
+          <div class="name">${esc(t.name || t.phone)}${pending ? '<span class="pend-dot" title="等你回复"></span>' : ""}</div>
           <div class="phone">${esc(t.phone)}</div>
           <div class="preview">${t.lastDirection === "outbound" ? '<span class="me">我方: </span>' : ""}${esc((t.lastText || "").replace(/\s+/g, " ").slice(0, 40))}</div>
         </div>
         <div class="meta">${relTime(t.lastAt)}<br><span class="rc">${t.replyCount} 回复</span></div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   }
   const si = $("listSearch");
   if (si) si.addEventListener("input", (e) => { searchText = e.target.value; const p = si.selectionStart; renderList(); const n = $("listSearch"); if (n) { n.focus(); n.setSelectionRange(p, p); } });
+  document.querySelectorAll(".list-filters .lf").forEach((b) => b.addEventListener("click", () => {
+    if (listFilter === b.dataset.filter) return;
+    listFilter = b.dataset.filter; threadsSig = "";
+    loadThreads();
+  }));
   document.querySelectorAll("#list .row").forEach((r) => r.addEventListener("click", () => openThread(r.dataset.phone)));
 }
 

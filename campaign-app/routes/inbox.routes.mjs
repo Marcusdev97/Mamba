@@ -31,12 +31,13 @@ export function registerInboxRoutes(router) {
     const inbox = requireInbox(runtime);
     const url = new URL(req.url, "http://mamba.local");
     const instance = url.searchParams.get("instance") || "";
+    const filter = url.searchParams.get("filter") === "pending" ? "pending" : "all";
     // STOP 有两个来源：contacts.stop_flag（服务层已排）+ 全域抑制名单（这里排）。
     // 抑制名单才是真正会挡发送的那份，聊天室也不该显示。
     const { set: suppressed } = loadSuppressionSync();
-    const threads = (await inbox.inboxThreads({ instance, limit: 400 }))
+    const threads = (await inbox.inboxThreads({ instance, limit: 500, filter }))
       .filter((t) => !suppressed.has(String(t.phone)));
-    json(res, 200, { ok: true, instance, count: threads.length, threads });
+    json(res, 200, { ok: true, instance, filter, count: threads.length, threads });
   });
 
   // 一个客户的完整对话（来回交错，由旧到新）。

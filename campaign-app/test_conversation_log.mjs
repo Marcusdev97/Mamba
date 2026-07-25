@@ -269,15 +269,15 @@ const crLog = createConversationLogService({ dataDir: cr });
 assert.deepEqual(await crLog.recordReply({ id: "R1", phone: "60177000001", text: "hi", instanceName: "wa_01" }), { saved: false, reason: "not_a_lead" });
 assert.equal((await crLog.recordReply({ id: "R1", phone: "60177000001", text: "hi", instanceName: "wa_01" }, { force: true })).saved, true, "force 要记名单外的回复");
 
-// 只有客户回、我方没回 → 单向 → 聊天室不显示
-assert.equal((await crLog.inboxThreads({})).length, 0, "只有单向(只回没发)不显示");
+// 只有客户回、我方没回 → 全部视图显示（这就是「漏跟进」的客户），且属于「待跟进」
+assert.equal((await crLog.inboxThreads({})).length, 1, "回复过的客户默认都显示（找漏跟进用）");
+assert.equal((await crLog.inboxThreads({ filter: "pending" })).length, 1, "最后一句是客户说的 → 待跟进");
 
 // 手机回复：这个号码已经在对话中(上面记过 inbound) → requireExisting 通过
 assert.equal((await crLog.recordOutbound({ phone: "60177000001", text: "我回你", instanceName: "wa_01", messageId: "P1", source: "phone" }, { requireExisting: true })).saved, true, "已在对话中的号码，手机回复要记");
-// 现在有来有回 → 聊天室显示
-const twoWay = await crLog.inboxThreads({});
-assert.equal(twoWay.length, 1, "有来有回就显示");
-assert.equal(twoWay[0].phone, "60177000001");
+// 我方回了最后一句 → 不再是待跟进
+assert.equal((await crLog.inboxThreads({ filter: "pending" })).length, 0, "我方回过最后一句 → 不再待跟进");
+assert.equal((await crLog.inboxThreads({})).length, 1, "全部视图仍显示");
 
 // 手机冷发给从没对话过的号码 → requireExisting 挡下（不记私人冷发）
 assert.deepEqual(

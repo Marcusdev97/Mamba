@@ -436,16 +436,24 @@ GROUP BY v.contact_key;`);
 
   // 聊天室的客户列表：某个号码底下、有回复过、而且没被 STOP 的客户。
   // 每个带最后一条讯息预览，按最近活动排序 —— 越新的排越前面。
-  async function inboxThreads({ instance = "", limit = 200 } = {}) {
+  // filter:
+  //   "all"     所有回复过的客户（找漏跟进的用这个）
+  //   "pending" 只列「最后一句是客户说的」= 球在你这边、等你回
+  async function inboxThreads({ instance = "", limit = 200, filter = "all" } = {}) {
     const database = await cli();
     const conditions = [
       "c.reply_count > 0",       // 客户回复过
       "c.stop_flag = 0",         // STOP 的不进聊天室
-      // 「有来有回」：这个客户底下既有客户回的、也有我方发的 —— 单向的陌生号
-      // (只发没回、或只回没发)不显示。
-      `EXISTS (SELECT 1 FROM messages om JOIN conversations ov ON ov.id = om.conversation_id
-               WHERE ov.contact_key = c.contact_key AND om.direction = 'outbound')`,
     ];
+    if (filter === "pending") {
+      // 最后一条讯息是客户发的 → 我方还没回 → 待跟进。
+      conditions.push(`(
+        SELECT m.direction FROM messages m
+        JOIN conversations v ON v.id = m.conversation_id
+        WHERE v.contact_key = c.contact_key
+        ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
+      ) = 'inbound'`);
+    }
     // 号码归属来自讯息 payload 里的 instanceName（每条讯息记着走哪个号码发/收）。
     // connection_key 那条路在旧资料里是空的，靠不住 —— payload 才是可靠来源。
     const inst = clean(instance);
