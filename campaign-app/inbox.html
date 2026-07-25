@@ -134,12 +134,20 @@ function renderTabs() {
   });
 }
 
-async function loadThreads() {
-  $("list").innerHTML = '<div class="list-empty">读取中…</div>';
+let threadsSig = "";       // 上次画出来的客户列表签名，一样就不重画
+
+async function loadThreads({ silent = false } = {}) {
+  // 静默刷新（轮询）不显示「读取中」，也不在没变化时动 DOM —— 否则每 15 秒闪一次。
+  if (!silent) { $("list").innerHTML = '<div class="list-empty">读取中…</div>'; threadsSig = ""; }
   const data = await jget("/api/inbox/threads?instance=" + encodeURIComponent(currentInstance)).catch(() => ({ threads: [] }));
   threads = data.threads || [];
   const cnt = document.querySelector(`[data-cnt="${CSS.escape(currentInstance)}"]`);
   if (cnt) cnt.textContent = threads.length ? threads.length : "";
+  const sig = threads.map((t) => `${t.phone}:${t.lastAt}:${t.replyCount}`).join("|") + "::" + searchText;
+  if (silent && sig === threadsSig) return;   // 没有新变化，别碰列表
+  // 正在搜索框里打字时别重画，免得抢走焦点。
+  if (silent && document.activeElement === $("listSearch")) return;
+  threadsSig = sig;
   renderList();
 }
 
@@ -169,13 +177,31 @@ function renderThreadEmpty() {
   $("thread").innerHTML = '<div class="thread-empty">在左边选一个客户查看完整对话。</div>';
 }
 
-async function openThread(phone) {
+let currentThreadSig = "";   // 上次画出来的对话签名，没新讯息就不重画
+
+async function openThread(phone, { refresh = false } = {}) {
   currentPhone = phone;
   document.querySelectorAll("#list .row").forEach((r) => r.classList.toggle("active", r.dataset.phone === phone));
-  $("thread").innerHTML = '<div class="thread-empty">读取对话中…</div>';
+  if (!refresh) { $("thread").innerHTML = '<div class="thread-empty">读取对话中…</div>'; currentThreadSig = ""; }
   const data = await jget("/api/inbox/thread?phone=" + encodeURIComponent(phone)).catch(() => null);
-  if (!data || !data.ok) { $("thread").innerHTML = '<div class="thread-empty">读取失败。</div>'; return; }
-  renderThread(data.contact, data.messages || []);
+  if (!data || !data.ok) { if (!refresh) $("thread").innerHTML = '<div class="thread-empty">读取失败。</div>'; return; }
+  const messages = data.messages || [];
+  const last = messages[messages.length - 1];
+  const sig = `${messages.length}::${last?.sentAt || ""}::${last?.text || ""}`;
+  // 刷新时如果没有新讯息，就完全不动 —— 保住正在打的字、已经展开的图、卷动位置。
+  if (refresh && sig === currentThreadSig) return;
+  // 有新讯息要重画：先把正在打的草稿和焦点记下来，画完再放回去。
+  const draft = $("composerText")?.value || "";
+  const hadFocus = document.activeElement === $("composerText");
+  currentThreadSig = sig;
+  renderThread(data.contact, messages);
+  const ta = $("composerText");
+  if (ta && draft) {
+    ta.value = draft;
+    ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+    if (hadFocus) { ta.focus(); ta.setSelectionRange(draft.length, draft.length); }
+  }
+  if (pendingImage) showImgPreview();
 }
 
 const MEDIA_RE = /^\[(image|video|document|sticker)\]$/;
@@ -289,8 +315,8 @@ async function doSend() {
       const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || "发送失败");
     }
     text.value = ""; text.style.height = "auto";
-    await openThread(currentPhone);   // 重新载入，立刻看到自己发的
-    await loadThreads();
+    await openThread(currentPhone, { refresh: true });   // 立刻看到自己发的，但不闪
+    await loadThreads({ silent: true });                 // 列表预览跟着更新，不重画整个列表
   } catch (error) {
     alert(error.message);
   } finally {
@@ -306,7 +332,11 @@ function openLightbox(src) {
 }
 
 loadNumbers();
-setInterval(async () => { if (currentInstance) { await loadThreads(); if (currentPhone) await openThread(currentPhone); } }, 15000);
+setInterval(async () => {
+  if (!currentInstance) return;
+  await loadThreads({ silent: true });
+  if (currentPhone) await openThread(currentPhone, { refresh: true });
+}, 15000);
 </script>
 </body>
 </html>

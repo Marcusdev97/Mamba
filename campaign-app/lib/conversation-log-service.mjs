@@ -298,7 +298,7 @@ COMMIT;`);
   }
 
   // 共用的批次入口。名单闸在这里统一挡，chunk 一批一批写，中途可以回报进度。
-  async function recordMany(records, normalize, { onProgress = null } = {}) {
+  async function recordMany(records, normalize, { onProgress = null, force = false } = {}) {
     const report = { total: records.length, written: 0, notLeads: 0, skipped: 0, chunks: 0, failed: [] };
     let buffer = [];
 
@@ -327,7 +327,8 @@ COMMIT;`);
     for (const record of records) {
       const row = normalize(record);
       if (!row) { report.skipped += 1; continue; }
-      if (!await isKnownLead(row.contactKey, { leadId: row.leadId })) { report.notLeads += 1; continue; }
+      // force = 历史同步：不看名单闸，全部导入(显示层的「双向」过滤挡单向的)。
+      if (!force && !await isKnownLead(row.contactKey, { leadId: row.leadId })) { report.notLeads += 1; continue; }
       buffer.push(row);
       if (buffer.length >= chunkSize) await flush();
     }
@@ -335,20 +336,39 @@ COMMIT;`);
     return report;
   }
 
+  // 这个号码在本机数据库里已经有对话了吗（用来判断「你手机的回复」值不值得记 ——
+  // 已经在聊的才记，冷发给陌生人/朋友的不记）。
+  async function contactExists(phone) {
+    const key = digits(phone);
+    if (!key) return false;
+    const database = await cli();
+    const rows = await database.query(`SELECT 1 AS hit FROM contacts WHERE contact_key = ${sqlValue(key)} LIMIT 1;`);
+    return Boolean(rows?.length);
+  }
+
   // ---------- 单条(线上路径) ----------
 
-  async function recordReply(event) {
+  // force = 不看名单闸，任何回复都记。聊天室要「有来有回就显示」，所以线上收到的
+  // 回复一律记下来；名单外的单向陌生号靠显示层的「双向」过滤挡掉，不会露出来。
+  async function recordReply(event, { force = false } = {}) {
     const row = normalizeInbound(event);
     if (!row) return { saved: false, reason: "invalid_event" };
-    if (!await isKnownLead(row.contactKey, { leadId: row.leadId })) return { saved: false, reason: "not_a_lead" };
+    if (!force && !await isKnownLead(row.contactKey, { leadId: row.leadId })) return { saved: false, reason: "not_a_lead" };
     await writeChunk([row]);
     return { saved: true, reason: "" };
   }
 
-  async function recordOutbound(message) {
+  // requireExisting = 只记「已经在对话中」的号码。给「你手机的回复」用：
+  // 客户先回过你(数据库里有 contact)，你从手机回，才记 —— 避免把你手机上
+  // 冷发给朋友/陌生人的讯息也抓进来。
+  async function recordOutbound(message, { requireExisting = false } = {}) {
     const row = normalizeOutbound(message);
     if (!row) return { saved: false, reason: "invalid_message" };
-    if (!await isKnownLead(row.contactKey, { leadId: row.leadId })) return { saved: false, reason: "not_a_lead" };
+    if (requireExisting) {
+      if (!await contactExists(row.contactKey)) return { saved: false, reason: "no_conversation" };
+    } else if (!await isKnownLead(row.contactKey, { leadId: row.leadId })) {
+      return { saved: false, reason: "not_a_lead" };
+    }
     await writeChunk([row]);
     return { saved: true, reason: "" };
   }
@@ -419,8 +439,12 @@ GROUP BY v.contact_key;`);
   async function inboxThreads({ instance = "", limit = 200 } = {}) {
     const database = await cli();
     const conditions = [
-      "c.reply_count > 0",       // 只要回复过的
+      "c.reply_count > 0",       // 客户回复过
       "c.stop_flag = 0",         // STOP 的不进聊天室
+      // 「有来有回」：这个客户底下既有客户回的、也有我方发的 —— 单向的陌生号
+      // (只发没回、或只回没发)不显示。
+      `EXISTS (SELECT 1 FROM messages om JOIN conversations ov ON ov.id = om.conversation_id
+               WHERE ov.contact_key = c.contact_key AND om.direction = 'outbound')`,
     ];
     // 号码归属来自讯息 payload 里的 instanceName（每条讯息记着走哪个号码发/收）。
     // connection_key 那条路在旧资料里是空的，靠不住 —— payload 才是可靠来源。

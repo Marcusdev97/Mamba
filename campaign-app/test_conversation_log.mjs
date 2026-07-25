@@ -247,5 +247,45 @@ assert.ok(
 assert.deepEqual(await log.recentThread(""), [], "没有电话就回空的");
 assert.deepEqual(await log.recentThread("60199999999"), [], "没聊过的客户回空的");
 
+// --- 聊天室要「有来有回」+ force 记名单外 + 手机回复只记已在对话的号码 ---
+const cr = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-inbox-2way-"));
+await fs.writeFile(path.join(cr, "blast_leads_cache.json"), JSON.stringify({ records: [] }));  // 空名单
+const crDb = await createSqliteCli({ databasePath: path.join(cr, "mamba.sqlite") });
+await crDb.exec(`
+CREATE TABLE contacts (contact_key TEXT PRIMARY KEY, phone TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL DEFAULT '',
+  stop_flag INTEGER NOT NULL DEFAULT 0, reply_count INTEGER NOT NULL DEFAULT 0, last_reply_text TEXT NOT NULL DEFAULT '',
+  last_reply_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE conversations (id TEXT PRIMARY KEY, contact_key TEXT NOT NULL, connection_key TEXT, customer_phone TEXT NOT NULL,
+  last_message_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (contact_key, connection_key));
+CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound','operator','system')),
+  text TEXT NOT NULL DEFAULT '', message_type TEXT NOT NULL DEFAULT 'text', source TEXT NOT NULL DEFAULT 'evolution',
+  flow_topic TEXT NOT NULL DEFAULT '', template_key TEXT, sent_at TEXT, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+CREATE TABLE project_leads (project_lead_key TEXT PRIMARY KEY, contact_key TEXT NOT NULL, phone TEXT NOT NULL);
+CREATE TABLE whatsapp_connections (connection_key TEXT PRIMARY KEY, whatsapp_number TEXT NOT NULL DEFAULT '', instance_name TEXT NOT NULL DEFAULT '');`);
+const crLog = createConversationLogService({ dataDir: cr });
+
+// 名单外客户回复：不加 force 会被挡，加 force 会记
+assert.deepEqual(await crLog.recordReply({ id: "R1", phone: "60177000001", text: "hi", instanceName: "wa_01" }), { saved: false, reason: "not_a_lead" });
+assert.equal((await crLog.recordReply({ id: "R1", phone: "60177000001", text: "hi", instanceName: "wa_01" }, { force: true })).saved, true, "force 要记名单外的回复");
+
+// 只有客户回、我方没回 → 单向 → 聊天室不显示
+assert.equal((await crLog.inboxThreads({})).length, 0, "只有单向(只回没发)不显示");
+
+// 手机回复：这个号码已经在对话中(上面记过 inbound) → requireExisting 通过
+assert.equal((await crLog.recordOutbound({ phone: "60177000001", text: "我回你", instanceName: "wa_01", messageId: "P1", source: "phone" }, { requireExisting: true })).saved, true, "已在对话中的号码，手机回复要记");
+// 现在有来有回 → 聊天室显示
+const twoWay = await crLog.inboxThreads({});
+assert.equal(twoWay.length, 1, "有来有回就显示");
+assert.equal(twoWay[0].phone, "60177000001");
+
+// 手机冷发给从没对话过的号码 → requireExisting 挡下（不记私人冷发）
+assert.deepEqual(
+  await crLog.recordOutbound({ phone: "60188000009", text: "冷发", instanceName: "wa_01", messageId: "P9", source: "phone" }, { requireExisting: true }),
+  { saved: false, reason: "no_conversation" },
+  "从没对话过的号码，手机发出去的不记(避免抓进私人冷发)",
+);
+
+await fs.rm(cr, { recursive: true, force: true });
 await fs.rm(dataDir, { recursive: true, force: true });
 console.log("✅ all conversation log tests passed");

@@ -281,7 +281,8 @@ async function saveEvent(event) {
 
   // 写进本机数据库，jsonl 之外多一份查得动的纪录。写库失败不影响回复处理 ——
   // jsonl 已经落地了，之后跑 backfill_reply_conversations.mjs 可以补回来。
-  await conversationLog.recordReply(event).catch((error) => {
+  // force：线上收到的回复一律记进聊天室（名单外的单向陌生号靠显示层「双向」过滤挡掉）。
+  await conversationLog.recordReply(event, { force: true }).catch((error) => {
     console.log(`[reply-tracker] 回复写入本机数据库失败 phone=${event.phone}: ${error.message}`);
     trackerSystemLogs.write({
       level: "warn",
@@ -355,6 +356,31 @@ async function syncBlastReplyToNotion(event) {
   return result;
 }
 
+// 你从手机 App 回客户时，Evolution 也会推 MESSAGES_UPSERT，只是 fromMe=true。
+// 抓出这类讯息记成 outbound，聊天室才看得到「你手机的回复」。
+// 只在这个号码已经在对话中时才记(requireExisting)，避免把手机上冷发给朋友/陌生
+// 人的讯息也抓进来。Mamba 自己发的(群发/AI/聊天室)靠 messageId 去重，不会重复。
+function outboundFromPhone(payload, message) {
+  const key = message?.key ?? {};
+  if (!key.fromMe) return null;
+  const remoteJid = String(key.remoteJid ?? message?.remoteJid ?? "");
+  if (remoteJid.includes("@g.us")) return null;   // 群组不算
+  const phone = resolvePhone(message);
+  if (!phone) return null;
+  const text = describeMessage(message);
+  if (!text) return null;
+  const timestamp = Number(message.messageTimestamp ?? Date.now());
+  return {
+    phone,
+    text,
+    instanceName: senderFromPayload(payload),
+    messageId: key.id ?? "",
+    sentAt: new Date(timestamp < 100000000000 ? timestamp * 1000 : timestamp).toISOString(),
+    source: "phone",
+    flowTopic: "phone_reply",
+  };
+}
+
 function eventFromMessage(payload, message) {
   const key = message?.key ?? {};
   if (key.fromMe) return null;
@@ -414,7 +440,17 @@ async function processWebhook(payload) {
 
   for (const message of messages) {
     const event = eventFromMessage(payload, message);
-    if (!event || seen.has(event.id)) continue;
+    if (!event || seen.has(event.id)) {
+      // 不是客户回复 → 看看是不是「你手机发出去的回复」，是的话记进聊天室。
+      if (!event) {
+        const outbound = outboundFromPhone(payload, message);
+        if (outbound) {
+          await conversationLog.recordOutbound(outbound, { requireExisting: true })
+            .catch((error) => console.log(`[reply-tracker] 手机回复写入失败 ${outbound.phone}: ${error.message}`));
+        }
+      }
+      continue;
+    }
     seen.add(event.id);
     await saveEvent(event);
     saved.push(event);
