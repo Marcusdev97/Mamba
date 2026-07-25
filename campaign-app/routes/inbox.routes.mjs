@@ -1,4 +1,4 @@
-import { httpError, json } from "../lib/http.mjs";
+import { httpError, json, readJson } from "../lib/http.mjs";
 import { loadSuppressionSync } from "../suppression.mjs";
 
 // 聊天室（本机对话纪录）。跟 /api/conversations（读 Notion 的 lead 状态板）不同 ——
@@ -47,5 +47,44 @@ export function registerInboxRoutes(router) {
     if (!phone) throw httpError(400, "缺少客户号码。", "INBOX_PHONE_REQUIRED");
     const thread = await inbox.fullThread(phone, { limit: 800 });
     json(res, 200, { ok: true, ...thread });
+  });
+
+  // ---------- 互动：手动回复 / 发图 / 看客户的图 ----------
+  //
+  // 这是**人**在聊天室手动发的，不受 Sales Brain 自动回复开关影响 —— 大脑关着
+  // 也能手动回客户。
+
+  function requireSend(runtime) {
+    if (!runtime.inboxSend) throw httpError(503, "聊天室发送功能尚未启用。请重启 Mamba。", "INBOX_SEND_UNAVAILABLE");
+    return runtime.inboxSend;
+  }
+
+  router.post("/api/inbox/send", async (req, res, runtime) => {
+    const send = requireSend(runtime);
+    const body = await readJson(req);
+    const result = await send.sendText({ instance: body?.instance, phone: body?.phone, text: body?.text });
+    json(res, 200, { ok: true, ...result });
+  });
+
+  router.post("/api/inbox/send-image", async (req, res, runtime) => {
+    const send = requireSend(runtime);
+    const body = await readJson(req);
+    const result = await send.sendImage({
+      instance: body?.instance, phone: body?.phone,
+      imageDataUrl: body?.image, caption: body?.caption,
+    });
+    json(res, 200, { ok: true, ...result });
+  });
+
+  // 按需抓客户发来的一张图。找不到就回 available:false，前端显示占位。
+  router.get("/api/inbox/media", async (req, res, runtime) => {
+    const send = requireSend(runtime);
+    const url = new URL(req.url, "http://mamba.local");
+    const result = await send.fetchInboundMedia({
+      instance: url.searchParams.get("instance") || "",
+      phone: url.searchParams.get("phone") || "",
+      messageId: url.searchParams.get("messageId") || "",
+    });
+    json(res, 200, { ok: true, ...result });
   });
 }

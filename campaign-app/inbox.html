@@ -52,8 +52,27 @@
   .msg.out { align-self:flex-end; background:var(--out); border-bottom-right-radius:4px; }
   .msg .m-meta { display:block; margin-top:5px; font-size:10.5px; color:var(--dim); }
   .msg.out .m-meta { text-align:right; }
+  .msg img.m-img { max-width:100%; border-radius:8px; display:block; margin-bottom:4px; cursor:pointer; }
+  .msg .m-imgbtn { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:8px; border:1px solid var(--line); background:var(--panel-2); color:var(--blue); cursor:pointer; font-size:12.5px; font-family:inherit; }
   .day-sep { align-self:center; color:var(--dim); font-size:11px; background:var(--panel-2); padding:3px 11px; border-radius:999px; margin:6px 0; }
   .thread-empty { flex:1; display:grid; place-items:center; color:var(--dim); font-size:14px; }
+
+  /* 底部输入区：回复 + 发图 */
+  .composer { border-top:1px solid var(--line); background:var(--panel); padding:11px 14px; display:flex; gap:9px; align-items:flex-end; }
+  .composer textarea { flex:1; resize:none; min-height:42px; max-height:140px; background:var(--panel-2); color:var(--text);
+    border:1px solid var(--line); border-radius:10px; padding:11px 13px; font-size:14px; font-family:inherit; line-height:1.4; }
+  .composer .c-btn { border:1px solid var(--line); background:var(--panel-3); color:var(--text); border-radius:10px;
+    padding:0 14px; height:42px; cursor:pointer; font-size:15px; font-family:inherit; }
+  .composer .c-send { background:var(--green); border-color:var(--green); color:#04160c; font-weight:800; }
+  .composer .c-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .composer-note { padding:6px 14px 10px; color:var(--dim); font-size:11px; }
+  .img-preview { padding:8px 14px; border-top:1px solid var(--line); background:var(--panel); display:flex; align-items:center; gap:10px; }
+  .img-preview.hidden { display:none; }
+  .img-preview img { height:54px; border-radius:6px; }
+  .img-preview button { background:none; border:0; color:var(--red); cursor:pointer; font-size:13px; }
+  .lightbox { position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.85); display:grid; place-items:center; padding:30px; cursor:zoom-out; }
+  .lightbox.hidden { display:none; }
+  .lightbox img { max-width:100%; max-height:100%; border-radius:8px; }
 </style>
 </head>
 <body>
@@ -159,6 +178,15 @@ async function openThread(phone) {
   renderThread(data.contact, data.messages || []);
 }
 
+const MEDIA_RE = /^\[(image|video|document|sticker)\]$/;
+
+function whoLabel(m) {
+  if (m.direction === "inbound") return "";
+  if (m.source === "manual") return "我(手动) · ";
+  if (m.source === "brain") return "AI · ";
+  return "群发 · ";
+}
+
 function renderThread(contact, messages) {
   let lastDay = "";
   const bubbles = [];
@@ -167,17 +195,114 @@ function renderThread(contact, messages) {
     const day = d.toLocaleDateString([], { year:"numeric", month:"2-digit", day:"2-digit" });
     if (day !== lastDay) { bubbles.push(`<div class="day-sep">${day}</div>`); lastDay = day; }
     const side = m.direction === "inbound" ? "in" : "out";
-    const who = m.direction === "inbound" ? "" : (m.source === "brain" ? "AI · " : "群发 · ");
     const time = d.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", hour12:false });
-    bubbles.push(`<div class="msg ${side}">${esc(m.text || "")}<span class="m-meta">${who}${time}${m.flowTopic && m.direction === "outbound" ? " · " + esc(m.flowTopic) : ""}</span></div>`);
+    // 客户发来的图：只存了「[image]」占位，给一个按钮按需向 Evolution 抓真图。
+    const isInboundImage = m.direction === "inbound" && MEDIA_RE.test((m.text || "").trim());
+    const kind = isInboundImage ? (m.text || "").trim().replace(/[\[\]]/g, "") : "";
+    const content = isInboundImage
+      ? `<button class="m-imgbtn" data-imgbtn="1">🖼️ 客户发来的${kind === "image" ? "图片" : kind}，点击查看</button>`
+      : esc(m.text || "");
+    bubbles.push(`<div class="msg ${side}">${content}<span class="m-meta">${whoLabel(m)}${time}${m.flowTopic && m.direction === "outbound" && m.flowTopic.indexOf("manual") < 0 ? " · " + esc(m.flowTopic) : ""}</span></div>`);
   }
+  const stopped = contact.stopFlag ? true : false;
   $("thread").innerHTML = `
     <div class="thread-head">
       <div class="t-name">${esc(contact.name || contact.phone)}</div>
-      <div class="t-sub">${esc(contact.phone)} · ${contact.replyCount} 次回复${contact.stopFlag ? " · ⛔ 已 STOP" : ""}</div>
+      <div class="t-sub">${esc(contact.phone)} · ${contact.replyCount} 次回复${stopped ? " · ⛔ 已 STOP" : ""}</div>
     </div>
-    <div class="msgs" id="msgs">${bubbles.join("") || '<div class="thread-empty">没有讯息。</div>'}</div>`;
-  const m = $("msgs"); if (m) m.scrollTop = m.scrollHeight;
+    <div class="msgs" id="msgs">${bubbles.join("") || '<div class="thread-empty">没有讯息。</div>'}</div>
+    <div class="img-preview hidden" id="imgPreview"><img id="imgPreviewThumb" alt=""><span id="imgPreviewName"></span><button id="imgPreviewClear">✕ 移除</button></div>
+    ${stopped
+      ? '<div class="composer-note">⛔ 这个客户已 STOP，不显示回复框，避免误发。</div>'
+      : `<div class="composer">
+          <input type="file" id="imgFile" accept="image/*" hidden>
+          <button class="c-btn" id="btnAttach" title="发照片给客户">📎</button>
+          <textarea id="composerText" rows="1" placeholder="输入回复… (Enter 发送，Shift+Enter 换行)"></textarea>
+          <button class="c-btn c-send" id="btnSend">发送</button>
+        </div>`}`;
+  const box = $("msgs"); if (box) box.scrollTop = box.scrollHeight;
+  wireImageButtons();
+  if (!stopped) wireComposer();
+}
+
+// 客户图片按钮：按需抓真图，抓到就把按钮换成图片。
+function wireImageButtons() {
+  document.querySelectorAll('[data-imgbtn]').forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.textContent = "读取中…"; btn.disabled = true;
+      const data = await jget(`/api/inbox/media?instance=${encodeURIComponent(currentInstance)}&phone=${encodeURIComponent(currentPhone)}`).catch(() => null);
+      if (data && data.available) {
+        const img = document.createElement("img");
+        img.className = "m-img"; img.src = data.dataUrl;
+        img.addEventListener("click", () => openLightbox(data.dataUrl));
+        btn.replaceWith(img);
+      } else {
+        btn.textContent = "🖼️ 图片抓不到（可能已过期）"; btn.disabled = false;
+      }
+    });
+  });
+}
+
+let pendingImage = null;   // { dataUrl, name }
+
+function wireComposer() {
+  const text = $("composerText");
+  const send = $("btnSend");
+  const attach = $("btnAttach");
+  const file = $("imgFile");
+  text.addEventListener("input", () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, 140) + "px"; });
+  text.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSend(); } });
+  send.addEventListener("click", doSend);
+  attach.addEventListener("click", () => file.click());
+  file.addEventListener("change", () => {
+    const f = file.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { pendingImage = { dataUrl: String(reader.result), name: f.name }; showImgPreview(); };
+    reader.readAsDataURL(f);
+    file.value = "";
+  });
+  $("imgPreviewClear").addEventListener("click", () => { pendingImage = null; $("imgPreview").classList.add("hidden"); });
+}
+
+function showImgPreview() {
+  if (!pendingImage) return;
+  $("imgPreviewThumb").src = pendingImage.dataUrl;
+  $("imgPreviewName").textContent = pendingImage.name;
+  $("imgPreview").classList.remove("hidden");
+}
+
+async function doSend() {
+  const text = $("composerText");
+  const body = text.value.trim();
+  if (!body && !pendingImage) return;
+  const send = $("btnSend");
+  send.disabled = true; send.textContent = "发送中…";
+  try {
+    if (pendingImage) {
+      const r = await fetch("/api/inbox/send-image", { method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ instance: currentInstance, phone: currentPhone, image: pendingImage.dataUrl, caption: body }) });
+      const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || "发图失败");
+      pendingImage = null; $("imgPreview").classList.add("hidden");
+    } else {
+      const r = await fetch("/api/inbox/send", { method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ instance: currentInstance, phone: currentPhone, text: body }) });
+      const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || "发送失败");
+    }
+    text.value = ""; text.style.height = "auto";
+    await openThread(currentPhone);   // 重新载入，立刻看到自己发的
+    await loadThreads();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    send.disabled = false; send.textContent = "发送";
+  }
+}
+
+function openLightbox(src) {
+  let box = document.getElementById("lightbox");
+  if (!box) { box = document.createElement("div"); box.id = "lightbox"; box.className = "lightbox"; box.innerHTML = '<img>';
+    box.addEventListener("click", () => box.classList.add("hidden")); document.body.appendChild(box); }
+  box.querySelector("img").src = src; box.classList.remove("hidden");
 }
 
 loadNumbers();

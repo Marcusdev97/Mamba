@@ -13,6 +13,7 @@ import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createInboxSendService } from "./lib/inbox-send-service.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
@@ -612,6 +613,7 @@ const runtime = await loadRuntime({
 // WhatsApp 发送，只在晚上 22:00 或人工按「立即同步」时处理。
 runtime.campaignMode = campaignModeService;
 runtime.conversationLog = conversationLog;
+runtime.inboxSend = createInboxSendService({ api, dataDir: paths.dataDir, conversationLog });
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
 runtime.notionOutboxWorker = createNotionOutboxWorker({
   outbox: runtime.notionOutbox,
