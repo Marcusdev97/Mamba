@@ -144,6 +144,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
     const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
     const openaiKey = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
     const geminiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+    const kimiKey = env.KIMI_API_KEY || process.env.KIMI_API_KEY || env.MOONSHOT_API_KEY || process.env.MOONSHOT_API_KEY || "";
     const testLeads = env.TEST_LEADS || process.env.TEST_LEADS || "";
     const configuredProvider = String(env.BRAIN_AI_PROVIDER || process.env.BRAIN_AI_PROVIDER || "").trim().toLowerCase();
     const brainEnabled = String(env.MAMBA_BRAIN_ENABLED || process.env.MAMBA_BRAIN_ENABLED || "0").trim() === "1";
@@ -169,6 +170,10 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
         configured: Boolean(geminiKey),
         masked: maskSecret(geminiKey),
       },
+      kimi: {
+        configured: Boolean(kimiKey),
+        masked: maskSecret(kimiKey),
+      },
       brain: {
         enabled: brainEnabled,
         provider,
@@ -179,6 +184,8 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
         openaiReasoningEffort: env.BRAIN_OPENAI_REASONING_EFFORT || process.env.BRAIN_OPENAI_REASONING_EFFORT || "medium",
         geminiSimpleModel: env.BRAIN_GEMINI_MODEL_SIMPLE || process.env.BRAIN_GEMINI_MODEL_SIMPLE || "gemini-3.5-flash",
         geminiComplexModel: env.BRAIN_GEMINI_MODEL_COMPLEX || process.env.BRAIN_GEMINI_MODEL_COMPLEX || "gemini-3.1-pro-preview",
+        kimiSimpleModel: env.BRAIN_KIMI_MODEL_SIMPLE || process.env.BRAIN_KIMI_MODEL_SIMPLE || "kimi-k2.6",
+        kimiComplexModel: env.BRAIN_KIMI_MODEL_COMPLEX || process.env.BRAIN_KIMI_MODEL_COMPLEX || "kimi-k3",
       },
       telegram: {
         botConfigured: botValid,

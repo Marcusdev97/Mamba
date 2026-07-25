@@ -266,7 +266,8 @@
             <option value="anthropic">Anthropic</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Google Gemini</option>
-            <option value="auto">Auto（OpenAI → Gemini → Anthropic → Rules）</option>
+            <option value="kimi">Kimi (Moonshot)</option>
+            <option value="auto">Auto（OpenAI → Gemini → Kimi → Anthropic → Rules）</option>
           </select>
         </label>
         <div class="mode-note" id="brainModeNote">选择 AI Provider。所有 AI 草稿仍需 Telegram 人工批准后才发送。</div>
@@ -353,6 +354,31 @@
           </div>
           <div class="actions"><button class="btn" id="btnTestGemini">测试 Gemini</button></div>
           <div class="status-line" id="geminiStatus">读取中...</div>
+        </section>
+
+        <section class="ai-provider">
+          <div class="provider-title">Kimi (Moonshot)</div>
+          <div class="provider-sub">K2.6 处理高频日常草稿，K3 旗舰处理复杂销售判断与异议。中文表现强，适合本地客户。</div>
+          <label class="fld">
+            <span>Kimi API Key</span>
+            <input id="kimiApiKey" type="password" autocomplete="off" placeholder="platform.moonshot.ai 的 API Key" />
+          </label>
+          <div class="model-grid">
+            <label class="fld"><span>Fast Model</span>
+              <select id="kimiSimpleModel">
+                <option value="kimi-k2.6">Kimi K2.6（通用 · 256K）</option>
+                <option value="kimi-k3">Kimi K3（旗舰 · 1M）</option>
+              </select>
+            </label>
+            <label class="fld"><span>Smart Model</span>
+              <select id="kimiComplexModel">
+                <option value="kimi-k3">Kimi K3（旗舰 · 1M）</option>
+                <option value="kimi-k2.6">Kimi K2.6（通用 · 256K）</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions"><button class="btn" id="btnTestKimi">测试 Kimi</button></div>
+          <div class="status-line" id="kimiStatus">读取中...</div>
         </section>
       </div>
     </div>
@@ -472,6 +498,7 @@ function values() {
     anthropicApiKey: $("anthropicApiKey").value.trim(),
     openaiApiKey: $("openaiApiKey").value.trim(),
     geminiApiKey: $("geminiApiKey").value.trim(),
+    kimiApiKey: $("kimiApiKey").value.trim(),
     brainEnabled: $("brainEnabled").checked,
     brainProvider: $("brainProvider").value,
     anthropicSimpleModel: $("anthropicSimpleModel").value,
@@ -480,6 +507,8 @@ function values() {
     openaiComplexModel: $("openaiComplexModel").value,
     openaiReasoningEffort: $("openaiReasoningEffort").value,
     geminiSimpleModel: $("geminiSimpleModel").value,
+    kimiSimpleModel: $("kimiSimpleModel").value,
+    kimiComplexModel: $("kimiComplexModel").value,
     geminiComplexModel: $("geminiComplexModel").value,
     testRecipients: readTestRecipients(),
   };
@@ -530,6 +559,7 @@ function renderBrainMode() {
     anthropic: "所有 AI 草稿使用 Anthropic；没有有效 Key 时自动回到 Rule Only。",
     openai: "所有 AI 草稿使用 OpenAI；Medium 是 reasoning effort，不是另一款 model。",
     gemini: "所有 AI 草稿使用 Google Gemini；没有有效 Key 时自动回到 Rule Only。",
+    kimi: "所有 AI 草稿使用 Kimi (Moonshot)；没有有效 Key 时自动回到 Rule Only。",
     auto: "依次尝试 OpenAI、Gemini、Anthropic，最后使用规则草稿；发送前仍需人工批准。",
   };
   $("brainModeNote").textContent = $("brainEnabled").checked
@@ -555,6 +585,9 @@ function render(settings) {
   $("geminiStatus").textContent = s.gemini?.configured
     ? "已设置: " + s.gemini.masked
     : "未设置 Gemini Key";
+  $("kimiStatus").textContent = s.kimi?.configured
+    ? "已设置: " + s.kimi.masked
+    : "未设置 Kimi Key";
   if (s.brain) {
     $("brainEnabled").checked = s.brain.enabled === true;
     $("brainProvider").value = s.brain.provider || "rules";
@@ -563,6 +596,8 @@ function render(settings) {
     $("openaiSimpleModel").value = s.brain.openaiSimpleModel || "gpt-5.4-nano";
     $("openaiComplexModel").value = s.brain.openaiComplexModel || "gpt-5.4";
     $("openaiReasoningEffort").value = s.brain.openaiReasoningEffort || "medium";
+    $("kimiSimpleModel").value = s.brain.kimiSimpleModel || "kimi-k2.6";
+    $("kimiComplexModel").value = s.brain.kimiComplexModel || "kimi-k3";
     $("geminiSimpleModel").value = s.brain.geminiSimpleModel || "gemini-3.5-flash";
     $("geminiComplexModel").value = s.brain.geminiComplexModel || "gemini-3.1-pro-preview";
   }
@@ -775,6 +810,7 @@ $("btnSave").addEventListener("click", async () => {
     $("anthropicApiKey").value = "";
     $("openaiApiKey").value = "";
     $("geminiApiKey").value = "";
+    $("kimiApiKey").value = "";
     refreshIdentity();
     message("已保存。TEST 号码会马上用于 Campaign Automations；自动回复开关需要重新启动 Mamba 才会完全生效。", "");
   } catch (e) {
@@ -829,6 +865,23 @@ $("btnTestOpenAI").addEventListener("click", async () => {
   }
 });
 
+$("btnTestKimi").addEventListener("click", async () => {
+  message("", "");
+  $("btnTestKimi").disabled = true;
+  $("btnTestKimi").textContent = "测试中...";
+  try {
+    const data = await api("/api/settings/test-kimi", values());
+    render(data.settings);
+    $("kimiApiKey").value = "";
+    message(data.warning ? data.warning : ("Kimi 已连接并保存 (" + (data.model || "Kimi") + ")。"), "");
+  } catch (e) {
+    message("", e.message);
+  } finally {
+    $("btnTestKimi").disabled = false;
+    $("btnTestKimi").textContent = "测试 Kimi";
+  }
+});
+
 $("btnTestGemini").addEventListener("click", async () => {
   message("", "");
   $("btnTestGemini").disabled = true;
@@ -837,6 +890,7 @@ $("btnTestGemini").addEventListener("click", async () => {
     const data = await api("/api/settings/test-gemini", values());
     render(data.settings);
     $("geminiApiKey").value = "";
+    $("kimiApiKey").value = "";
     message(data.warning ? data.warning : ("Gemini 已连接并保存 (" + (data.model || "Gemini") + ")。"), "");
   } catch (e) {
     message("", e.message);

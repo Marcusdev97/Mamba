@@ -35,7 +35,7 @@ function readableTelegramError(error, action) {
   return `${action}失败: ${message || "Telegram 没有返回明确原因。"}`;
 }
 
-const BRAIN_PROVIDERS = new Set(["rules", "anthropic", "openai", "gemini", "auto"]);
+const BRAIN_PROVIDERS = new Set(["rules", "anthropic", "openai", "gemini", "kimi", "auto"]);
 const OPENAI_REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh"]);
 
 function cleanModel(value, fallback) {
@@ -54,7 +54,7 @@ function brainSettingsFromBody(body) {
     values.MAMBA_BRAIN_ENABLED = body.brainEnabled === true ? "1" : "0";
   }
   if (provider) {
-    if (!BRAIN_PROVIDERS.has(provider)) throw httpError(400, "AI Provider 只支持 Rule Only、Anthropic、OpenAI、Gemini 或 Auto。");
+    if (!BRAIN_PROVIDERS.has(provider)) throw httpError(400, "AI Provider 只支持 Rule Only、Anthropic、OpenAI、Gemini、Kimi 或 Auto。");
     values.BRAIN_AI_PROVIDER = provider;
   }
   if (body.anthropicSimpleModel) values.BRAIN_ANTHROPIC_MODEL_SIMPLE = cleanModel(body.anthropicSimpleModel, "claude-haiku-4-5");
@@ -63,6 +63,8 @@ function brainSettingsFromBody(body) {
   if (body.openaiComplexModel) values.BRAIN_OPENAI_MODEL_COMPLEX = cleanModel(body.openaiComplexModel, "gpt-5.4");
   if (body.geminiSimpleModel) values.BRAIN_GEMINI_MODEL_SIMPLE = cleanModel(body.geminiSimpleModel, "gemini-3.5-flash");
   if (body.geminiComplexModel) values.BRAIN_GEMINI_MODEL_COMPLEX = cleanModel(body.geminiComplexModel, "gemini-3.1-pro-preview");
+  if (body.kimiSimpleModel) values.BRAIN_KIMI_MODEL_SIMPLE = cleanModel(body.kimiSimpleModel, "kimi-k2.6");
+  if (body.kimiComplexModel) values.BRAIN_KIMI_MODEL_COMPLEX = cleanModel(body.kimiComplexModel, "kimi-k3");
   if (effort) {
     if (!OPENAI_REASONING_EFFORTS.has(effort)) throw httpError(400, "OpenAI Reasoning 只支持 none、low、medium、high 或 xhigh。");
     values.BRAIN_OPENAI_REASONING_EFFORT = effort;
@@ -245,6 +247,13 @@ export function registerSettingsRoutes(router) {
         throw httpError(400, "Gemini API Key 格式不对。请从 Google AI Studio 复制完整 API Key。");
       }
       values.GEMINI_API_KEY = geminiApiKey;
+    }
+    const kimiApiKey = String(body.kimiApiKey ?? "").trim();
+    if (kimiApiKey) {
+      if (kimiApiKey.length < 20 || /\s/.test(kimiApiKey)) {
+        throw httpError(400, "Kimi API Key 格式不完整。请从 platform.moonshot.ai 重新复制。");
+      }
+      values.KIMI_API_KEY = kimiApiKey;
     }
     if (telegramBotToken) {
       settings.assertTelegramBotToken(telegramBotToken);
@@ -442,6 +451,57 @@ export function registerSettingsRoutes(router) {
       await settings.writeEnvValues({ GEMINI_API_KEY: key, ...brainSettingsFromBody(body) });
     } catch (error) {
       throw httpError(500, `Gemini 测试成功，但保存失败: ${error.message}`);
+    }
+    json(res, 200, { ok: true, model, settings: settings.snapshot() });
+  });
+
+  // Kimi (Moonshot)。API 跟 OpenAI chat/completions 相容，所以测试请求也是那一套。
+  router.post("/api/settings/test-kimi", async (req, res, runtime) => {
+    const settings = requireSettings(runtime);
+    const body = await readJson(req);
+    const key = String(body.kimiApiKey ?? settings.env.KIMI_API_KEY ?? process.env.KIMI_API_KEY ?? "").trim();
+    if (!key) throw httpError(400, "请先填 Kimi API Key。");
+    if (key.length < 20 || /\s/.test(key)) throw httpError(400, "Kimi API Key 格式不完整。请从 platform.moonshot.ai 重新复制。");
+    const model = cleanModel(body.kimiSimpleModel, settings.env.BRAIN_KIMI_MODEL_SIMPLE || "kimi-k2.6");
+    const base = String(settings.env.KIMI_API_BASE || process.env.KIMI_API_BASE || "https://api.moonshot.ai/v1").replace(/\/+$/, "");
+
+    let response;
+    let data;
+    try {
+      response = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "Reply with exactly: OK" }],
+          max_completion_tokens: 16,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      data = await response.json().catch(() => null);
+    } catch (error) {
+      throw httpError(400, `Kimi API 测试失败: 无法连接 Moonshot (${error.message})。检查网络，或确认 KIMI_API_BASE 是否要改成中国站 api.moonshot.cn。`);
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw httpError(400, "Kimi API 测试失败: API Key 无效或没有权限。请到 platform.moonshot.ai 确认 Key 还有效。");
+    }
+    if (response.status === 404) {
+      throw httpError(400, `Kimi API 测试失败: 找不到模型「${model}」。目前可用的是 kimi-k3 / kimi-k2.6 等；kimi-k2.5 和 moonshot-v1-* 已排定下线。`);
+    }
+    if (response.status === 429) {
+      await settings.writeEnvValues({ KIMI_API_KEY: key, ...brainSettingsFromBody(body) });
+      json(res, 200, { ok: true, warning: "Kimi Key 已识别，但目前额度不足或被限流。设置已保存。", settings: settings.snapshot() });
+      return;
+    }
+    if (!response.ok) {
+      throw httpError(400, `Kimi API 测试失败: ${data?.error?.message || `HTTP ${response.status}`}`);
+    }
+
+    try {
+      await settings.writeEnvValues({ KIMI_API_KEY: key, ...brainSettingsFromBody(body) });
+    } catch (error) {
+      throw httpError(500, `Kimi 测试成功，但保存失败: ${error.message}`);
     }
     json(res, 200, { ok: true, model, settings: settings.snapshot() });
   });

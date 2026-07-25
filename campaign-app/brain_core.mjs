@@ -89,6 +89,12 @@ export function pickModel(tier, env = {}, provider = env.BRAIN_AI_PROVIDER || "a
       ? env.BRAIN_GEMINI_MODEL_COMPLEX || "gemini-3.1-pro-preview"
       : env.BRAIN_GEMINI_MODEL_SIMPLE || "gemini-3.5-flash";
   }
+  // Kimi (Moonshot)。预设避开 kimi-k2.5 和 moonshot-v1-*，那批已排定下线。
+  if (provider === "kimi") {
+    return isComplex
+      ? env.BRAIN_KIMI_MODEL_COMPLEX || "kimi-k3"
+      : env.BRAIN_KIMI_MODEL_SIMPLE || "kimi-k2.6";
+  }
   return isComplex
     ? env.BRAIN_ANTHROPIC_MODEL_COMPLEX || env.BRAIN_MODEL_COMPLEX || "claude-sonnet-4-5"
     : env.BRAIN_ANTHROPIC_MODEL_SIMPLE || env.BRAIN_MODEL_SIMPLE || "claude-haiku-4-5";
