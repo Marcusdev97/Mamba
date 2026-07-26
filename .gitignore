@@ -47,3 +47,6 @@ campaign-app/market-dashboard.secret.js
 .~lock.*
 *_Backup_*.json
 *.bak-*
+
+# ─── 中央 Server 的存取码（每台电脑自己产生，绝不提交）───
+hub-server/.access-token
