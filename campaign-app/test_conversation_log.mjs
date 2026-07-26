@@ -66,6 +66,11 @@ CREATE TABLE project_leads (
   contact_key TEXT NOT NULL,
   phone TEXT NOT NULL
 );
+CREATE TABLE metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 INSERT INTO devices VALUES ('device-1');
 INSERT INTO whatsapp_connections VALUES ('device-1::601133698121', '601133698121', 'wa_01');
 INSERT INTO project_leads VALUES ('binastra:60146426133', '60146426133', '60146426133');`);
@@ -75,6 +80,17 @@ await fs.writeFile(path.join(dataDir, "blast_leads_cache.json"), JSON.stringify(
 await fs.writeFile(path.join(dataDir, "leads.json"), JSON.stringify({ leads: [{ phone: "6019 000 111" }] }));
 
 const log = createConversationLogService({ dataDir });
+
+assert.equal(await log.loadHistorySyncState("wa_01"), null);
+const syncCheckpoint = {
+  instance: "wa_01",
+  status: "running",
+  phase: "import",
+  page: 12,
+  repliedPhones: ["60146426133"],
+};
+await log.saveHistorySyncState("wa_01", syncCheckpoint);
+assert.deepEqual(await log.loadHistorySyncState("wa_01"), syncCheckpoint, "历史同步断点要能写进 SQLite 并读回来");
 
 const reply = {
   id: "MSG-1",

@@ -28,9 +28,10 @@ console.log(`导入前：messages ${before.messages}（入 ${before.inbound} / �
 const result = await sync.syncAll({
   instance: onlyInstance, dryRun,
   onProgress: (p) => {
-    if (p.phase === "fetch") process.stdout.write(`\r[${p.instance}] 拉取中… 第 ${p.page}/${p.pages} 页 · 累计 ${p.fetched} 条   `);
-    else if (p.phase === "decoded") process.stdout.write(`\n[${p.instance}] 有回复的客户 ${p.customers} 个（入 ${p.inbound} / 出 ${p.outbound}）\n`);
-    else if (p.phase === "write") process.stdout.write(`\r[${p.instance}] 写入 ${p.written}/${p.total}…   `);
+    if (p.phase === "discover") process.stdout.write(`\r[${p.instance}] 第 1/2 步：扫描回复客户… 第 ${p.page}/${p.pages} 页 · ${p.fetched}/${p.total} 条   `);
+    else if (p.phase === "decoded") process.stdout.write(`\n[${p.instance}] 有回复的客户 ${p.customers} 个，开始慢速写回…\n`);
+    else if (p.phase === "import") process.stdout.write(`\r[${p.instance}] 第 2/2 步：写回… 第 ${p.page}/${p.pages} 页 · ${p.fetched}/${p.total} 条   `);
+    else if (p.phase === "retry") process.stdout.write(`\r[${p.instance}] 第 ${p.page} 页暂时失败，重试 ${p.attempt + 1}/${p.maxAttempts}…   `);
   },
 }).catch((error) => { console.error(`\n导入出错：${error.message}`); process.exit(1); });
 

@@ -523,6 +523,37 @@ SELECT
     return rows?.[0] ?? { conversations: 0, messages: 0, inbound: 0, outbound: 0, contactsWithReplies: 0, lastMessageAt: null };
   }
 
+  // Evolution 历史回填的断点放在同一个 SQLite metadata 表里。
+  // Reset 只清聊天表时断点仍在，sync 会用断点时的消息数判断是否应从头补。
+  async function loadHistorySyncState(instanceName) {
+    const instance = clean(instanceName);
+    if (!instance) return null;
+    const database = await cli();
+    const key = `evolution_history_sync:${instance}`;
+    const rows = await database.query(`
+SELECT value FROM metadata WHERE key = ${sqlValue(key)} LIMIT 1;`);
+    if (!rows?.[0]?.value) return null;
+    try {
+      return JSON.parse(rows[0].value);
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveHistorySyncState(instanceName, state) {
+    const instance = clean(instanceName);
+    if (!instance) throw new Error("历史同步缺少 Evolution instance name");
+    const database = await cli();
+    const key = `evolution_history_sync:${instance}`;
+    const nowIso = clock().toISOString();
+    await database.exec(`
+INSERT INTO metadata(key, value, updated_at)
+VALUES (${sqlValue(key)}, ${sqlValue(JSON.stringify(state ?? {}))}, ${sqlValue(nowIso)})
+ON CONFLICT(key) DO UPDATE SET
+  value = excluded.value,
+  updated_at = excluded.updated_at;`);
+  }
+
   return {
     databasePath,
     recordReply,
@@ -535,5 +566,7 @@ SELECT
     fullThread,
     isKnownLead,
     stats,
+    loadHistorySyncState,
+    saveHistorySyncState,
   };
 }

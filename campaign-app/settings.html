@@ -210,13 +210,13 @@
 
       <div class="filter-panel">
         <h2 class="step-title" style="font-size:15px"><span class="step-no">↻</span> 聊天室历史同步</h2>
-        <div class="card-kicker" style="margin:8px 0 12px">觉得聊天室对话不全、你手机打的回复没出现？按一下把 WhatsApp 完整历史从 Evolution 拉进本机 SQL。要几分钟，可以放着跑。</div>
+        <div class="card-kicker" style="margin:8px 0 12px">觉得聊天室对话不全、你手机打的回复没出现？按一下把 WhatsApp 完整历史从 Evolution 分批补回本机 SQL。Reset 或清空聊天后也可以用，要几分钟，可以放着跑。</div>
         <div class="actions">
-          <button class="btn primary" id="btnSyncHistory">↻ 一键同步历史</button>
+          <button class="btn primary" id="btnSyncHistory">↻ 慢速补回历史</button>
         </div>
         <div class="status-line" id="syncHistoryStatus"></div>
         <div class="database-note" style="margin-top:12px">
-          只导入「有来有回」的客户对话；纯 blast 没回、私人冷发不会进来。幂等 —— 随时可以再按，不会写重复。同步只影响这台电脑，不改 Notion、不发 WhatsApp。
+          每页 200 条慢速写回，并保存断点；中途断线或重启后再按会继续。只导入「有来有回」的客户对话，不会写重复。同步只影响这台电脑，不改 Notion、不发 WhatsApp。
         </div>
       </div>
     </div>
@@ -982,15 +982,18 @@ function renderSyncStatus(s) {
   const line = $("syncHistoryStatus");
   const btn = $("btnSyncHistory");
   if (s.running) {
-    btn.disabled = true; btn.textContent = "同步中…";
+    btn.disabled = true; btn.textContent = "慢速补回中…";
     const p = s.progress || {};
-    if (p.phase === "fetch") line.textContent = `[${p.instance}] 从 Evolution 拉取历史… 第 ${p.page}/${p.pages} 页 · 累计 ${p.fetched} 条`;
-    else if (p.phase === "decoded") line.textContent = `[${p.instance}] 找到 ${p.customers} 个有回复的客户，准备写入…`;
+    if (p.phase === "discover") line.textContent = `[${p.instance}] 第 1/2 步：查找有回复的客户… 第 ${p.page}/${p.pages} 页 · 已扫描 ${p.fetched}/${p.total} 条`;
+    else if (p.phase === "decoded") line.textContent = `[${p.instance}] 找到 ${p.customers} 个有回复的客户，开始慢速补回完整对话…`;
+    else if (p.phase === "import") line.textContent = `[${p.instance}] 第 2/2 步：写回本机数据库… 第 ${p.page}/${p.pages} 页 · 已处理 ${p.fetched}/${p.total} 条`;
+    else if (p.phase === "retry") line.textContent = `[${p.instance}] 第 ${p.page} 页读取较慢，正在重试 ${p.attempt + 1}/${p.maxAttempts}…`;
+    else if (p.phase === "fetch") line.textContent = `[${p.instance}] 从 Evolution 拉取历史… 第 ${p.page}/${p.pages} 页 · 累计 ${p.fetched} 条`;
     else if (p.phase === "write") line.textContent = `[${p.instance}] 写入本机数据库 ${p.written}/${p.total}…`;
     else line.textContent = "同步进行中…";
     return true;
   }
-  btn.disabled = false; btn.textContent = "↻ 一键同步历史";
+  btn.disabled = false; btn.textContent = "↻ 慢速补回历史";
   if (s.error) { line.textContent = "⚠️ 同步出错：" + s.error; return false; }
   if (s.result) {
     const r = s.result;
