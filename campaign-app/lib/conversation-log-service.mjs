@@ -500,7 +500,7 @@ SELECT contact_key AS phone, display_name AS name, reply_count AS replyCount,
        stop_flag AS stopFlag, last_reply_at AS lastReplyAt
 FROM contacts WHERE contact_key = ${sqlValue(contactKey)} LIMIT 1;`);
     const rows = await database.query(`
-SELECT m.direction AS direction, m.text AS text, m.sent_at AS sentAt,
+SELECT m.id AS id, m.direction AS direction, m.text AS text, m.sent_at AS sentAt,
        m.source AS source, m.flow_topic AS flowTopic, m.payload_json AS payloadJson
 FROM messages m
 JOIN conversations v ON v.id = m.conversation_id
