@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mamba 数据库 · SQL 面板</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --line: #e2e5ea;
+    --text: #1b1f24;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eaf0ff;
+    --danger: #c0392b;
+    --danger-soft: #fdeceb;
+    --ok: #1a7f4b;
+    --code-bg: #0f172a;
+    --code-text: #cbd5e1;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c;
+      --panel: #1b1f26;
+      --line: #2b313b;
+      --text: #e6e8eb;
+      --muted: #9099a6;
+      --accent: #6ea0ff;
+      --accent-soft: #1e2839;
+      --danger: #ff6b5e;
+      --danger-soft: #35201f;
+      --ok: #4ec98a;
+      --code-bg: #0b0f16;
+      --code-text: #b9c4d4;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 20;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { opacity: .9; color: #fff; }
+  button.danger { color: var(--danger); border-color: var(--line); }
+  button.danger:hover { border-color: var(--danger); background: var(--danger-soft); }
+  button.mini { padding: 2px 8px; font-size: 12px; }
+
+  .layout { display: flex; align-items: flex-start; }
+  aside {
+    width: 250px; flex: none; border-right: 1px solid var(--line); background: var(--panel);
+    height: calc(100vh - 53px); overflow-y: auto; position: sticky; top: 53px;
+  }
+  aside .search { padding: 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  aside input {
+    width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; font-size: 13px;
+  }
+  .grp { padding: 12px 12px 4px; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+  .tbtn {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 6px 12px; border: 0; border-left: 3px solid transparent; border-radius: 0;
+    background: none; font-family: var(--mono); font-size: 12.5px;
+  }
+  .tbtn:hover { background: var(--accent-soft); color: var(--text); }
+  .tbtn.on { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .tbtn .n { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .tbtn.on .n { color: var(--accent); }
+
+  main { flex: 1; min-width: 0; padding: 18px 20px 40px; }
+  .thead h2 { margin: 0; font-family: var(--mono); font-size: 19px; }
+  .thead p { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; max-width: 70ch; }
+  .thead p.warn { color: var(--danger); }
+  .tbtn.dim { opacity: .5; }
+  .tabs { display: flex; gap: 6px; margin: 16px 0 12px; border-bottom: 1px solid var(--line); }
+  .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 7px 12px; color: var(--muted); background: none; }
+  .tab.on { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+  .card > h3 { margin: 0; padding: 9px 12px; font-size: 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  th { font-size: 11.5px; color: var(--muted); font-weight: 600; background: var(--bg); position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--accent-soft); }
+  /* 操作列钉在右边,列多时也点得到 */
+  th.act, td.act { position: sticky; right: 0; background: var(--panel); border-left: 1px solid var(--line); }
+  th.act { background: var(--bg); }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-family: var(--mono); border: 1px solid var(--line); color: var(--muted); }
+  .tag.pk { color: #b8860b; border-color: #b8860b55; background: #b8860b14; }
+  .tag.fk { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft); }
+  .tag.nn { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  .muted { color: var(--muted); }
+  .empty { padding: 28px; text-align: center; color: var(--muted); font-size: 13px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .bar input[type=search] { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 13px; min-width: 200px; }
+  pre.sql { margin: 0; padding: 12px; background: var(--code-bg); color: var(--code-text); font-family: var(--mono); font-size: 12px; line-height: 1.6; overflow-x: auto; }
+  .cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .cell.null { color: var(--muted); font-style: italic; }
+
+  /* modal */
+  .mask { position: fixed; inset: 0; background: #0008; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 50; overflow-y: auto; }
+  .modal { background: var(--panel); border-radius: 10px; border: 1px solid var(--line); width: min(880px, 100%); }
+  .modal h3 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 14px; font-family: var(--mono); }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; padding: 16px; max-height: 52vh; overflow-y: auto; }
+  .f label { display: block; font-size: 12px; font-family: var(--mono); margin-bottom: 3px; }
+  .f .hint { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .f input, .f select, .f textarea {
+    width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; font-size: 13px; font-family: var(--mono);
+  }
+  .f input:focus, .f select:focus, .f textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  .f.bad input, .f.bad select { border-color: var(--danger); }
+  .modal .foot { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); }
+  .modal .foot .spacer { flex: 1; }
+  .err { color: var(--danger); font-size: 12px; }
+
+  /* sql log */
+  .log { position: fixed; right: 0; bottom: 0; left: 250px; background: var(--panel); border-top: 1px solid var(--line); z-index: 30; }
+  .log .head { display: flex; gap: 8px; align-items: center; padding: 6px 12px; font-size: 12px; color: var(--muted); }
+  .log .head .spacer { flex: 1; }
+  .log pre { max-height: 190px; overflow: auto; margin: 0; }
+  .log.min pre { display: none; }
+  @media (max-width: 1000px) {
+    aside { width: 190px; }
+    .log { left: 190px; }
+  }
+  @media (max-width: 680px) {
+    aside { display: none; }
+    .log { left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Mamba 数据库 · SQL 面板</h1>
+  <span class="sub" id="hdr-sub"></span>
+  <span class="spacer"></span>
+  <button id="btn-seed">载入示例数据</button>
+  <button id="btn-export">导出 SQL (SQLite)</button>
+  <button id="btn-pg">导出 SQL (Postgres)</button>
+  <button id="btn-json">导出 JSON</button>
+  <button class="danger" id="btn-wipe">还原快照</button>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="search"><input id="tsearch" placeholder="搜索表名…" autocomplete="off"></div>
+    <nav id="tlist"></nav>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<div class="log min" id="log">
+  <div class="head">
+    <strong>SQL 记录</strong><span id="log-count">0</span>
+    <span class="spacer"></span>
+    <button class="mini" id="log-copy">复制</button>
+    <button class="mini" id="log-clear">清除</button>
+    <button class="mini" id="log-toggle">展开</button>
+  </div>
+  <pre class="sql" id="log-body"></pre>
+</div>
+
+<script>
+const SCHEMA = __SCHEMA__;
+const SNAPSHOT = __DATA__;          // 建这个 HTML 时从真实 mamba.sqlite 读出来的快照
+const OVERLAY_KEY = 'mamba_sql_html_overlay_v1';
+const LOG_KEY = 'mamba_sql_html_log_v1';
+const PAGE_SIZE = 100;
+
+const TABLES = SCHEMA.tables;
+const byName = Object.fromEntries(TABLES.map(t => [t.name, t]));
+
+// 快照是只读底稿;用户的增删改存成一层很小的 overlay(11MB 快照塞不进 localStorage)。
+let overlay = loadOverlay();
+let db = buildDB();
+let sqlLog = loadLog();
+let current = TABLES[0].name;
+let tab = 'schema';
+let rowFilter = '';
+let showAllCols = false;
+let page = 0;
+let quotaWarned = false;
+
+/* ---------- storage ---------- */
+function loadOverlay() {
+  try { return JSON.parse(localStorage.getItem(OVERLAY_KEY)) || {}; } catch { return {}; }
+}
+function ov(t) { return overlay[t] || (overlay[t] = { up: {}, del: [] }); }
+function saveOverlay() {
+  try {
+    localStorage.setItem(OVERLAY_KEY, JSON.stringify(overlay));
+  } catch (e) {
+    if (!quotaWarned) {
+      quotaWarned = true;
+      alert('浏览器存储写满了,改动只保留在这一次会话里(刷新会回到快照)。\n建议先「导出 SQL」再刷新。');
+    }
+  }
+}
+function keyOf(t, row) { return pkCols(t).map(c => String(row[c.name] ?? '')).join(''); }
+
+// 快照 + overlay = 当前看到的数据
+function buildDB() {
+  const out = {};
+  for (const t of TABLES) {
+    const snap = SNAPSHOT[t.name] || [];
+    const o = overlay[t.name];
+    if (!o || (!o.clear && !o.del.length && !Object.keys(o.up).length)) { out[t.name] = snap.slice(); continue; }
+    const del = new Set(o.del);
+    const up = { ...o.up };
+    const list = [];
+    for (const r of (o.clear ? [] : snap)) {
+      const k = keyOf(t.name, r);
+      if (del.has(k)) continue;
+      if (up[k]) { list.push(up[k]); delete up[k]; continue; }
+      list.push(r);
+    }
+    for (const k of Object.keys(up)) if (!del.has(k)) list.push(up[k]);
+    out[t.name] = list;
+  }
+  return out;
+}
+function saveDB() { db = buildDB(); }
+function rows(t) { return db[t] || (db[t] = []); }
+
+// 所有写操作都只动 overlay,快照本身永远不改
+function upsertRow(t, row, before) {
+  const o = ov(t);
+  if (before) {
+    const oldKey = keyOf(t, before);
+    if (oldKey !== keyOf(t, row)) delete o.up[oldKey];
+  }
+  o.up[keyOf(t, row)] = row;
+  const i = o.del.indexOf(keyOf(t, row));
+  if (i >= 0) o.del.splice(i, 1);
+  saveOverlay(); saveDB();
+}
+function removeRow(t, row) {
+  const o = ov(t);
+  const k = keyOf(t, row);
+  delete o.up[k];
+  if (!o.del.includes(k)) o.del.push(k);
+  saveOverlay(); saveDB();
+}
+function loadLog() {
+  try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch { return []; }
+}
+function pushLog(sql) {
+  sqlLog.push(sql);
+  if (sqlLog.length > 300) sqlLog = sqlLog.slice(-300);
+  localStorage.setItem(LOG_KEY, JSON.stringify(sqlLog));
+  renderLog();
+}
+
+/* ---------- sql helpers ---------- */
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function lit(v, col) {
+  if (v === null || v === undefined || v === '') {
+    if (col && col.type === 'TEXT' && v === '') return "''";
+    return 'NULL';
+  }
+  if (col && (col.type === 'INTEGER' || col.type === 'REAL') && String(v).trim() !== '' && !isNaN(v)) return String(Number(v));
+  return "'" + String(v).replace(/'/g, "''") + "'";
+}
+function pkCols(t) {
+  const cols = byName[t].columns.filter(c => c.pk);
+  return cols.length ? cols : byName[t].columns.slice(0, 1);
+}
+function wherePK(t, row) {
+  return pkCols(t).map(c => `${c.name} = ${lit(row[c.name], c)}`).join(' AND ');
+}
+function sqlInsert(t, row) {
+  const cols = byName[t].columns.filter(c => row[c.name] !== undefined && row[c.name] !== null && row[c.name] !== '');
+  const names = cols.map(c => c.name).join(', ');
+  const vals = cols.map(c => lit(row[c.name], c)).join(', ');
+  return `INSERT INTO ${t} (${names})\nVALUES (${vals});`;
+}
+function sqlUpdate(t, row, before) {
+  const pks = pkCols(t).map(c => c.name);
+  const sets = byName[t].columns
+    .filter(c => !pks.includes(c.name) && String(row[c.name] ?? '') !== String(before[c.name] ?? ''))
+    .map(c => `  ${c.name} = ${lit(row[c.name], c)}`);
+  if (!sets.length) return null;
+  return `UPDATE ${t} SET\n${sets.join(',\n')}\nWHERE ${wherePK(t, before)};`;
+}
+function sqlDelete(t, row) { return `DELETE FROM ${t}\nWHERE ${wherePK(t, row)};`; }
+
+function ddl(t) {
+  const T = byName[t];
+  const lines = T.columns.map(c => {
+    let s = `  ${c.name.padEnd(20)} ${c.type}`;
+    if (c.pk && pkCols(t).length === 1) s += ' PRIMARY KEY';
+    if (c.autoincrement) s += ' AUTOINCREMENT';
+    if (c.notnull) s += ' NOT NULL';
+    if (c.default !== null) s += ` DEFAULT ${c.default}`;
+    if (c.unique) s += ' UNIQUE';
+    if (c.check) s += ` CHECK (${c.check})`;
+    return s;
+  });
+  for (const con of T.constraints) lines.push('  ' + con);
+  let out = `CREATE TABLE IF NOT EXISTS ${t} (\n${lines.join(',\n')}\n);`;
+  for (const i of T.indexes || []) {
+    out += `\nCREATE ${i.unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${i.name}\n  ON ${t}(${i.cols})${i.where ? '\n  ' + i.where : ''};`;
+  }
+  return out;
+}
+
+/* ---------- sidebar ---------- */
+function sectionOf(t) { return t.section || (t.version === 'v4' ? 'H. 账号绑定与发送台账 (v4)' : '其它'); }
+
+function renderSidebar() {
+  const q = document.getElementById('tsearch').value.trim().toLowerCase();
+  const groups = {};
+  for (const t of TABLES) {
+    if (q && !t.name.includes(q)) continue;
+    (groups[sectionOf(t)] ||= []).push(t);
+  }
+  const nav = document.getElementById('tlist');
+  nav.innerHTML = Object.entries(groups).map(([g, ts]) => `
+    <div class="grp">${esc(g)}</div>
+    ${ts.map(t => `<button class="tbtn ${t.name === current ? 'on' : ''} ${t.designOnly ? 'dim' : ''}" data-t="${t.name}" title="${t.designOnly ? '文档里有,库里还没建' : ''}">
+      ${t.name}<span class="n">${(db[t.name] || []).length.toLocaleString()}</span></button>`).join('')}
+  `).join('');
+  nav.querySelectorAll('.tbtn').forEach(b => b.onclick = () => {
+    current = b.dataset.t; rowFilter = ''; showAllCols = false; page = 0; render();
+  });
+}
+
+/* ---------- main ---------- */
+function render() {
+  renderSidebar();
+  const T = byName[current];
+  const n = rows(current).length;
+  const info = SCHEMA.db;
+  document.getElementById('hdr-sub').textContent = info
+    ? `${info.path} 的快照 · ${TABLES.length} 张表 / ${info.rows.toLocaleString()} 行 · 取于 ${info.at.slice(0, 16).replace('T', ' ')} · 改动只留在浏览器,不回写数据库`
+    : `SQLite · ${TABLES.length} 张表 · 空壳,没有数据`;
+
+  const banner = T.designOnly
+    ? `<p class="warn">⚠️ 这张表只存在于文档 schema(${T.version}),你的库里还没建 —— 所以没有数据。</p>`
+    : T.truncated
+      ? `<p class="warn">⚠️ 只导入了 ${(SNAPSHOT[T.name] || []).length} / ${T.totalRows} 行(生成时限了行数)。</p>`
+      : '';
+
+  document.getElementById('main').innerHTML = `
+    <div class="thead">
+      <h2>${T.name} <span class="tag">${T.version}</span></h2>
+      <p>${esc(T.desc || '—')}</p>
+      ${banner}
+    </div>
+    <div class="tabs">
+      <button class="tab ${tab === 'schema' ? 'on' : ''}" data-tab="schema">结构 (${T.columns.length} 列)</button>
+      <button class="tab ${tab === 'data' ? 'on' : ''}" data-tab="data">数据 (${n} 行)</button>
+      <button class="tab ${tab === 'ddl' ? 'on' : ''}" data-tab="ddl">建表 SQL</button>
+    </div>
+    <div id="body"></div>`;
+  document.querySelectorAll('.tab').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+  if (tab === 'schema') renderSchema();
+  else if (tab === 'data') renderData();
+  else document.getElementById('body').innerHTML = `<div class="card"><pre class="sql">${esc(ddl(current))}</pre></div>`;
+}
+
+function renderSchema() {
+  const T = byName[current];
+  const cols = T.columns.map(c => `
+    <tr>
+      <td class="mono"><strong>${c.name}</strong></td>
+      <td class="mono muted">${c.type}</td>
+      <td>${c.pk ? '<span class="tag pk">PK</span> ' : ''}${c.unique ? '<span class="tag">UNIQUE</span> ' : ''}${c.notnull ? '<span class="tag nn">NOT NULL</span>' : ''}</td>
+      <td class="mono muted">${c.default === null ? '—' : esc(c.default)}</td>
+      <td class="mono muted cell">${c.check ? esc(c.check) : '—'}</td>
+      <td>${c.ref ? `<span class="tag fk">→ ${c.ref.table}.${c.ref.column}</span>` : '—'}</td>
+      <td class="muted cell" title="${esc(c.note)}">${esc(c.note || '—')}</td>
+    </tr>`).join('');
+  const cons = T.constraints.length
+    ? `<div class="card"><h3>表级约束</h3><div class="scroll"><table><tbody>${
+        T.constraints.map(c => `<tr><td class="mono">${esc(c)}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+  const idx = (T.indexes || []).length
+    ? `<div class="card"><h3>索引</h3><div class="scroll"><table><tbody>${
+        (T.indexes || []).map(i => `<tr><td class="mono">${i.unique ? 'UNIQUE ' : ''}${i.name}</td><td class="mono muted">(${esc(i.cols)}) ${esc(i.where)}</td></tr>`).join('')
+      }</tbody></table></div></div>` : '';
+  document.getElementById('body').innerHTML = `
+    <div class="card"><div class="scroll"><table>
+      <thead><tr><th>列</th><th>类型</th><th>键 / 约束</th><th>默认值</th><th>CHECK</th><th>外键</th><th>备注</th></tr></thead>
+      <tbody>${cols}</tbody></table></div></div>${cons}${idx}`;
+}
+
+function visibleCols(T, data) {
+  if (showAllCols) return T.columns;
+  const keep = T.columns.filter(c =>
+    c.pk || (c.notnull && c.default === null) || c.ref ||
+    data.some(r => r[c.name] !== undefined && r[c.name] !== null && r[c.name] !== ''));
+  return keep.length ? keep.slice(0, 10) : T.columns.slice(0, 6);
+}
+
+function renderData() {
+  const T = byName[current];
+  const all = rows(current);
+  const data = rowFilter
+    ? all.filter(r => JSON.stringify(r).toLowerCase().includes(rowFilter.toLowerCase()))
+    : all;
+  const pages = Math.max(1, Math.ceil(data.length / PAGE_SIZE));
+  if (page >= pages) page = pages - 1;
+  const slice = data.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const cols = visibleCols(T, slice);
+  const body = data.length ? `
+    <div class="card"><div class="scroll"><table>
+      <thead><tr>${cols.map(c => `<th>${c.name}${c.pk ? ' 🔑' : ''}</th>`).join('')}<th class="act">操作</th></tr></thead>
+      <tbody>${slice.map(r => {
+        const i = all.indexOf(r);
+        return `<tr>${cols.map(c => {
+          const v = r[c.name];
+          const isNull = v === undefined || v === null;
+          return `<td class="cell mono ${isNull ? 'null' : ''}" title="${esc(v)}">${isNull ? 'NULL' : esc(v)}</td>`;
+        }).join('')}
+        <td class="act"><button class="mini" data-edit="${i}">编辑</button>
+            <button class="mini danger" data-del="${i}">删除</button></td></tr>`;
+      }).join('')}</tbody></table></div></div>`
+    : `<div class="card"><div class="empty">这张表还没有数据。点「+ 新增一行 (INSERT)」开始。</div></div>`;
+
+  const pager = pages > 1 ? `
+    <div class="bar" style="justify-content:flex-end">
+      <button class="mini" id="pg-first" ${page === 0 ? 'disabled' : ''}>« 首页</button>
+      <button class="mini" id="pg-prev" ${page === 0 ? 'disabled' : ''}>‹ 上一页</button>
+      <span class="muted">第 ${page + 1} / ${pages} 页 · 每页 ${PAGE_SIZE} 行</span>
+      <button class="mini" id="pg-next" ${page >= pages - 1 ? 'disabled' : ''}>下一页 ›</button>
+      <button class="mini" id="pg-last" ${page >= pages - 1 ? 'disabled' : ''}>末页 »</button>
+    </div>` : '';
+
+  document.getElementById('body').innerHTML = `
+    <div class="bar">
+      <button class="primary" id="btn-add">+ 新增一行 (INSERT)</button>
+      <input type="search" id="rfilter" placeholder="在本表中搜索…" value="${esc(rowFilter)}">
+      <button id="btn-cols">${showAllCols ? '只看关键列' : `显示全部 ${T.columns.length} 列`}</button>
+      <span class="muted">${rowFilter ? `命中 ${data.length} / ` : ''}${all.length} 行</span>
+      ${all.length ? '<button class="danger mini" id="btn-truncate">清空本表</button>' : ''}
+    </div>${body}${pager}`;
+
+  document.getElementById('btn-add').onclick = () => openForm(null);
+  document.getElementById('btn-cols').onclick = () => { showAllCols = !showAllCols; render(); };
+  const go = (p) => { page = p; render(); };
+  document.getElementById('pg-first')?.addEventListener('click', () => go(0));
+  document.getElementById('pg-prev')?.addEventListener('click', () => go(page - 1));
+  document.getElementById('pg-next')?.addEventListener('click', () => go(page + 1));
+  document.getElementById('pg-last')?.addEventListener('click', () => go(pages - 1));
+  const f = document.getElementById('rfilter');
+  f.oninput = () => { rowFilter = f.value; page = 0; const p = f.selectionStart; render(); const g = document.getElementById('rfilter'); g.focus(); g.setSelectionRange(p, p); };
+  const tr = document.getElementById('btn-truncate');
+  if (tr) tr.onclick = () => {
+    if (!confirm(`确定清空 ${current} 的全部 ${all.length} 行?\n(只影响这个页面,不动 mamba.sqlite)`)) return;
+    pushLog(`DELETE FROM ${current};`);
+    const o = ov(current); o.clear = true; o.up = {}; o.del = [];
+    saveOverlay(); saveDB(); render();
+  };
+  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openForm(Number(b.dataset.edit)));
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => doDelete(Number(b.dataset.del)));
+}
+
+function doDelete(i) {
+  const r = rows(current)[i];
+  const sql = sqlDelete(current, r);
+  if (!confirm(`执行删除?\n\n${sql}`)) return;
+  pushLog(sql);
+  removeRow(current, r);
+  render();
+}
+
+/* ---------- insert / update form ---------- */
+function defaultVal(c) {
+  if (c.default === null) return '';
+  const d = c.default;
+  if (/^'.*'$/.test(d)) return d.slice(1, -1);
+  if (/strftime|datetime|now/i.test(d)) return new Date().toISOString();
+  return d;
+}
+function nowISO() { return new Date().toISOString().replace(/\.\d+Z$/, 'Z'); }
+
+function openForm(index) {
+  const T = byName[current];
+  const editing = index !== null;
+  const before = editing ? { ...rows(current)[index] } : null;
+  const draft = {};
+  for (const c of T.columns) {
+    draft[c.name] = editing ? (before[c.name] ?? '') :
+      (/^(created_at|updated_at|started_at|claimed_at|at|outcome_updated_at)$/.test(c.name) && c.notnull ? nowISO() : defaultVal(c));
+  }
+  if (!editing) {
+    const auto = T.columns.find(c => c.autoincrement);
+    if (auto) draft[auto.name] = String(rows(current).reduce((m, r) => Math.max(m, Number(r[auto.name]) || 0), 0) + 1);
+  }
+
+  const mask = document.createElement('div');
+  mask.className = 'mask';
+  mask.innerHTML = `
+    <div class="modal">
+      <h3>${editing ? 'UPDATE' : 'INSERT INTO'} ${T.name}</h3>
+      <div class="fields">${T.columns.map(c => {
+        const pkLocked = editing && c.pk;
+        const id = 'f_' + c.name;
+        const label = `<label for="${id}">${c.name}
+          ${c.pk ? '<span class="tag pk">PK</span>' : ''}
+          ${(c.pk || (c.notnull && c.default === null)) && !c.autoincrement ? '<span class="tag nn">必填</span>' : ''}
+          ${c.ref ? `<span class="tag fk">→${c.ref.table}</span>` : ''}</label>`;
+        let input;
+        if (c.enum) {
+          input = `<select id="${id}" data-c="${c.name}" ${pkLocked ? 'disabled' : ''}>${
+            c.enum.map(v => `<option value="${esc(v)}" ${String(draft[c.name]) === v ? 'selected' : ''}>${v === '' ? "(空 '')" : esc(v)}</option>`).join('')
+          }</select>`;
+        } else if (c.name.endsWith('_json') || c.name === 'message_text' || c.name === 'conversation_text' || c.name === 'text') {
+          input = `<textarea id="${id}" data-c="${c.name}" rows="2" ${pkLocked ? 'disabled' : ''}>${esc(draft[c.name])}</textarea>`;
+        } else {
+          const type = c.type === 'INTEGER' || c.type === 'REAL' ? 'number' : 'text';
+          input = `<input id="${id}" data-c="${c.name}" type="${type}" value="${esc(draft[c.name])}" ${pkLocked ? 'disabled' : ''}>`;
+        }
+        const hint = [c.type, c.default !== null ? `默认 ${c.default}` : '', c.note].filter(Boolean).join(' · ');
+        return `<div class="f" data-fc="${c.name}">${label}${input}<div class="hint">${esc(hint)}</div></div>`;
+      }).join('')}</div>
+      <div class="foot">
+        <span class="err" id="ferr"></span>
+        <span class="spacer"></span>
+        <button id="fcancel">取消</button>
+        <button class="primary" id="fsave">${editing ? '保存 (UPDATE)' : '插入 (INSERT)'}</button>
+      </div>
+      <div class="card" style="margin:0;border:0;border-top:1px solid var(--line);border-radius:0">
+        <h3>将要执行的 SQL</h3><pre class="sql" id="fsql"></pre>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+
+  const read = () => {
+    const o = {};
+    mask.querySelectorAll('[data-c]').forEach(el => { o[el.dataset.c] = el.value; });
+    if (editing) for (const c of pkCols(current)) o[c.name] = before[c.name];
+    return o;
+  };
+  const preview = () => {
+    const o = read();
+    const sql = editing ? (sqlUpdate(current, o, before) || '-- 没有字段变化') : sqlInsert(current, o);
+    mask.querySelector('#fsql').textContent = sql;
+  };
+  mask.querySelectorAll('[data-c]').forEach(el => el.addEventListener('input', preview));
+  preview();
+
+  const close = () => mask.remove();
+  mask.querySelector('#fcancel').onclick = close;
+  mask.onclick = e => { if (e.target === mask) close(); };
+  document.addEventListener('keydown', function onEsc(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); }
+  });
+
+  mask.querySelector('#fsave').onclick = () => {
+    const o = read();
+    mask.querySelectorAll('.f').forEach(f => f.classList.remove('bad'));
+    const bad = [];
+    for (const c of T.columns) {
+      const v = String(o[c.name] ?? '').trim();
+      if ((c.pk || (c.notnull && c.default === null)) && v === '' && !c.autoincrement) bad.push([c.name, `${c.name} 是必填`]);
+      else if (c.enum && v !== '' && !c.enum.includes(v)) bad.push([c.name, `${c.name} 只能是 ${c.enum.join(' / ')}`]);
+      else if ((c.type === 'INTEGER' || c.type === 'REAL') && v !== '' && isNaN(Number(v))) bad.push([c.name, `${c.name} 必须是数字`]);
+    }
+    // PK 唯一性
+    if (!bad.length) {
+      const pks = pkCols(current);
+      const dup = rows(current).some((r, i) =>
+        (!editing || i !== index) && pks.every(c => String(r[c.name] ?? '') === String(o[c.name] ?? '')));
+      if (dup) bad.push([pks[0].name, `主键 ${pks.map(c => c.name).join('+')} 已存在(UNIQUE 冲突)`]);
+    }
+    if (bad.length) {
+      bad.forEach(([n]) => mask.querySelector(`.f[data-fc="${n}"]`)?.classList.add('bad'));
+      mask.querySelector('#ferr').textContent = bad[0][1];
+      return;
+    }
+    if (editing) {
+      const sql = sqlUpdate(current, o, before);
+      if (!sql) { close(); return; }
+      if (byName[current].columns.some(c => c.name === 'updated_at')) o.updated_at = nowISO();
+      pushLog(sqlUpdate(current, o, before));
+      upsertRow(current, o, before);
+    } else {
+      pushLog(sqlInsert(current, o));
+      upsertRow(current, o, null);
+    }
+    close(); render();
+  };
+}
+
+/* ---------- log panel ---------- */
+function renderLog() {
+  document.getElementById('log-body').textContent = sqlLog.join('\n\n');
+  document.getElementById('log-count').textContent = ` · ${sqlLog.length} 条`;
+  const b = document.getElementById('log-body');
+  b.scrollTop = b.scrollHeight;
+}
+document.getElementById('log-toggle').onclick = e => {
+  const l = document.getElementById('log');
+  l.classList.toggle('min');
+  e.target.textContent = l.classList.contains('min') ? '展开' : '收起';
+  const b = document.getElementById('log-body');
+  b.scrollTop = b.scrollHeight;   // 展开时直接看到最新一条
+};
+document.getElementById('log-copy').onclick = async e => {
+  await navigator.clipboard.writeText(sqlLog.join('\n\n'));
+  e.target.textContent = '已复制'; setTimeout(() => e.target.textContent = '复制', 1200);
+};
+document.getElementById('log-clear').onclick = () => { sqlLog = []; localStorage.setItem(LOG_KEY, '[]'); renderLog(); };
+
+/* ---------- header actions ---------- */
+function download(name, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+document.getElementById('btn-export').onclick = () => {
+  const parts = ['-- Mamba 数据导出 ' + new Date().toISOString(), 'PRAGMA foreign_keys = ON;', ''];
+  for (const t of TABLES) {
+    const rs = db[t.name] || [];
+    if (!rs.length) continue;
+    parts.push(`-- ${t.name} (${rs.length} 行)`);
+    for (const r of rs) parts.push(sqlInsert(t.name, r));
+    parts.push('');
+  }
+  download('mamba-data.sql', parts.join('\n'));
+};
+// Postgres 要求先有父行才能插子行,所以按外键做拓扑排序再导出。
+function tablesInFKOrder() {
+  const done = new Set(), order = [], visiting = new Set();
+  const visit = (name) => {
+    if (done.has(name) || visiting.has(name)) return;   // visiting: 环(如自引用)直接跳过
+    visiting.add(name);
+    for (const c of byName[name].columns) {
+      if (c.ref && c.ref.table !== name && byName[c.ref.table]) visit(c.ref.table);
+    }
+    visiting.delete(name);
+    done.add(name); order.push(byName[name]);
+  };
+  TABLES.forEach(t => visit(t.name));
+  return order;
+}
+// 真 upsert:再灌一次时,这里的值覆盖 Postgres 里的旧行(和 tools/pg/dump-data.mjs 一致)
+function conflictClause(t, row) {
+  const pk = byName[t].columns.filter(c => c.pk).map(c => c.name);
+  const rest = byName[t].columns
+    .filter(c => !pk.includes(c.name) && row[c.name] !== undefined && row[c.name] !== null && row[c.name] !== '')
+    .map(c => c.name);
+  if (!pk.length || !rest.length) return 'ON CONFLICT DO NOTHING';
+  return `ON CONFLICT (${pk.join(', ')}) DO UPDATE SET\n` + rest.map(c => `  ${c} = EXCLUDED.${c}`).join(',\n');
+}
+document.getElementById('btn-pg').onclick = () => {
+  const parts = [
+    '-- Mamba 数据导出 (PostgreSQL) ' + new Date().toISOString(),
+    '-- 先建表: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f docs/mamba-schema.postgres.sql',
+    '-- 再灌数据: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f mamba-data.pg.sql',
+    '-- 表的顺序已按外键依赖排好,重复执行安全(ON CONFLICT DO NOTHING)。',
+    '', 'BEGIN;', '',
+  ];
+  let n = 0;
+  for (const t of tablesInFKOrder()) {
+    const rs = db[t.name] || [];
+    if (!rs.length) continue;
+    parts.push(`-- ${t.name} (${rs.length} 行)`);
+    for (const r of rs) { parts.push(sqlInsert(t.name, r).replace(/;$/, '\n' + conflictClause(t.name, r) + ';')); n++; }
+    parts.push('');
+  }
+  parts.push('COMMIT;');
+  if (!n) { alert('还没有数据可以导出。'); return; }
+  download('mamba-data.pg.sql', parts.join('\n'));
+};
+document.getElementById('btn-json').onclick = () => download('mamba-data.json', JSON.stringify(db, null, 2));
+document.getElementById('btn-wipe').onclick = () => {
+  const edits = Object.values(overlay).reduce((n, o) => n + o.del.length + Object.keys(o.up).length + (o.clear ? 1 : 0), 0);
+  if (!edits) { alert('当前就是原始快照,没有改动。'); return; }
+  if (!confirm(`丢弃这个页面上的 ${edits} 处改动,回到 mamba.sqlite 的原始快照?`)) return;
+  overlay = {}; localStorage.removeItem(OVERLAY_KEY); saveDB(); render();
+};
+document.getElementById('tsearch').oninput = renderSidebar;
+
+/* ---------- demo seed ---------- */
+document.getElementById('btn-seed').onclick = () => {
+  if (Object.values(db).some(r => r.length) && !confirm('已有数据,示例数据会追加进去(可能和真实主键冲突)。继续?')) return;
+  const at = nowISO();
+  const add = (t, o) => { const r = { ...o, created_at: at, updated_at: at }; upsertRow(t, r, null); pushLog(sqlInsert(t, r)); };
+  add('projects', { project_code: 'gen_starz', project_name: 'Gen Starz', aliases_json: '["Gen Starz","GenStarz"]', active: '1' });
+  add('projects', { project_code: 'binastra', project_name: 'Binastra', aliases_json: '["Binastra"]', active: '1' });
+  add('devices', { device_key: 'cici_macbook_pro', device_name: "Cici's MacBook Pro", owner: 'Cici', hostname: 'cici-mbp.local' });
+  add('whatsapp_connections', { connection_key: 'cici_macbook_pro::601133698121', instance_name: 'wa_01', whatsapp_number: '601133698121', owner: 'Cici', device_key: 'cici_macbook_pro', status: 'OPEN' });
+  add('contacts', { contact_key: '60123456789', phone: '60123456789', display_name: 'Ah Meng', stop_flag: '0', reply_count: '2' });
+  add('project_leads', {
+    project_lead_key: 'gen_starz:60123456789', contact_key: '60123456789', project_code: 'gen_starz',
+    phone: '60123456789', name: 'Ah Meng', sequence_status: 'ACTIVE', status: 'WARM',
+    last_flow_sent: 'Flow 1 - Project Template', next_flow: 'Flow 2 - Layout', cohort_day: '3',
+    follow_up_due: at.slice(0, 10), send_lock: '0', priority: 'HIGH', payload_json: '{}',
+  });
+  saveDB(); render();
+};
+
+/* ---------- go ---------- */
+// 有真实快照时不需要示例数据(而且主键会撞)
+if (SCHEMA.db) document.getElementById('btn-seed').style.display = 'none';
+render();
+renderLog();
+</script>
+</body>
+</html>
