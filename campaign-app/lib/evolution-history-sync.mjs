@@ -6,9 +6,12 @@
 // 幂等：靠 messageId 去重，随时可以再跑补新的。
 // 续跑：每完成一页就把断点写进 SQLite；中途断线或重启，下次从下一页继续。
 
-import { describeMessage, resolvePhone } from "../reply_intake.mjs";
+import { describeMessage, resolvePhone, resolvePhoneWithLid, lidPhonePair } from "../reply_intake.mjs";
 
 const DEFAULT_PAGE_SIZE = 200;
+// 扫完一整轮，如果私聊讯息里认得出号码的不到这个比例，就当成「坏掉」而不是
+// 「没有新讯息」。LID 定址那次就是这样静静写 0 条还报同步完成的。
+const MIN_RESOLVE_RATIO = 0.05;
 const DEFAULT_PAGE_DELAY_MS = 750;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -29,6 +32,9 @@ function messageTimeIso(message) {
   return new Date(ts < 100000000000 ? ts * 1000 : ts).toISOString();
 }
 
+// 「这是一条一对一的真讯息吗」——跟号码认不认得出来无关。
+// 认不认得出号码是 decode 的事；两件事混在一起的话，「全部认不出」就跟
+// 「本来就没有私聊讯息」长得一模一样，坏掉也看不出来。
 function isPrivateMessage(message) {
   const key = message?.key ?? {};
   const jids = [key.remoteJid, key.remoteJidAlt].map((value) => String(value ?? ""));
@@ -37,14 +43,14 @@ function isPrivateMessage(message) {
   if (!body || typeof body !== "object") return false;
   const bodyKeys = Object.keys(body);
   if (!bodyKeys.length || bodyKeys.every((name) => SYSTEM_MESSAGE_KEYS.has(name))) return false;
-  return Boolean(resolvePhone(message));
+  return true;
 }
 
-// 一条 Evolution 讯息 -> {phone, dir, row}。群组/无电话/系统事件 -> null。
-function decode(instance, message) {
+// 一条 Evolution 讯息 -> {phone, dir, row}。群组/系统事件/认不出号码 -> null。
+function decode(instance, message, lookup = null) {
   if (!isPrivateMessage(message)) return null;
   const key = message?.key ?? {};
-  const phone = resolvePhone(message);
+  const phone = resolvePhoneWithLid(message, lookup);
   const text = describeMessage(message);
   if (!phone || !text) return null;
   const sentAt = messageTimeIso(message);
@@ -92,6 +98,7 @@ export function createEvolutionHistorySync({
   api,
   conversationLog,
   listInstances,
+  lidMap = null,
   pageSize = DEFAULT_PAGE_SIZE,
   pageDelayMs = DEFAULT_PAGE_DELAY_MS,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
@@ -167,6 +174,29 @@ export function createEvolutionHistorySync({
     if (safePageDelayMs > 0 && page < pages) await sleep(safePageDelayMs);
   }
 
+  const lookupLid = lidMap ? (lid) => lidMap.resolveCached(lid) : null;
+
+  // 一页里同时带 @lid 和真号码的讯息，顺手记进对照表。
+  async function learnPairs(batch, dryRun) {
+    if (!lidMap || dryRun) return;
+    const pairs = batch.records.map(lidPhonePair).filter(Boolean);
+    if (pairs.length) await lidMap.learn(pairs, { source: "live", evidence: "history_sync" }).catch(() => {});
+  }
+
+  // 扫完之后回头检查：私聊讯息有多少条根本认不出是谁。
+  // 全军覆没时必须炸出来 —— 「导入 0 条」不该长得跟「已经是最新」一样。
+  function assertResolvable(instance, { privateSeen, resolved }) {
+    if (privateSeen < 20) return;                       // 量太小，比例没有意义
+    if (resolved / privateSeen >= MIN_RESOLVE_RATIO) return;
+    const error = new Error(
+      `[${instance}] 扫到 ${privateSeen} 条一对一讯息，但只认得出 ${resolved} 条的号码。`
+      + " Evolution 存的多半是 @lid 隐私 ID，本机 lid 对照表补不上。"
+      + " 先跑 node campaign-app/backfill_lid_map.mjs 建对照表，再重新同步历史。",
+    );
+    error.code = "LID_UNRESOLVABLE";
+    throw error;
+  }
+
   // 同步一个号码。先扫一遍找「有客户回复」的号码，再扫一遍逐页写入完整双向历史。
   async function syncInstance(instance, { dryRun = false, onProgress = null } = {}) {
     const databaseBefore = await conversationLog.stats();
@@ -214,14 +244,21 @@ export function createEvolutionHistorySync({
         let pages = Math.max(0, Number(state.pages) || 0);
         let page = startPage;
         let needsFirstPage = pages === 0;
+        let privateSeen = 0;
+        let resolved = 0;
 
         while (needsFirstPage || page <= pages) {
           needsFirstPage = false;
           const batch = await fetchPage(instance, page, state.cutoffAt, onProgress);
           pages = batch.pages;
+          await learnPairs(batch, dryRun);
           for (const message of batch.records) {
-            const decoded = decode(instance, message);
-            if (decoded?.dir === "in") repliedPhones.add(decoded.phone);
+            if (!isPrivateMessage(message)) continue;
+            privateSeen += 1;
+            const decoded = decode(instance, message, lookupLid);
+            if (!decoded) continue;
+            resolved += 1;
+            if (decoded.dir === "in") repliedPhones.add(decoded.phone);
           }
           state = {
             ...state,
@@ -240,14 +277,18 @@ export function createEvolutionHistorySync({
             fetched: state.fetched,
             total: batch.total,
             customers: repliedPhones.size,
+            unresolved: privateSeen - resolved,
             resumed: resuming,
           });
           await pauseBetweenPages(page, pages);
           page += 1;
         }
 
+        assertResolvable(instance, { privateSeen, resolved });
+
         state = {
           ...state,
+          unresolved: privateSeen - resolved,
           phase: "import",
           page: 0,
           fetched: 0,
@@ -274,8 +315,9 @@ export function createEvolutionHistorySync({
         needsFirstPage = false;
         const batch = await fetchPage(instance, page, state.cutoffAt, onProgress);
         pages = batch.pages;
+        await learnPairs(batch, dryRun);
         const decoded = batch.records
-          .map((message) => decode(instance, message))
+          .map((message) => decode(instance, message, lookupLid))
           .filter((item) => item && repliedPhones.has(item.phone));
         const inbound = decoded.filter((item) => item.dir === "in").map((item) => item.row);
         const outbound = decoded.filter((item) => item.dir === "out").map((item) => item.row);
@@ -335,6 +377,7 @@ export function createEvolutionHistorySync({
         outbound: state.outbound,
         written: dryRun ? 0 : state.written,
         failed: state.failed,
+        unresolved: Number(state.unresolved) || 0,
         dryRun,
         resumed: resuming,
       };
@@ -345,6 +388,12 @@ export function createEvolutionHistorySync({
         finishedAt: clock().toISOString(),
         error: error.message,
       };
+      // 认不出号码不是「网路暂时不通」，是扫出来的东西本身就不能用。
+      // 断点留着的话，补好对照表再按一次会直接从断点往下跑，用的还是那份
+      // 只认得出几个客户的名单 —— 所以这类失败要把断点归零，逼它重扫。
+      if (error.code === "LID_UNRESOLVABLE") {
+        state = { ...state, phase: "discover", page: 0, pages: 0, fetched: 0, repliedPhones: [] };
+      }
       await saveState(instance, state, dryRun).catch(() => {});
       throw error;
     }
@@ -354,6 +403,13 @@ export function createEvolutionHistorySync({
   async function syncAll({ instance = "", dryRun = false, onProgress = null } = {}) {
     let names = (await listInstances()).map((item) => item.name || item?.instance?.instanceName).filter(Boolean);
     if (instance) names = names.filter((name) => name === instance);
+    // 一个号码都没扫到也是坏掉，不是「同步完成」。
+    if (!names.length) {
+      throw new Error(instance
+        ? `找不到号码 ${instance}，或它现在没连上 Evolution。`
+        : "Evolution 上没有任何已连接的号码，无法补回历史。");
+    }
+    if (lidMap) await lidMap.warm().catch(() => {});
     const before = await conversationLog.stats();
     const results = [];
     for (const name of names) {
@@ -366,6 +422,9 @@ export function createEvolutionHistorySync({
       added: Number(after.messages) - Number(before.messages),
       totalMessages: after.messages,
       customersWithReplies: after.contactsWithReplies,
+      // 认不出号码的私聊讯息数。>0 表示还有对话没补进来，UI 要讲出来，
+      // 不能只报「新增 0 条」让人以为已经是最新的。
+      unresolved: results.reduce((sum, r) => sum + (Number(r.unresolved) || 0), 0),
     };
   }
 

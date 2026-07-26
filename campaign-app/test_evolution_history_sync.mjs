@@ -195,4 +195,124 @@ const pages = {
   assert.equal(result.results[0].customers, 0);
 }
 
+// ---- LID 定址 ----
+
+function lidMessage({ id, lid, fromMe, timestamp, text = "hello", phone = "" }) {
+  const key = { id, fromMe, remoteJid: `${lid}@lid` };
+  if (phone) key.remoteJidAlt = `${phone}@s.whatsapp.net`;
+  return {
+    id: `db_${id}`,
+    key,
+    messageTimestamp: timestamp,
+    messageType: "conversation",
+    message: { conversation: text },
+    pushName: fromMe ? "" : "Customer",
+  };
+}
+
+function fakeLidMap(initial = {}) {
+  const byLid = new Map(Object.entries(initial));
+  const learned = [];
+  return {
+    learned,
+    async warm() { return byLid; },
+    resolveCached: (lid) => byLid.get(lid) ?? null,
+    async learn(entries, options) {
+      for (const entry of entries) {
+        learned.push({ ...entry, source: options?.source });
+        byLid.set(entry.lid, entry.phone);
+      }
+      return { learned: entries.length };
+    },
+  };
+}
+
+// 对照表认得 lid -> 整段对话照样补得回来。
+{
+  const log = fakeConversationLog();
+  const lidMap = fakeLidMap({ "999888777": "60111111111" });
+  const lidPages = {
+    1: [lidMessage({ id: "l_out", lid: "999888777", fromMe: true, timestamp: 400, text: "out" })],
+    2: [lidMessage({ id: "l_in", lid: "999888777", fromMe: false, timestamp: 500, text: "in" })],
+  };
+  const sync = createEvolutionHistorySync({
+    api: async (_path, options) => {
+      const body = JSON.parse(options.body);
+      return { messages: { total: 2, pages: 2, currentPage: body.page, records: lidPages[body.page] } };
+    },
+    conversationLog: log,
+    lidMap,
+    listInstances: async () => [{ name: "wa_01" }],
+    pageSize: 1,
+    pageDelayMs: 0,
+    retryDelayMs: 0,
+  });
+
+  const result = await sync.syncAll();
+  assert.deepEqual(log.inbound.map((row) => row.phone), ["60111111111"], "lid 回查出号码");
+  assert.deepEqual(log.outbound.map((row) => row.phone), ["60111111111"]);
+  assert.equal(result.unresolved, 0);
+}
+
+// 讯息同时带 lid 和真号码 -> 顺手记进对照表。
+{
+  const log = fakeConversationLog();
+  const lidMap = fakeLidMap();
+  const sync = createEvolutionHistorySync({
+    api: async (_path, options) => {
+      const body = JSON.parse(options.body);
+      return {
+        messages: {
+          total: 1,
+          pages: 1,
+          currentPage: body.page,
+          records: [lidMessage({ id: "pair_in", lid: "555", fromMe: false, timestamp: 1, phone: "60222222222" })],
+        },
+      };
+    },
+    conversationLog: log,
+    lidMap,
+    listInstances: async () => [{ name: "wa_01" }],
+    pageDelayMs: 0,
+    retryDelayMs: 0,
+  });
+
+  await sync.syncAll();
+  assert.ok(lidMap.learned.some((p) => p.lid === "555" && p.phone === "60222222222" && p.source === "live"));
+}
+
+// 全是认不出的 lid -> 必须炸掉，而且断点要归零，不能报「同步完成，新增 0 条」。
+{
+  const log = fakeConversationLog();
+  const records = Array.from({ length: 25 }, (_, index) =>
+    lidMessage({ id: `x${index}`, lid: `lid${index}`, fromMe: false, timestamp: index }));
+  const sync = createEvolutionHistorySync({
+    api: async (_path, options) => {
+      const body = JSON.parse(options.body);
+      return { messages: { total: 25, pages: 1, currentPage: body.page, records } };
+    },
+    conversationLog: log,
+    lidMap: fakeLidMap(),
+    listInstances: async () => [{ name: "wa_01" }],
+    pageDelayMs: 0,
+    retryDelayMs: 0,
+  });
+
+  await assert.rejects(() => sync.syncAll(), /认得出 0 条的号码/);
+  const last = log.savedStates.at(-1);
+  assert.equal(last.status, "failed");
+  assert.equal(last.page, 0, "认不出号码的失败要归零断点，逼下次重扫");
+  assert.deepEqual(last.repliedPhones, []);
+}
+
+// 一个号码都没连上也是错误，不是「同步完成」。
+{
+  const sync = createEvolutionHistorySync({
+    api: async () => ({}),
+    conversationLog: fakeConversationLog(),
+    listInstances: async () => [],
+  });
+  await assert.rejects(() => sync.syncAll(), /没有任何已连接的号码/);
+}
+
 console.log("Evolution history sync tests passed.");

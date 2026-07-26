@@ -984,7 +984,7 @@ function renderSyncStatus(s) {
   if (s.running) {
     btn.disabled = true; btn.textContent = "慢速补回中…";
     const p = s.progress || {};
-    if (p.phase === "discover") line.textContent = `[${p.instance}] 第 1/2 步：查找有回复的客户… 第 ${p.page}/${p.pages} 页 · 已扫描 ${p.fetched}/${p.total} 条`;
+    if (p.phase === "discover") line.textContent = `[${p.instance}] 第 1/2 步：查找有回复的客户… 第 ${p.page}/${p.pages} 页 · 已扫描 ${p.fetched}/${p.total} 条${p.unresolved ? ` · 认不出号码 ${p.unresolved} 条` : ""}`;
     else if (p.phase === "decoded") line.textContent = `[${p.instance}] 找到 ${p.customers} 个有回复的客户，开始慢速补回完整对话…`;
     else if (p.phase === "import") line.textContent = `[${p.instance}] 第 2/2 步：写回本机数据库… 第 ${p.page}/${p.pages} 页 · 已处理 ${p.fetched}/${p.total} 条`;
     else if (p.phase === "retry") line.textContent = `[${p.instance}] 第 ${p.page} 页读取较慢，正在重试 ${p.attempt + 1}/${p.maxAttempts}…`;
@@ -997,7 +997,13 @@ function renderSyncStatus(s) {
   if (s.error) { line.textContent = "⚠️ 同步出错：" + s.error; return false; }
   if (s.result) {
     const r = s.result;
-    line.textContent = `✓ 同步完成：新增 ${r.added} 条，现在有回复的客户 ${r.customersWithReplies} 个。回聊天室刷新即可看到。`;
+    // 认不出号码的讯息一定要讲出来。以前只报「新增 0 条」，看起来跟「已经是最新」
+    // 一模一样 —— 实际上是 WhatsApp 的 @lid 隐私 ID 让整批对话都没被导进来。
+    if (r.unresolved) {
+      line.textContent = `⚠️ 同步完成但不完整：新增 ${r.added} 条，另有 ${r.unresolved} 条一对一讯息认不出是哪个号码（WhatsApp @lid 隐私 ID），这些对话没有补回。终端机跑 node campaign-app/backfill_lid_map.mjs --with-profile-names 建好对照表后再同步一次。`;
+    } else {
+      line.textContent = `✓ 同步完成：新增 ${r.added} 条，现在有回复的客户 ${r.customersWithReplies} 个。回聊天室刷新即可看到。`;
+    }
     return false;
   }
   return false;
