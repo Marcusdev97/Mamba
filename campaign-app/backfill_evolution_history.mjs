@@ -10,6 +10,7 @@
 import { paths, makeApi, loadEnv, listInstances } from "./campaign_core.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
+import { createLidMapService } from "./lib/lid-map-service.mjs";
 
 const dryRun = process.argv.includes("--dry-run");
 const onlyInstance = process.argv.find((a) => a.startsWith("--instance="))?.split("=")[1] || "";
@@ -17,8 +18,9 @@ const onlyInstance = process.argv.find((a) => a.startsWith("--instance="))?.spli
 const env = await loadEnv();
 const api = makeApi(env);
 const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const lidMap = createLidMapService({ dataDir: paths.dataDir });
 const sync = createEvolutionHistorySync({
-  api, conversationLog,
+  api, conversationLog, lidMap,
   listInstances: async () => listInstances(api),
 });
 
@@ -37,6 +39,10 @@ const result = await sync.syncAll({
 
 console.log("\n");
 for (const r of result.results) {
-  console.log(`[${r.instance}] ${r.dryRun ? "(dry-run) " : ""}客户 ${r.customers} 个 · 写入 ${r.written} 条${r.failed ? ` · 失败 ${r.failed}` : ""}`);
+  console.log(`[${r.instance}] ${r.dryRun ? "(dry-run) " : ""}客户 ${r.customers} 个 · 写入 ${r.written} 条${r.failed ? ` · 失败 ${r.failed}` : ""}${r.unresolved ? ` · 认不出号码 ${r.unresolved} 条` : ""}`);
 }
 console.log(`\n新增 ${result.added} 条 · 现在共 ${result.totalMessages} 条 · 有回复的客户 ${result.customersWithReplies} 个`);
+if (result.unresolved) {
+  console.log(`\n⚠ 还有 ${result.unresolved} 条一对一讯息认不出是哪个号码（WhatsApp 的 @lid 隐私 ID）。`);
+  console.log("  跑 node campaign-app/backfill_lid_map.mjs --with-profile-names 把对照表补齐，再同步一次。");
+}

@@ -6,10 +6,15 @@
 // All functions are pure — no fs, no network — and covered by test_reply_intake.mjs.
 
 // Same normalization as campaign_core/notion_upload: digits only, leading 0 -> 60 (MY).
+//
+// The length guard matters: without it a JID of "0" normalized to "60" and became
+// a real contact row — six WhatsApp status/broadcast events piled up under a
+// customer called "60" and sat in the inbox as someone waiting for a reply.
+// Every real WhatsApp JID is a full international number, so 8-15 digits.
 export function normalizePhone(value) {
   let digits = String(value ?? "").replace(/\D/g, "");
   if (digits.startsWith("0")) digits = `60${digits.slice(1)}`;
-  return digits || null;
+  return /^\d{8,15}$/.test(digits) ? digits : null;
 }
 
 // Pull the option(s) a customer tapped on a WhatsApp poll. Evolution/Baileys put
@@ -100,6 +105,50 @@ export function resolvePhone(message) {
     jidPhone(message?.participant) ||
     null
   );
+}
+
+// Extract the privacy id ("lid") from a JID. WhatsApp's LID addressing replaces
+// the phone number with an opaque id, so this is often the ONLY stable handle a
+// stored message carries — see lib/lid-map-service.mjs for how it maps back.
+export function jidLid(jid) {
+  const value = String(jid ?? "");
+  if (!value.endsWith("@lid")) return null;
+  const id = value.split("@")[0].split(":")[0].replace(/\D/g, "");
+  return id || null;
+}
+
+export function resolveLid(message) {
+  const key = message?.key ?? {};
+  return (
+    jidLid(key.remoteJid) ||
+    jidLid(key.remoteJidAlt) ||
+    jidLid(key.participant) ||
+    jidLid(message?.participant) ||
+    null
+  );
+}
+
+// The phone when the message carries one, otherwise whatever the lid map knows.
+//
+// `lookup` is a synchronous (lid) => phone|null — kept as an argument so this
+// module stays pure and testable; callers pass lidMap.resolveCached.
+export function resolvePhoneWithLid(message, lookup = null) {
+  const direct = resolvePhone(message);
+  if (direct) return direct;
+  if (typeof lookup !== "function") return null;
+  const lid = resolveLid(message);
+  if (!lid) return null;
+  return normalizePhone(lookup(lid));
+}
+
+// A message that proves "this lid is that phone" — it carries both. These are the
+// only fully trustworthy mappings; everything else in the lid map is inferred.
+export function lidPhonePair(message) {
+  const lid = resolveLid(message);
+  if (!lid) return null;
+  const phone = resolvePhone(message);
+  if (!phone) return null;
+  return { lid, phone };
 }
 
 // Walk an arbitrary Evolution payload and collect message-shaped objects.

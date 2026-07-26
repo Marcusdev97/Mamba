@@ -32,12 +32,17 @@ export function registerInboxRoutes(router) {
     const url = new URL(req.url, "http://mamba.local");
     const instance = url.searchParams.get("instance") || "";
     const filter = url.searchParams.get("filter") === "pending" ? "pending" : "all";
+    // 分页选的是「号码」，不是「wa_01 这个标签」。同一支号码以前在 Evolution 上
+    // 叫过 wa_02 / wa_03 的那段对话，也要一起显示 —— 换标签不该让客户消失。
+    const instances = runtime.instanceIdentity
+      ? await runtime.instanceIdentity.siblingInstances(instance).catch(() => [instance])
+      : [instance];
     // STOP 有两个来源：contacts.stop_flag（服务层已排）+ 全域抑制名单（这里排）。
     // 抑制名单才是真正会挡发送的那份，聊天室也不该显示。
     const { set: suppressed } = loadSuppressionSync();
-    const threads = (await inbox.inboxThreads({ instance, limit: 500, filter }))
+    const threads = (await inbox.inboxThreads({ instance: instances, limit: 500, filter }))
       .filter((t) => !suppressed.has(String(t.phone)));
-    json(res, 200, { ok: true, instance, filter, count: threads.length, threads });
+    json(res, 200, { ok: true, instance, instances, filter, count: threads.length, threads });
   });
 
   // 一个客户的完整对话（来回交错，由旧到新）。

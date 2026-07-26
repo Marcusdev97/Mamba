@@ -63,7 +63,7 @@ function inboundPayload(event) {
 // 这两个东西会指向同一个连接，如果各自算出不同的 id，第二个 INSERT 就会撞上
 // UNIQUE(contact_key, connection_key) 被 IGNORE 掉，接着 messages 找不到那个
 // conversation_id，整批 FOREIGN KEY 失败。踩过一次了。
-function conversationIdFor(contactKey, connectionKey) {
+export function conversationIdFor(contactKey, connectionKey) {
   const suffix = connectionKey
     ? String(connectionKey).replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
     : "none";
@@ -439,6 +439,9 @@ GROUP BY v.contact_key;`);
   // filter:
   //   "all"     所有回复过的客户（找漏跟进的用这个）
   //   "pending" 只列「最后一句是客户说的」= 球在你这边、等你回
+  //
+  // instance 可以给一个标签，也可以给一整组（同一个号码历来用过的所有标签）。
+  // 给一组才是对的：号码没变、只是 Evolution 上换了标签的那些对话，不该消失。
   async function inboxThreads({ instance = "", limit = 200, filter = "all" } = {}) {
     const database = await cli();
     const conditions = [
@@ -456,13 +459,13 @@ GROUP BY v.contact_key;`);
     }
     // 号码归属来自讯息 payload 里的 instanceName（每条讯息记着走哪个号码发/收）。
     // connection_key 那条路在旧资料里是空的，靠不住 —— payload 才是可靠来源。
-    const inst = clean(instance);
-    const instanceFilter = inst
+    const names = [...new Set((Array.isArray(instance) ? instance : [instance]).map(clean).filter(Boolean))];
+    const instanceFilter = names.length
       ? `AND EXISTS (
           SELECT 1 FROM messages im
           JOIN conversations iv ON iv.id = im.conversation_id
           WHERE iv.contact_key = c.contact_key
-            AND json_extract(im.payload_json, '$.instanceName') = ${sqlValue(inst)})`
+            AND json_extract(im.payload_json, '$.instanceName') IN (${names.map(sqlValue).join(", ")}))`
       : "";
     const rows = await database.query(`
 SELECT

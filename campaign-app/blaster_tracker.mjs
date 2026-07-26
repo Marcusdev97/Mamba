@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
-import { normalizePhone, describeMessage, resolvePhone, collectMessages, senderFromPayload } from "./reply_intake.mjs";
+import { normalizePhone, describeMessage, resolvePhone, resolvePhoneWithLid, lidPhonePair, collectMessages, senderFromPayload } from "./reply_intake.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
 import { addLocalStop } from "./suppression.mjs";
@@ -27,6 +27,7 @@ import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createLidMapService } from "./lib/lid-map-service.mjs";
 
 const hub = makeHub();
 
@@ -66,6 +67,7 @@ const pushedPhones = new Set(); // unknown numbers manually pushed to Notion thi
 const reliability = createTrackerReliabilityService({ trackerDir });
 const trackerSystemLogs = createSystemLogService({ rootDir: paths.rootDir });
 const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const lidMap = createLidMapService({ dataDir: paths.dataDir });
 const notionReplyQueue = createNotionReplyQueueService({
   notion,
   reliability,
@@ -365,7 +367,8 @@ function outboundFromPhone(payload, message) {
   if (!key.fromMe) return null;
   const remoteJid = String(key.remoteJid ?? message?.remoteJid ?? "");
   if (remoteJid.includes("@g.us")) return null;   // 群组不算
-  const phone = resolvePhone(message);
+  // LID 定址下大部分讯息只带 @lid，号码要从对照表回查 —— 查不到就是真的不知道是谁。
+  const phone = resolvePhoneWithLid(message, (lid) => lidMap.resolveCached(lid));
   if (!phone) return null;
   const text = describeMessage(message);
   if (!text) return null;
@@ -389,7 +392,7 @@ function eventFromMessage(payload, message) {
   const remoteJid = String(key.remoteJid ?? message?.remoteJid ?? "");
   if (remoteJid.includes("@g.us")) return null;
 
-  const phone = resolvePhone(message);
+  const phone = resolvePhoneWithLid(message, (lid) => lidMap.resolveCached(lid));
   if (!phone) return null;
 
   // Count any inbound message (text OR media) as a reply.
@@ -437,6 +440,16 @@ async function processWebhook(payload) {
   const messages = collectMessages(payload);
   const seen = new Set();
   const saved = [];
+
+  // 先学再解码。Baileys 推过来的即时讯息常常同时带 @lid 和真号码(remoteJidAlt /
+  // senderPn)，但存进 Evolution 之后那个真号码就掉了 —— 所以这是唯一能白拿
+  // 「lid 是谁」的时机，错过就只能靠补回脚本猜。
+  const pairs = messages.map(lidPhonePair).filter(Boolean);
+  if (pairs.length) {
+    await lidMap.learn(pairs, { source: "live", evidence: payloadInstance })
+      .catch((error) => console.log(`[reply-tracker] lid 对照写入失败: ${error.message}`));
+  }
+  await lidMap.warm().catch(() => {});
 
   for (const message of messages) {
     const event = eventFromMessage(payload, message);

@@ -13,6 +13,8 @@ import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createLidMapService } from "./lib/lid-map-service.mjs";
+import { createInstanceIdentityService } from "./lib/instance-identity-service.mjs";
 import { createInboxSendService } from "./lib/inbox-send-service.mjs";
 import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
@@ -123,6 +125,8 @@ const goldenLedgerService = createGoldenConversationLedgerService({
 });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const lidMap = createLidMapService({ dataDir: paths.dataDir });
+const instanceIdentity = createInstanceIdentityService({ dataDir: paths.dataDir });
 const campaignModeService = createCampaignModeService({ dataDir: paths.dataDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
@@ -614,11 +618,24 @@ const runtime = await loadRuntime({
 // WhatsApp 发送，只在晚上 22:00 或人工按「立即同步」时处理。
 runtime.campaignMode = campaignModeService;
 runtime.conversationLog = conversationLog;
+runtime.instanceIdentity = instanceIdentity;
+
+// 开机时把「现在连着的号码」跟它的 Evolution 标签钉在一起，
+// 顺便认领已经不存在的旧标签(wa_02/wa_03)。聊天室按号码看对话就靠这张表。
+deviceListInstances()
+  .then(async (items) => {
+    await instanceIdentity.syncFromInstances(items);
+    const orphans = await instanceIdentity.adoptOrphans();
+    if (orphans.adopted.length) console.log(`[instance-identity] 旧标签归到号码 ${orphans.number}：${orphans.adopted.join(", ")}`);
+    if (orphans.skipped.length) console.log(`[instance-identity] 这台电脑接过多个号码，无法判断旧标签属于谁：${orphans.skipped.join(", ")}`);
+    await instanceIdentity.linkConnections();
+  })
+  .catch((error) => console.log(`[instance-identity] 号码对照建立失败：${error.message}`));
 runtime.inboxSend = createInboxSendService({ api, dataDir: paths.dataDir, conversationLog });
 
 // 「一键同步 Evolution 历史」的背景任务。要几分钟，所以记状态让前端轮询进度。
 {
-  const historySync = createEvolutionHistorySync({ api, conversationLog, listInstances: deviceListInstances });
+  const historySync = createEvolutionHistorySync({ api, conversationLog, listInstances: deviceListInstances, lidMap });
   let job = { running: false, startedAt: null, finishedAt: null, progress: null, result: null, error: "" };
   runtime.historySync = {
     state: () => ({ ...job }),
