@@ -6,9 +6,14 @@
 日常只有一个入口：双击 `launchers/SQL 面板.command`，菜单里选 1-4：
 
 ```
-1  看数据库          2  给另一台电脑看
-3  收另一台的数据     4  立刻同步一次
+1  看全部数据（两台合起来 · Global Postgres）
+2  只看这台（本机 SQLite）
+3  给另一台电脑看     4  收另一台的数据     5  立刻同步一次
 ```
+
+选 1 会从 Global Postgres 现读现生成 `mamba-sql-global.html`(约 19 MB,含
+`source_device_key`,每一行看得出是哪台电脑的);选 2 是本机 SQLite 的
+`mamba-sql.html`。
 
 ---
 
@@ -19,6 +24,7 @@ node tools/sql-html/build.mjs                     # 带真实数据快照(约 11
 node tools/sql-html/build.mjs --no-data           # 空壳,可以分享给别人
 node tools/sql-html/build.mjs --db path/to.sqlite # 看另一台电脑的库
 node tools/sql-html/build.mjs --max-rows 2000     # 每张表最多导多少行
+node tools/sql-html/build.mjs --global            # 改读 Global Postgres(两台合起来)
 ```
 
 生成的是**单个 HTML 文件**：不连服务器、不连 CDN、不引用 Mamba 任何代码，双击就能开。
