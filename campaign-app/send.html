@@ -127,7 +127,7 @@
   .campaign-monitor:last-child { border-bottom: 0; }
   .monitor-summary { min-width: 0; display: grid; align-content: center; gap: 7px; }
   .monitor-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .monitor-kicker { color: #94a3b8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+  .monitor-kicker { display:flex; align-items:center; gap:7px; min-width:0; color: #94a3b8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
   .lane-dismiss {
     margin-left: auto; border: 1px solid #475569; border-radius: 6px; padding: 4px 8px;
     background: #18212f; color: #cbd5e1; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
@@ -136,18 +136,28 @@
   .monitor-title-row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .monitor-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 800; }
   .monitor-percent { margin-left: auto; color: #2dd36f; font-size: 17px; font-weight: 800; }
-  .monitor-sender { color: #7dd3fc; font-size: 12px; font-weight: 800; white-space: nowrap; }
+  .monitor-percent small { margin-right:4px; color:#64748b; font-size:9px; text-transform:uppercase; }
+  .monitor-sender { color: #7dd3fc; font-size: 11px; font-weight: 800; white-space: nowrap; text-transform:none; }
+  .monitor-sender.standby { color:#64748b; font-weight:700; }
+  .monitor-next {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; min-width:0;
+    color:#dbeafe; font-size:11.5px; line-height:1.35;
+  }
+  .monitor-next strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#bae6fd; }
+  .monitor-next span { flex:0 0 auto; color:#94a3b8; white-space:nowrap; }
   .lane-stop {
     border: 1px solid #7f1d1d; border-radius: 6px; padding: 4px 8px;
     background: #241216; color: #fca5a5; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
   }
   .lane-stop:disabled { opacity: .4; cursor: default; }
-  .monitor-track { height: 7px; overflow: hidden; border-radius: 4px; background: #243041; }
+  .monitor-track { display:flex; height: 7px; overflow: hidden; border-radius: 4px; background: #243041; }
   .monitor-track span {
-    display: block; width: 0; height: 100%; border-radius: inherit;
-    background: #2dd36f; transition: width .45s ease;
+    display: block; width: 0; height: 100%; transition: width .45s ease;
   }
-  .monitor-track.running span {
+  .monitor-track .track-contacted { background:#2dd36f; }
+  .monitor-track .track-skipped { background:#f59e0b; }
+  .monitor-track .track-failed { background:#ef4444; }
+  .monitor-track.running .track-contacted {
     background-image: linear-gradient(90deg, #16a34a 0 35%, #4ade80 50%, #16a34a 65% 100%);
     background-size: 180px 100%; animation: monitorMove 1.4s linear infinite;
   }
@@ -170,11 +180,14 @@
   .flow-step strong { display: block; overflow: hidden; margin-top: 3px; color: #cbd5e1; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   .flow-step.done { border-color: #14532d; background: #0c2118; }
   .flow-step.done small, .flow-step.done strong { color: #4ade80; }
-  .flow-step.active { border-color: #16a34a; background: #10291c; box-shadow: inset 3px 0 #2dd36f; }
-  .flow-step.active small { color: #86efac; }
-  .flow-step.active strong { color: #f0fdf4; }
-  .flow-step.held { border-color: #92400e; background: #291b0d; }
-  .flow-step.held small, .flow-step.held strong { color: #fbbf24; }
+  .flow-step.active { border-color: #0284c7; background: #0d2130; box-shadow: inset 3px 0 #38bdf8; }
+  .flow-step.active small { color: #7dd3fc; }
+  .flow-step.active strong { color: #e0f2fe; }
+  .flow-step.waiting { border-color: #854d0e; background: #261c0d; }
+  .flow-step.waiting small, .flow-step.waiting strong { color: #fbbf24; }
+  .flow-step.attention, .flow-step.held { border-color: #991b1b; background: #281216; }
+  .flow-step.attention small, .flow-step.attention strong,
+  .flow-step.held small, .flow-step.held strong { color: #fca5a5; }
   @media (max-width: 760px) {
     .campaign-monitor { grid-template-columns: 1fr; gap: 10px; padding: 10px 14px; }
     .flow-steps { gap: 5px; }
@@ -301,8 +314,8 @@
       <span id="monitorToggleLabel">收起进度</span>
       <span class="monitor-count" id="monitorCount">0</span>
     </button>
-    <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已关闭</button>
-    <button type="button" class="monitor-restore hidden" id="monitorClearDone" title="把所有已结束的 campaign 从清单移除；发送纪录仍会保留">清掉已结束</button>
+    <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已隐藏</button>
+    <button type="button" class="monitor-restore hidden" id="monitorClearDone" title="把所有已结束的 campaign 从清单移除；发送纪录仍会保留">移除已结束</button>
     <a href="/knowledge">🧠 脑编辑器</a>
     <a href="/bot-rules">Bot Rules</a>
     <a href="/settings">Settings</a>
@@ -328,7 +341,7 @@
         <div class="sync-stage-track"><span id="notionFill"></span></div>
       </div>
     </div>
-    <button type="button" class="sync-now" id="syncDockNow">⟳ 立即同步 Notion</button>
+    <button type="button" class="sync-now" id="syncDockNow">⟳ 同步已完成资料</button>
   </section>
   <section class="campaign-monitors" id="campaignMonitors" aria-label="Campaign live progress"></section>
   <div class="frames">
@@ -428,6 +441,82 @@ function monitorEscape(value) {
   return String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
 }
 
+function monitorSenderInfo(state, assignments) {
+  const selected = [...new Set((state?.instances || []).map((item) =>
+    typeof item === "string" ? item : item?.name
+  ).filter(Boolean).map(String))];
+  const assigned = [...new Set((assignments || []).map((item) =>
+    item?.instanceKey || item?.instanceName
+  ).filter(Boolean).map(String))];
+  const positive = Object.entries(state?.perSender || {})
+    .filter(([, count]) => Number(count || 0) > 0)
+    .map(([name]) => String(name));
+  const actual = assigned.length ? assigned : positive.length ? positive : selected;
+  return {
+    actual,
+    standby: selected.filter((name) => !actual.includes(name)),
+  };
+}
+
+function monitorClock(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleTimeString("en-MY", {
+    timeZone: "Asia/Kuala_Lumpur",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function monitorNextAction(state, assignments, running, displayStatus, log = []) {
+  const active = (assignments || []).find((item) => /^(WAITING|SENDING)_PART\d+$/.test(String(item?.status || "")));
+  const queued = (assignments || [])
+    .filter((item) => item?.status === "QUEUED")
+    .sort((a, b) => new Date(a?.scheduledAt || 0).getTime() - new Date(b?.scheduledAt || 0).getTime())[0];
+  const finish = monitorClock(state?.endAt);
+  const secondary = running && finish ? `预计 ${finish} 完成` : "";
+
+  if (!running) {
+    if (displayStatus === "COMPLETED") return { primary: "发送已经完成", secondary: "" };
+    if (["STOPPED", "INTERRUPTED", "INCOMPLETE"].includes(displayStatus)) return { primary: "这批已暂停，等待安全恢复", secondary: "" };
+    if (displayStatus === "QUEUED_BATCH") return { primary: "正在等待这个号码的上一批完成", secondary: "" };
+    return { primary: "等待开始发送", secondary: "" };
+  }
+  if (active) {
+    const part = String(active.status).match(/PART(\d+)/)?.[1];
+    return {
+      primary: `正在处理：${active.name || active.phone || "当前客户"}${part ? ` · Part ${part}` : ""}`,
+      secondary,
+    };
+  }
+  if (queued) {
+    const dueAt = new Date(queued.scheduledAt || 0).getTime();
+    const minutes = Number.isFinite(dueAt) ? Math.max(0, Math.ceil((dueAt - Date.now()) / 60000)) : null;
+    const due = monitorClock(queued.scheduledAt);
+    const relative = minutes === null ? "" : minutes <= 1 ? "少于 1 分钟" : `约 ${minutes} 分钟`;
+    return {
+      primary: `下一位：${queued.name || queued.phone || "客户"}${due ? ` · ${due}` : ""}${relative ? ` · ${relative}后` : ""}`,
+      secondary,
+    };
+  }
+  const loggedNext = [...(log || [])].reverse().find((item) => /^Next → /i.test(String(item?.message || "")));
+  const loggedMatch = String(loggedNext?.message || "").match(/^Next → (.+?) at ~([0-9:]+) \(in ~(\d+) min\)$/i);
+  if (loggedMatch) {
+    const [hour, minute, second = 0] = loggedMatch[2].split(":").map(Number);
+    const dueAt = new Date();
+    dueAt.setHours(hour, minute, second, 0);
+    const minutes = Math.max(0, Math.ceil((dueAt.getTime() - Date.now()) / 60000));
+    const relative = minutes <= 1 ? "少于 1 分钟后" : `约 ${minutes} 分钟后`;
+    return {
+      primary: `下一位：${loggedMatch[1]} · ${loggedMatch[2]} · ${relative}`,
+      secondary,
+    };
+  }
+  return { primary: "正在完成本轮资料保存", secondary };
+}
+
 function syncItemLabel(item) {
   if (!item) return "";
   const name = item.name || item.flowLabel || item.project || "";
@@ -463,13 +552,13 @@ function renderSyncDock(campaignStatus = latestCampaignStatus, outboxStatus = la
 
   if (local?.status === "RUNNING") {
     setSyncDockStage("sqlite", {
-      state: "active", title: "正在保存到 SQLite", count: `${local.recorded || 0}/${local.total || outcomes?.contacted || 0}`,
+      state: "active", title: "SQLite 正在保护发送记录", count: `${local.recorded || 0}/${local.total || outcomes?.contacted || 0}`,
       detail: `${flowName} · 正在把本轮客户 Flow 锁进本机资料库`, current: local.recorded || 0, total: local.total || outcomes?.contacted || 0, icon: "↻",
     });
   } else if (run?.running || state?.status === "RUNNING") {
     setSyncDockStage("sqlite", {
-      state: "active", title: "正在逐笔写入 SQLite", count: `${outcomes?.processed || 0}/${outcomes?.total || 0}`,
-      detail: `${syncItemLabel(activeAssignment) || flowName} · 已安全保存 ${outcomes?.contacted || 0} 位发送证据`,
+      state: "active", title: "SQLite 已保护本机进度", count: `${outcomes?.processed || 0}/${outcomes?.total || 0}`,
+      detail: `${syncItemLabel(activeAssignment) || flowName} · 已安全保存 ${outcomes?.contacted || 0} 位触达证据`,
       current: outcomes?.processed || 0, total: outcomes?.total || 0, icon: "↻",
     });
   } else if (local?.status === "FAILED") {
@@ -518,7 +607,7 @@ function renderSyncDock(campaignStatus = latestCampaignStatus, outboxStatus = la
   } else if (waiting) {
     const first = queue.waitingFlows?.[0];
     setSyncDockStage("notion", {
-      state: "waiting", title: "等待晚上 22:00 上传 Notion", count: `${waiting} 笔`,
+      state: "waiting", title: "Notion 待同步 · 晚上 22:00", count: `${waiting} 项`,
       detail: first ? `${first.flowLabel}${first.project ? ` · ${first.project}` : ""}` : "资料已经安全留在 SQLite",
       current: 0, total: waiting,
     });
@@ -527,7 +616,7 @@ function renderSyncDock(campaignStatus = latestCampaignStatus, outboxStatus = la
   }
 
   const schedule = worker?.time || "22:00";
-  document.getElementById("syncDockSchedule").textContent = `SQLite 先保存 · Notion 每晚 ${schedule} 兜底`;
+  document.getElementById("syncDockSchedule").textContent = `发送证据先保存在本机 · Notion 每晚 ${schedule} 兜底`;
   document.getElementById("syncDockNow").disabled = Boolean(worker?.running);
 }
 
@@ -613,12 +702,12 @@ function renderCampaignMonitor(status, queue) {
   const restoreButton = document.getElementById("monitorRestore");
   document.getElementById("monitorCount").textContent = String(visible.filter((item) => item?.state).length);
   restoreButton.classList.toggle("hidden", dismissedNow.length === 0);
-  restoreButton.textContent = dismissedNow.length ? `恢复已关闭 (${dismissedNow.length})` : "恢复已关闭";
+  restoreButton.textContent = dismissedNow.length ? `恢复已隐藏 (${dismissedNow.length})` : "恢复已隐藏";
   // 「清掉已结束」只在真的有已结束的 campaign 时才出现。
   const finished = runs.filter((item) => item?.state && !monitorRunIsActive(item));
   const clearButton = document.getElementById("monitorClearDone");
   clearButton.classList.toggle("hidden", finished.length === 0);
-  clearButton.textContent = `清掉已结束 (${finished.length})`;
+  clearButton.textContent = `移除已结束 (${finished.length})`;
   const shouldAutoCollapse = !visible.some(monitorRunIsActive) && !queue?.count;
   setCampaignMonitorsCollapsed(monitorDisplayChoice === null ? shouldAutoCollapse : monitorDisplayChoice === "collapsed");
   if (!runs.length) {
@@ -656,26 +745,31 @@ function renderCampaignLane(status, queue) {
   const notionStatus = String(state?.advanceStatus || state?.notionSync?.status || "").toUpperCase();
   const notionBusy = ["WAITING", "RUNNING"].includes(notionStatus);
   const notionFailed = ["FAILED", "PARTIAL"].includes(notionStatus);
-  const senders = [...new Set([
-    ...assignments.map((item) => item.instanceKey || item.instanceName),
-    ...Object.keys(state.perSender || {}),
-  ].filter(Boolean))];
+  const senderInfo = monitorSenderInfo(state, assignments);
+  const senders = senderInfo.actual;
   const laneQueue = (queue?.items || []).find((item) => (item.instanceNames || []).some((name) => senders.includes(name)));
-  const sendingClass = running ? "active" : failed > 0 ? "held" : displayStatus === "COMPLETED" ? "done" : ["STOPPED", "INTERRUPTED", "INCOMPLETE"].includes(displayStatus) ? "held" : "";
-  const notionClass = notionFailed ? "held" : notionBusy ? "active" : notionStatus === "SUCCEEDED" ? "done" : "";
-  const queueClass = laneQueue ? "active" : "";
+  const sendingClass = running ? "active" : failed > 0 ? "attention" : displayStatus === "COMPLETED" ? "done" : ["STOPPED", "INTERRUPTED", "INCOMPLETE", "QUEUED_BATCH"].includes(displayStatus) ? "waiting" : "";
+  const notionClass = notionFailed ? "attention" : notionStatus === "RUNNING" ? "active" : notionStatus === "WAITING" ? "waiting" : notionStatus === "SUCCEEDED" ? "done" : "";
+  const queueClass = laneQueue ? "waiting" : "";
+  const nextAction = monitorNextAction(state, assignments, running, displayStatus, status?.log);
+  const width = (value) => total > 0 ? Math.max(0, Math.min(100, Number(value || 0) / total * 100)) : 0;
   return `<article class="campaign-monitor" data-run-id="${monitorEscape(state.runId)}">
     <div class="monitor-summary">
-      <div class="monitor-head"><div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">${monitorEscape(senders.join(" + ") || "No sender")}</span></div><button type="button" class="lane-dismiss" data-dismiss-run="${monitorEscape(state.runId)}" title="关闭这张进度卡；不会停止发送">× 关闭</button></div>
-      <div class="monitor-title-row"><div class="monitor-title">${monitorEscape([project, flow, state.mode].filter(Boolean).join(" · "))}</div><div class="monitor-percent">${percent}%</div></div>
-      <div class="monitor-track ${running ? "running" : ""}"><span style="width:${percent}%"></span></div>
-      <div class="monitor-meta"><span>${running ? "本轮" : "上一轮"}已处理 <b>${done}/${total}</b></span><span>已触达 <b>${outcomes.contacted}</b></span><span>待处理 <b>${waiting}</b></span>${resumeProgress ? `<span class="meta-resume">本次继续 <b>${resumeProgress.processed}/${resumeProgress.total}</b> · 尚余 ${resumeProgress.remaining}</span>` : !running && resumable ? `<span class="meta-resume">当前待继续 <b>${resumable}</b> · 新一轮 0/${resumable}</span>` : ""}<span class="meta-skip">已跳过 <b>${outcomes.skipped}</b>${outcomes.noWhatsapp ? `（无 WhatsApp ${outcomes.noWhatsapp}）` : ""}</span><span class="meta-fail">发送异常 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="停止这一个号码的 Campaign">停止</button></div>
+      <div class="monitor-head"><div class="monitor-kicker">${running ? "Campaign Running" : "Campaign"} <span class="monitor-sender">实际 ${monitorEscape(senders.map((name) => name.toUpperCase()).join(" + ") || "未分配")}</span>${senderInfo.standby.length ? `<span class="monitor-sender standby">备用 ${monitorEscape(senderInfo.standby.map((name) => name.toUpperCase()).join(" + "))}</span>` : ""}</div><button type="button" class="lane-dismiss" data-dismiss-run="${monitorEscape(state.runId)}" title="只隐藏这张进度卡，不会停止发送">隐藏卡片</button></div>
+      <div class="monitor-title-row"><div class="monitor-title">${monitorEscape([project, flow, state.mode].filter(Boolean).join(" · "))}</div><div class="monitor-percent"><small>处理</small>${percent}%</div></div>
+      <div class="monitor-next"><strong>${monitorEscape(nextAction.primary)}</strong><span>${monitorEscape(nextAction.secondary)}</span></div>
+      <div class="monitor-track ${running ? "running" : ""}" aria-label="绿色已触达，黄色已跳过，红色发送异常">
+        <span class="track-contacted" style="width:${width(outcomes.contacted)}%"></span>
+        <span class="track-skipped" style="width:${width(outcomes.skipped)}%"></span>
+        <span class="track-failed" style="width:${width(failed)}%"></span>
+      </div>
+      <div class="monitor-meta"><span>${running ? "本轮" : "上一轮"}处理 <b>${done}/${total}</b></span><span>成功触达 <b>${outcomes.contacted}/${total}</b></span><span>待发送 <b>${waiting}</b></span>${resumeProgress ? `<span class="meta-resume">本次继续 <b>${resumeProgress.processed}/${resumeProgress.total}</b> · 尚余 ${resumeProgress.remaining}</span>` : !running && resumable ? `<span class="meta-resume">当前待继续 <b>${resumable}</b> · 新一轮 0/${resumable}</span>` : ""}<span class="meta-skip">已跳过 <b>${outcomes.skipped}</b>${outcomes.noWhatsapp ? `（无 WhatsApp ${outcomes.noWhatsapp}）` : ""}</span><span class="meta-fail">发送异常 <b>${failed}</b></span><button class="lane-stop" data-stop-run="${monitorEscape(state.runId)}" ${running ? "" : "disabled"} title="暂停这一批；已经发出的不会重复发送">暂停这批</button></div>
     </div>
     <div class="flow-steps">
       <div class="flow-step done"><small>01 Prepared</small><strong>${total} 人 · ${monitorEscape(state.mode)}</strong></div>
-      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? resumeProgress ? `本次 ${resumeProgress.processed}/${resumeProgress.total}` : `${done}/${total} 本轮已处理` : failed > 0 ? `${failed} 个发送异常待检查` : displayStatus === "COMPLETED" ? "发送流程完成" : displayStatus === "INCOMPLETE" ? `上一轮 ${done}/${total} · 待继续 ${resumable}` : ["STOPPED", "INTERRUPTED"].includes(displayStatus) ? `上一轮 ${done}/${total} · 待继续 ${resumable}` : monitorEscape(displayStatus || "尚未开始")}</strong></div>
-      <div class="flow-step ${notionClass}"><small>03 Notion</small><strong>${notionFailed ? `需要检查 · ${notionStatus}` : notionStatus === "RUNNING" ? "正在同步" : notionStatus === "WAITING" ? "已排队 · 22:00/手动" : notionStatus === "SUCCEEDED" ? "已同步" : "等待 SQLite"}</strong></div>
-      <div class="flow-step ${queueClass}"><small>04 This Sender Queue</small><strong>${laneQueue ? `${laneQueue.position}. ${monitorEscape(laneQueue.flowLabel)}` : "Queue 空"}</strong></div>
+      <div class="flow-step ${sendingClass}"><small>02 Sending</small><strong>${running ? resumeProgress ? `本次处理 ${resumeProgress.processed}/${resumeProgress.total}` : `处理 ${done}/${total} · 触达 ${outcomes.contacted}` : failed > 0 ? `${failed} 个发送异常待检查` : displayStatus === "COMPLETED" ? "发送流程完成" : displayStatus === "INCOMPLETE" ? `上一轮 ${done}/${total} · 待继续 ${resumable}` : ["STOPPED", "INTERRUPTED"].includes(displayStatus) ? `上一轮 ${done}/${total} · 待继续 ${resumable}` : monitorEscape(displayStatus || "尚未开始")}</strong></div>
+      <div class="flow-step ${notionClass}"><small>03 Notion</small><strong>${notionFailed ? `需要检查 · ${notionStatus}` : notionStatus === "RUNNING" ? "正在同步" : notionStatus === "WAITING" ? "待同步 · 22:00/手动" : notionStatus === "SUCCEEDED" ? "已同步" : "等待 SQLite"}</strong></div>
+      <div class="flow-step ${queueClass}"><small>04 号码队列</small><strong>${laneQueue ? `${laneQueue.position}. ${monitorEscape(laneQueue.flowLabel)}` : "Queue 空"}</strong></div>
     </div>
   </article>`;
 }
@@ -687,7 +781,7 @@ document.getElementById("campaignMonitors").addEventListener("click", async (eve
     const supplied = Array.isArray(latestCampaignStatus?.runs) ? latestCampaignStatus.runs : [];
     const run = supplied.find((item) => item?.state?.runId === runId) ||
       (latestCampaignStatus?.state?.runId === runId ? latestCampaignStatus : null);
-    if (monitorRunIsActive(run) && !confirm("这批仍在运行。关闭只会收起这张进度卡，WhatsApp 发送与 Notion 收尾仍会在后台继续。确定关闭显示？")) return;
+    if (monitorRunIsActive(run) && !confirm("这批仍在运行。隐藏卡片不会停止 WhatsApp 发送或 Notion 收尾。确定隐藏？")) return;
     // 已结束的就真的从清单移除（换台电脑/换浏览器都不会再冒出来）；
     // 还在跑的只能收起显示，不能动清单 —— 号码车道要靠它算。
     if (!monitorRunIsActive(run)) {
@@ -699,7 +793,7 @@ document.getElementById("campaignMonitors").addEventListener("click", async (eve
   }
   const button = event.target.closest("[data-stop-run]");
   if (!button || button.disabled) return;
-  if (!confirm("只停止这个号码正在跑的 Campaign？另一个号码会继续发送。")) return;
+  if (!confirm("暂停这一批 Campaign？已经发送和已保存的进度都会保留，其他号码会继续发送。")) return;
   const response = await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: button.dataset.stopRun }) });
   const data = await response.json().catch(() => ({}));
   if (!data.ok) alert(data.error || "停止失败。");

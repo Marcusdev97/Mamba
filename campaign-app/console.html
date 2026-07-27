@@ -19,15 +19,46 @@
   .outcome-card.pending .outcome-value { color:var(--blue); }
   .outcome-card.skipped .outcome-value { color:var(--amber); }
   .outcome-card.failed .outcome-value { color:var(--red); }
+  .outcome-progress { display:flex; overflow:hidden; }
+  .outcome-progress i { display:block; position:static; height:100%; width:0; transition:width .4s ease; }
+  .outcome-progress .contacted { background:var(--green); }
+  .outcome-progress .skipped { background:var(--amber); }
+  .outcome-progress .failed { background:var(--red); }
   .progress-caption { display:flex; justify-content:space-between; gap:12px; margin:8px 0 14px; color:var(--muted); font-size:12.5px; }
+  .next-action {
+    display:flex; align-items:center; justify-content:space-between; gap:14px; margin:10px 0 14px;
+    padding:11px 13px; border:1px solid rgba(56,189,248,.35); border-radius:10px;
+    background:rgba(14,165,233,.08); color:#e0f2fe; font-size:13px;
+  }
+  .next-action strong { color:#7dd3fc; }
+  .next-action span { color:var(--muted); font-size:12px; white-space:nowrap; }
   .resume-caption { margin:-4px 0 14px; padding:9px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel-2); color:var(--blue); font-size:12.5px; font-weight:700; }
   .progress-actions { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
   .run-log { margin:0 0 14px; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--panel-2); }
   .run-log summary { padding:10px 12px; color:var(--muted); cursor:pointer; font-weight:650; }
   .run-log .log { border:0; border-top:1px solid var(--line); border-radius:0; }
+  .log-line { display:grid; grid-template-columns:56px 22px minmax(0,1fr); gap:8px; align-items:start; padding:7px 10px; border-bottom:1px solid rgba(51,65,85,.45); line-height:1.45; }
+  .log-line:last-child { border-bottom:0; }
+  .log-time { color:var(--faint); font-variant-numeric:tabular-nums; }
+  .log-icon { text-align:center; }
+  .log-copy { color:#cbd5e1; }
+  .log-line.good .log-copy { color:#86efac; }
+  .log-line.warn .log-copy { color:#fbbf24; }
+  .log-line.next .log-copy { color:#7dd3fc; font-weight:700; }
   .result-table-head { display:flex; align-items:end; justify-content:space-between; gap:12px; margin:12px 0 6px; }
   .result-table-head h3 { margin:0; font-size:14px; }
   .result-table-head span { color:var(--muted); font-size:12px; }
+  .result-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:10px 0; }
+  .result-filters { display:flex; gap:7px; flex-wrap:wrap; }
+  .result-filter {
+    border:1px solid var(--line); border-radius:999px; padding:6px 10px;
+    background:var(--panel-2); color:var(--muted); font:inherit; font-size:12px; cursor:pointer;
+  }
+  .result-filter:hover { border-color:#64748b; color:var(--text); }
+  .result-filter.active { border-color:#0ea5e9; background:rgba(14,165,233,.12); color:#bae6fd; }
+  .result-table-wrap { max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:10px; }
+  .result-table-wrap table { margin:0; }
+  .result-empty { padding:24px; color:var(--muted); text-align:center; }
   .b-skip { background:var(--amber-bg); color:var(--amber); }
   .group-picker { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
   .group-picker .fld { margin:0; }
@@ -43,7 +74,7 @@
   .source-advanced .fld { padding:0 11px 10px; margin:0; }
   @media (max-width:780px) {
     .outcome-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-    .progress-head, .progress-caption { align-items:flex-start; flex-direction:column; }
+    .progress-head, .progress-caption, .next-action, .result-toolbar { align-items:flex-start; flex-direction:column; }
     .group-picker, .rename-row { grid-template-columns:1fr; }
   }
 </style>
@@ -219,30 +250,40 @@
       <div class="progress-status"><span class="badge b-go" id="progressStateLabel">准备中</span><strong class="progress-percent" id="progressPercent">0%</strong></div>
     </div>
     <div class="chips" id="statusChips"></div>
+    <div class="next-action" id="nextAction"><strong>等待发送开始</strong><span></span></div>
     <div class="outcome-grid" aria-label="发送结果概览">
       <div class="outcome-card reached"><div class="outcome-label">已触达</div><div class="outcome-value" id="resultContacted">0</div><div class="outcome-note">至少成功发出 Part 1</div></div>
       <div class="outcome-card pending"><div class="outcome-label">待处理</div><div class="outcome-value" id="resultPending">0</div><div class="outcome-note">排队中或等待下一个 Part</div></div>
       <div class="outcome-card skipped"><div class="outcome-label">已跳过</div><div class="outcome-value" id="resultSkipped">0</div><div class="outcome-note">其中无 WhatsApp <b id="resultUnreachable">0</b> · 不会重试</div></div>
       <div class="outcome-card failed"><div class="outcome-label">发送异常</div><div class="outcome-value" id="resultFailed">0</div><div class="outcome-note">系统或连接问题，检查后才重试</div></div>
     </div>
-    <div class="progress"><i id="progFill"></i></div>
+    <div class="progress outcome-progress" aria-label="绿色已触达，黄色已跳过，红色发送异常">
+      <i class="contacted" id="progContacted"></i><i class="skipped" id="progSkipped"></i><i class="failed" id="progFailed"></i>
+    </div>
     <div class="progress-caption"><span id="progressCaption">等待发送开始</span><span>无 WhatsApp 属于不可送达，不计为发送异常</span></div>
     <div class="resume-caption hidden" id="resumeCaption"></div>
     <div class="progress-actions">
-      <button class="btn danger" id="btnStop">停止</button>
+      <button class="btn danger" id="btnStop">暂停这批</button>
       <button class="btn primary hidden" id="btnResume">▶ 继续发送</button>
       <button class="btn live hidden" id="btnRetryFailed">重试发送异常</button>
       <button class="btn" id="btnExport">导出 CSV（含发送时间）</button>
     </div>
     <details class="run-log" id="logDetails">
-      <summary id="logSummary">运行记录</summary>
+      <summary id="logSummary">易读运行时间线</summary>
       <div class="log" id="logBox"></div>
     </details>
     <div class="result-table-head"><h3>客户结果明细</h3><span>只有「发送异常」会进入手动重试</span></div>
-    <table style="margin-top:14px">
-      <thead><tr><th>姓名</th><th>号码</th><th>结果</th><th>Part1 发送</th><th>Part2+ 发送</th><th>结果说明</th></tr></thead>
-      <tbody id="jobBody"></tbody>
-    </table>
+    <div class="result-toolbar">
+      <div class="result-filters" id="jobFilters" aria-label="客户结果筛选"></div>
+      <span class="muted" id="jobFilterSummary"></span>
+    </div>
+    <div class="result-table-wrap">
+      <table>
+        <thead><tr><th>姓名</th><th>号码</th><th>结果</th><th>Part1 发送</th><th>Part2+ 发送</th><th>结果说明</th></tr></thead>
+        <tbody id="jobBody"></tbody>
+      </table>
+      <div class="result-empty hidden" id="jobEmpty">这个分类目前没有客户。</div>
+    </div>
   </div>
 </div>
 
@@ -264,6 +305,8 @@ let preparedCanQueue = false;
 let LEAD_GROUPS = [];
 let currentLeadGroupId = null;
 let leadInputMode = "paste";
+let jobResultFilter = "all";
+let latestProgressAssignments = [];
 
 function applyProjectSenders() {
   document.querySelectorAll(".sender").forEach((c) => {
@@ -449,6 +492,97 @@ function deriveOutcomes(state) {
   result.percent = result.total ? Math.round(result.processed / result.total * 100) : 0;
   return result;
 }
+
+function progressNextAction(state, running, displayStatus) {
+  const assignments = Array.isArray(state?.assignments) ? state.assignments : [];
+  const active = assignments.find((item) => /^(WAITING|SENDING)_PART\d+$/.test(String(item?.status || "")));
+  const queued = assignments
+    .filter((item) => item?.status === "QUEUED")
+    .sort((a, b) => new Date(a?.scheduledAt || 0).getTime() - new Date(b?.scheduledAt || 0).getTime())[0];
+  const finish = state?.endAt ? fmtTime(state.endAt) : "";
+  const secondary = finish ? "预计 " + finish + " 完成" : "";
+  if (!running) {
+    if (displayStatus === "COMPLETED") return { primary:"发送已经完成", secondary };
+    if (["STOPPED", "INTERRUPTED", "INCOMPLETE"].includes(displayStatus)) return { primary:"这批已暂停，等待安全恢复", secondary };
+    if (displayStatus === "QUEUED_BATCH") return { primary:"正在等待这个号码的上一批完成", secondary };
+    return { primary:"等待开始发送", secondary };
+  }
+  if (active) {
+    const part = String(active.status).match(/PART(\d+)/)?.[1];
+    return { primary:"正在处理：" + (active.name || active.phone || "当前客户") + (part ? " · Part " + part : ""), secondary };
+  }
+  if (queued) {
+    const dueAt = new Date(queued.scheduledAt || 0).getTime();
+    const minutes = Number.isFinite(dueAt) ? Math.max(0, Math.ceil((dueAt - Date.now()) / 60000)) : null;
+    const relative = minutes === null ? "" : minutes <= 1 ? "少于 1 分钟后" : "约 " + minutes + " 分钟后";
+    return {
+      primary:"下一位：" + (queued.name || queued.phone || "客户") + (queued.scheduledAt ? " · " + fmtTime(queued.scheduledAt) : "") + (relative ? " · " + relative : ""),
+      secondary,
+    };
+  }
+  return { primary:"正在完成本轮资料保存", secondary };
+}
+
+function jobResultCategory(job) {
+  const status = String(job?.status || "");
+  if (status === "FAILED") return "failed";
+  if (status.startsWith("SKIPPED_")) return "skipped";
+  if (status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(status)) return "pending";
+  if (job?.part1At || ["SENT", "REPLIED_WARM", "PART1_ONLY_END_TIME"].includes(status)) return "contacted";
+  return "skipped";
+}
+
+function renderJobResults() {
+  const assignments = latestProgressAssignments;
+  const counts = { all:assignments.length, pending:0, contacted:0, skipped:0, failed:0 };
+  for (const job of assignments) counts[jobResultCategory(job)] += 1;
+  const filters = [
+    ["all", "全部"], ["pending", "待发送"], ["contacted", "已触达"], ["skipped", "已跳过"], ["failed", "异常"],
+  ];
+  $("jobFilters").innerHTML = filters.map(([key, label]) =>
+    '<button type="button" class="result-filter ' + (jobResultFilter === key ? "active" : "") +
+    '" data-job-filter="' + key + '">' + label + " " + counts[key] + "</button>"
+  ).join("");
+  const shown = jobResultFilter === "all"
+    ? assignments
+    : assignments.filter((job) => jobResultCategory(job) === jobResultFilter);
+  $("jobFilterSummary").textContent = "显示 " + shown.length + " / " + assignments.length;
+  $("jobEmpty").classList.toggle("hidden", shown.length > 0);
+  $("jobBody").innerHTML = shown.map((a) => {
+    const extra = (a.extraPartsAt || []).map((t, i) => t ? "P" + (i + 3) + " " + fmtSec(t) : "").filter(Boolean).join("  ");
+    const p2cell = fmtSec(a.part2At) + (extra ? " <span class='muted'>" + escapeAttr(extra) + "</span>" : "");
+    return "<tr><td>" + escapeAttr(a.name || "") + "</td><td>" + escapeAttr(a.phone || "") + "</td><td>" + badge(a.status) +
+      "</td><td>" + fmtSec(a.part1At) + "</td><td>" + p2cell + "</td><td class='muted'>" + escapeAttr(a.error || "") + "</td></tr>";
+  }).join("");
+}
+
+function friendlyLogLine(message) {
+  const text = String(message || "");
+  let match = text.match(/^Next → (.+?) at ~([0-9:]+) \(in ~(\d+) min\)$/i);
+  if (match) return { icon:"⏱", tone:"next", text:`下一位 ${match[1]} · 约 ${match[2]} · ${match[3]} 分钟后` };
+  match = text.match(/^NO WHATSAPP → (.+?)\s*[（(]/i);
+  if (match) return { icon:"↷", tone:"warn", text:`${match[1]} 没有 WhatsApp · 已跳过并继续下一位` };
+  match = text.match(/^Part (\d+) → (.+?) \(([^)]+)\) via (.+)$/i);
+  if (match) return { icon:"→", tone:"", text:`发送 Part ${match[1]} · ${match[2]} · ${match[4].toUpperCase()}` };
+  match = text.match(/^Fixed-window pacing (\d+) leads × (\d+) part\(s\) ~([\d.]+) min apart .*last around ([0-9:]+)\.?$/i);
+  if (match) return { icon:"◷", tone:"", text:`已安排 ${match[1]} 位客户 · 每位 ${match[2]} 段 · 间隔约 ${Math.round(Number(match[3]))} 分钟 · 预计 ${match[4].slice(0, 5)} 完成` };
+  match = text.match(/^Suppression list refreshed: (\d+) phone\(s\) blocked/i);
+  if (match) return { icon:"🛡", tone:"good", text:`防重复名单已更新 · 已保护 ${match[1]} 个号码` };
+  if (/^Queue 接力启动:/.test(text)) return { icon:"↪", tone:"good", text:"队列接力 · " + text.replace(/^Queue 接力启动:\s*/, "") };
+  if (/^SQLite 已完成/.test(text)) return { icon:"✓", tone:"good", text };
+  if (/FAILED|异常|中断|暂停/i.test(text)) return { icon:"!", tone:"warn", text };
+  return { icon:"·", tone:"", text };
+}
+
+$("jobFilters").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-job-filter]");
+  if (!button) return;
+  jobResultFilter = button.dataset.jobFilter || "all";
+  renderJobResults();
+});
+$("logSummary").addEventListener("click", () => {
+  $("logDetails").dataset.userToggled = "1";
+});
 
 // ---- senders + API status (Phone Setup 在 /settings 页) ----
 async function refreshInstances() {
@@ -751,7 +885,7 @@ $("btnStartLive").addEventListener("click", () => {
   startCampaign(true);
 });
 $("btnStop").addEventListener("click", async () => {
-  if (!confirm("确认停止当前 campaign？已发送的不会撤回。")) return;
+  if (!confirm("暂停当前 Campaign？已发送和已保存的进度都会保留，之后可以安全继续。")) return;
   await post("/api/stop", { runId: preparedRunId });
 });
 $("btnExport").addEventListener("click", () => { window.location = "/api/export" + (preparedRunId ? "?runId=" + encodeURIComponent(preparedRunId) : ""); });
@@ -797,12 +931,17 @@ async function pollStatus() {
   $("progressStateLabel").textContent = statusLabel(displayStatus);
   $("progressStateLabel").className = "badge " + (snap.running ? "b-go" : outcomes.failed ? "b-fail" : outcomes.pending ? "b-warm" : "b-sent");
   $("progressPercent").textContent = outcomes.percent + "%";
+  const next = progressNextAction(s, snap.running, displayStatus);
+  $("nextAction").innerHTML = "<strong>" + escapeAttr(next.primary) + "</strong><span>" + escapeAttr(next.secondary) + "</span>";
   $("resultContacted").textContent = outcomes.contacted;
   $("resultPending").textContent = outcomes.pending;
   $("resultSkipped").textContent = outcomes.skipped;
   $("resultUnreachable").textContent = outcomes.noWhatsapp;
   $("resultFailed").textContent = outcomes.failed;
-  $("progFill").style.width = outcomes.percent + "%";
+  const outcomeWidth = (value) => outcomes.total ? Math.max(0, Math.min(100, Number(value || 0) / outcomes.total * 100)) + "%" : "0%";
+  $("progContacted").style.width = outcomeWidth(outcomes.contacted);
+  $("progSkipped").style.width = outcomeWidth(outcomes.skipped);
+  $("progFailed").style.width = outcomeWidth(outcomes.failed);
   $("progressCaption").textContent = "已处理 " + outcomes.processed + "/" + outcomes.total +
     (outcomes.failed ? " · " + outcomes.failed + " 个发送异常需要检查" : " · 没有真正的发送异常");
   const resumeProgress = s.resumeProgress || null;
@@ -816,16 +955,18 @@ async function pollStatus() {
   } else {
     resumeCaption.classList.add("hidden");
   }
-  $("jobBody").innerHTML = s.assignments.map((a) => {
-    const extra = (a.extraPartsAt || []).map((t, i) => t ? "P" + (i + 3) + " " + fmtSec(t) : "").filter(Boolean).join("  ");
-    const p2cell = fmtSec(a.part2At) + (extra ? " <span class='muted'>" + extra + "</span>" : "");
-    return "<tr><td>" + a.name + "</td><td>" + a.phone + "</td><td>" + badge(a.status) + "</td><td>" + fmtSec(a.part1At) + "</td><td>" + p2cell + "</td><td class='muted'>" + (a.error || "") + "</td></tr>";
-  }).join("");
+  latestProgressAssignments = Array.isArray(s.assignments) ? s.assignments : [];
+  renderJobResults();
   const log = $("logBox");
-  log.innerHTML = (snap.log || []).map((l) => "<div>[" + fmtTime(l.time) + "] " + l.message + "</div>").join("");
+  log.innerHTML = (snap.log || []).map((l) => {
+    const friendly = friendlyLogLine(l.message);
+    return '<div class="log-line ' + friendly.tone + '" title="' + escapeAttr(l.message || "") + '">' +
+      '<span class="log-time">' + fmtTime(l.time) + '</span><span class="log-icon">' + friendly.icon +
+      '</span><span class="log-copy">' + escapeAttr(friendly.text) + "</span></div>";
+  }).join("");
   log.scrollTop = log.scrollHeight;
-  $("logSummary").textContent = "运行记录 · " + (snap.log || []).length + " 条";
-  $("logDetails").open = !!snap.running || outcomes.failed > 0;
+  $("logSummary").textContent = "易读运行时间线 · " + (snap.log || []).length + " 条";
+  if (!$("logDetails").dataset.userToggled) $("logDetails").open = outcomes.failed > 0;
   $("btnStop").classList.toggle("hidden", !snap.running);
   // Interrupted multi-part jobs (WAITING/SENDING_PART3+) are resumable too.
   $("btnResume").classList.toggle("hidden", snap.running || resumable === 0);
