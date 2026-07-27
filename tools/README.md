@@ -26,7 +26,111 @@ overlay），要真的落库得用页面上的「导出 SQL」。
 
 > ⚠️ 带数据的 `mamba-sql.html` 含客户电话和对话内容，已在 `.gitignore` 里，别提交也别外发。
 
-## 2. Postgres 导出
+## 2. 让另一台电脑连过来看(同一个 Wi-Fi)
+
+双击 `launchers/SQL 面板 (给另一台电脑看).command`,或者:
+
+```bash
+node tools/sql-html/serve.mjs
+node tools/sql-html/serve.mjs --port=8900
+node tools/sql-html/serve.mjs --new-token     # 换存取码,旧网址立刻失效
+```
+
+终端机会印出一条 `http://192.168.x.x:8900/?key=xxxx`,贴进另一台电脑的浏览器就能看,
+那台不用装任何东西,手机平板也行。存取码第一次启动自己产生,存在
+`tools/sql-html/.access-token`(权限 0600、已 gitignore),之后网址固定不变。
+
+和 [hub-server](../hub-server/README.md) 同一个安全模型,区别是 hub-server 给你看**客户对话**,
+这个给你看**整个数据库**(所有表的结构 + 数据)。
+
+- **只读**:开库时钉死 `readOnly`,由 SQLite 自己拒绝写入;那台电脑在页面上的增删改只留在
+  他自己的浏览器里,不会回写主机的 `mamba.sqlite`
+- **实时**:按数据库的 mtime 快取。app 一写进去,下次开就是新的;没变动就直接给快取(2ms)
+- **省流量**:gzip 后 12 MB → 约 0.7 MB,第一次约 1.4 秒,之后秒开
+- 只接受 GET;没带或带错存取码一律 401
+
+## 3. 让另一台电脑把它的数据传过来
+
+双击 `launchers/收另一台电脑的数据.command`(或 `serve.mjs --allow-upload`)。
+终端机会印出一条 `http://192.168.x.x:8900/upload?key=xxxx`,发给那台电脑,
+那边**开网址 → 选档案 → 上传**就完事,不用装 Node、不用会命令行。
+
+收到的档案存进 `campaign-data/incoming/<时间戳>_mamba.sqlite`,
+**绝不覆盖主机自己的 `mamba.sqlite`** —— 两台电脑写同一个库是 ADR 明确否决的做法。
+传完主机的终端机会印出这个档案的行数、来自哪台机器,以及下一步命令:
+
+```bash
+node tools/sql-html/serve.mjs --db=campaign-data/incoming/xxx.sqlite   # 看它
+node tools/pg/dump-data.mjs --db=campaign-data/incoming/xxx.sqlite --if-newer   # 合并到 Postgres
+```
+
+守住的几条:只接受真的 SQLite 档案(检查档头魔术字)、档名洗过(挡路径穿越)、
+512MB 上限、一样要存取码。**不加 `--allow-upload` 时 `/upload` 直接 404**,
+纯看数据的场景 server 还是完全只读。
+
+> 那台电脑上传前要先关掉 Mamba:程式还开着的话最新几笔可能还在 `-wal` 里没落主库。
+> 上传页顶部有这句提醒。
+
+## 4. 架构:每台电脑各自跑,Global Postgres 只收不发
+
+```
+电脑 A                          电脑 B
+├── WhatsApp A                  ├── WhatsApp B
+├── Leads A (lead_groups 绑 device_key)
+├── SQLite A  ← 本机真相源       ├── SQLite B  ← 本机真相源
+├── Morning Reply Sync A        ├── …
+├── Scheduler A (launchd)       │
+└── Sync Agent A ──────┐        └── Sync Agent B ──┐
+                       ▼                            ▼
+                  Global PostgreSQL(只读汇总,不回写任何一台)
+```
+
+两台各管各的号码和名单,**不共编同一批客户**,所以不需要原子 Arbiter ——
+这跟 [ADR 第七节](../docs/MAMBA_ARCHITECTURE_ADR.md)警告的场景是两回事。
+
+### 归属追踪:哪个号码发的、哪台电脑发的
+
+`project_leads` 和 `send_jobs` 本来就记了(`last_sender_phone` / `last_sent_by_device` /
+`connection_key`,实测 100% 填充)。但 `messages` 没有归属栏位,`conversations.connection_key`
+也有三分之一是空的。
+
+补法不是改 app,而是**同步那一刻给每一行盖章**:每台电脑只同步自己的资料,
+所以「这行来自哪台」在同步当下就是事实。每张表都有:
+
+| 栏位 | 意思 |
+|---|---|
+| `source_device_key` | 哪台电脑传上来的 |
+| `synced_at` | 什么时候传的 |
+| `sync_runs`(表) | 每台每次同步一行:设备、号码、时间、行数 |
+
+于是这类问题一句 SQL 就能答:
+
+```sql
+-- 哪个电话 blast 过多少讯息
+select r.device_name, r.sender_phone, m.source, count(*)
+from messages m
+join (select distinct source_device_key, device_name, sender_phone from sync_runs) r
+  on r.source_device_key = m.source_device_key
+group by 1,2,3;
+```
+
+### Sync Agent
+
+```bash
+node tools/pg/sync-agent.mjs              # 同步本机 + 吸收 incoming/ 里别台传来的
+node tools/pg/sync-agent.mjs --dry-run    # 只说会做什么
+bash launchd/install_sync_agent.sh        # 装排程(每天 07:30 / 13:30 / 21:30)
+bash launchd/install_sync_agent.sh --status
+```
+
+连线字串放仓库根目录的 `.env.pg`(一行,已 gitignore),或环境变数 `DATABASE_URL`。
+
+Agent 做的事:跑一次建表脚本(幂等,新栏位自动补)→ 同步本机 → 把
+`campaign-data/incoming/` 里别台上传的 `.sqlite` 一并同步并归档到 `incoming/done/`。
+有锁档,排程和手动跑撞在一起不会同时跑两份;任何一步失败就非 0 结束,launchd 的
+`.err.log` 里看得到。
+
+## 5. Postgres 导出
 
 ```bash
 node tools/pg/build-postgres.mjs                  # → docs/mamba-schema.postgres.sql

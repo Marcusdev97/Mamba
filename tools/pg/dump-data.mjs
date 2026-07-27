@@ -39,6 +39,22 @@ const ddl = db
 const tables = parseSchemaText(ddl);
 const byName = Object.fromEntries(tables.map((t) => [t.name, t]));
 
+// 这台电脑是谁 —— 每一行都会盖上这个章,之后在 Postgres 里就能分辨
+// 「哪台电脑传上来的」。messages 这类本身没有归属栏位的表,全靠它。
+const me = (() => {
+  const dev = db.prepare('SELECT device_key, device_name FROM devices ORDER BY created_at LIMIT 1').get() || {};
+  const phone = (() => {
+    try { return db.prepare("SELECT value FROM metadata WHERE key='expected_sender_phone'").get()?.value || ''; }
+    catch { return ''; }
+  })();
+  return { deviceKey: dev.device_key || '', deviceName: dev.device_name || '', phone };
+})();
+if (!me.deviceKey) {
+  console.error('这个库里没有 devices 记录,认不出是哪台电脑。');
+  process.exit(1);
+}
+const SYNCED_AT = new Date().toISOString();
+
 // 父表先建 → 子表后插,否则 Postgres 的外键会拦下来
 function fkOrder() {
   const done = new Set(), visiting = new Set(), order = [];
@@ -81,6 +97,7 @@ for (const t of fkOrder()) {
   const rows = db.prepare(`SELECT * FROM "${t.name}"`).all();
   if (!rows.length) continue;
   const cols = t.columns.map((c) => c.name);
+  const stamped = [...cols, 'source_device_key', 'synced_at'];
   // 真正的 upsert:SQLite 的值永远赢。否则建表脚本种下的 metadata / schema_migrations
   // 会因为 DO NOTHING 一直压着你库里的真实值。
   const pk = t.columns.filter((c) => c.pk).map((c) => c.name);
@@ -92,12 +109,15 @@ for (const t of fkOrder()) {
   const guard = hasUpdatedAt ? `\nWHERE EXCLUDED.updated_at > ${t.name}.updated_at` : '';
   const conflict = !pk.length || !rest.length
     ? 'ON CONFLICT DO NOTHING'
-    : `ON CONFLICT (${pk.join(', ')}) DO UPDATE SET\n` + rest.map((c) => `  ${c} = EXCLUDED.${c}`).join(',\n') + guard;
+    : `ON CONFLICT (${pk.join(', ')}) DO UPDATE SET\n` +
+      [...rest, 'source_device_key', 'synced_at'].map((c) => `  ${c} = EXCLUDED.${c}`).join(',\n') + guard;
   out.push(`-- ${t.name} (${rows.length} 行)`);
   for (let i = 0; i < rows.length; i += BATCH) {
     const chunk = rows.slice(i, i + BATCH);
-    out.push(`INSERT INTO ${t.name} (${cols.join(', ')}) VALUES`);
-    out.push(chunk.map((r) => '  (' + cols.map((c) => lit(r[c])).join(', ') + ')').join(',\n'));
+    out.push(`INSERT INTO ${t.name} (${stamped.join(', ')}) VALUES`);
+    out.push(chunk.map((r) =>
+      '  (' + [...cols.map((c) => lit(r[c])), lit(me.deviceKey), lit(SYNCED_AT)].join(', ') + ')'
+    ).join(',\n'));
     out.push(conflict + ';');
   }
   out.push('');
@@ -117,8 +137,13 @@ if (identity.length) {
   }
   out.push('');
 }
+out.push('-- 同步台账:这次是谁、什么时候、传了多少');
+out.push('INSERT INTO sync_runs (source_device_key, device_name, sender_phone, started_at, rows_total, detail_json)');
+out.push(`VALUES (${lit(me.deviceKey)}, ${lit(me.deviceName)}, ${lit(me.phone)}, ${lit(SYNCED_AT)}, ${total}, ${lit(JSON.stringify(summary))});`);
+out.push('');
 out.push('COMMIT;');
 
 writeFileSync(OUT, out.join('\n') + '\n');
 console.log(`✓ ${OUT}  (${(statSync(OUT).size / 1024 / 1024).toFixed(1)} MB)`);
 console.log(`  ${total} 行 / ${summary.length} 张表`);
+console.log(`  盖章为:${me.deviceName || me.deviceKey}${me.phone ? ' / ' + me.phone : ''}`);

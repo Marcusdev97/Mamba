@@ -1,7 +1,7 @@
 -- =============================================================================
 -- Mamba schema for PostgreSQL
 -- 由 tools/pg/build-postgres.mjs 从 docs/mamba-schema.sql (v3) + docs/mamba-schema-v4.sql (v4)
--- 生成于 2026-07-26T13:52:45.917Z。不要手改这个文件,改上面两个源文件再重新生成。
+-- 生成于 2026-07-27T04:18:42.268Z。不要手改这个文件,改上面两个源文件再重新生成。
 --
 -- 用法:
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f docs/mamba-schema.postgres.sql
@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS projects (
   aliases_json           TEXT NOT NULL DEFAULT '[]',
   active                 INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- A2. 设备/电脑。稳定 device_key,用于送锁与审计。改电脑名不改 key。
@@ -33,7 +35,9 @@ CREATE TABLE IF NOT EXISTS devices (
   hostname               TEXT NOT NULL DEFAULT '',
   last_online_at         TEXT,
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- A3. WhatsApp 连接。两台电脑都可能有 wa_01,所以 instance_name 不是唯一键。 connection_key = device_key::whatsapp_number,与现有 Device Ownership 一致。
@@ -49,6 +53,8 @@ CREATE TABLE IF NOT EXISTS whatsapp_connections (
   last_seen_at           TEXT,
   created_at             TEXT NOT NULL,
   updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT '',
   UNIQUE (device_key, whatsapp_number)
 );
 
@@ -64,7 +70,9 @@ CREATE TABLE IF NOT EXISTS contacts (
   last_reply_text        TEXT NOT NULL DEFAULT '',
   last_reply_at          TEXT,
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- B2. 项目线索 = "一个人 × 一个项目"的一行,承载 flow 序列状态。 业务唯一键 project_lead_key = project_code:phone(同一人可同时在多个盘)。
@@ -106,6 +114,8 @@ CREATE TABLE IF NOT EXISTS project_leads (
   created_at             TEXT NOT NULL,
   updated_at             TEXT NOT NULL,
   assigned_account_key   TEXT,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT '',
   UNIQUE (project_code, phone)
 );
 
@@ -121,7 +131,9 @@ CREATE TABLE IF NOT EXISTS ads_leads (
   last_touch_at          TEXT,
   payload_json           TEXT NOT NULL DEFAULT '{}',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- B4. 回收/旧名单线索。recycle_lead_key = recycle:phone。
@@ -134,7 +146,9 @@ CREATE TABLE IF NOT EXISTS recycle_leads (
   source_batch           TEXT NOT NULL DEFAULT '',
   payload_json           TEXT NOT NULL DEFAULT '{}',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- B5. Flow 1 客户群。Excel/CSV 只是其中一种导入来源；名单导入后长期保留在本机， 操作者可直接选择、改名和再次预览，不需要每次重新上传文件。 客户群严格绑定 device_key + sender_phone，避免两台电脑都叫 wa_01 时混用名单。
@@ -148,7 +162,9 @@ CREATE TABLE IF NOT EXISTS lead_groups (
   sender_phone           TEXT NOT NULL,
   status                 TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','ARCHIVED')),
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS lead_group_members (
@@ -160,6 +176,8 @@ CREATE TABLE IF NOT EXISTS lead_group_members (
   source_row             INTEGER,
   created_at             TEXT NOT NULL,
   updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (group_id, member_id),
   UNIQUE (group_id, phone)
 );
@@ -172,6 +190,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   last_message_at        TEXT,
   created_at             TEXT NOT NULL,
   updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT '',
   UNIQUE (contact_key, connection_key)
 );
 
@@ -186,7 +206,9 @@ CREATE TABLE IF NOT EXISTS messages (
   template_key           TEXT,
   sent_at                TEXT,
   payload_json           TEXT NOT NULL DEFAULT '{}',
-  created_at             TEXT NOT NULL
+  created_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- template_key = project_code:f<flow>:p<part>:<lang>:v<version>  (e.g. gen_starz:f01:p1:en:v2) 同一 project/flow/part/lang 有多条 Active = 变体轮换(防 spam)。
@@ -209,7 +231,9 @@ CREATE TABLE IF NOT EXISTS templates (
   stop_count             INTEGER NOT NULL DEFAULT 0,
   viewing_count          INTEGER NOT NULL DEFAULT 0,
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- asset_key = image_name(稳定命名,如 gs_f03_location_en_v1)。
@@ -222,7 +246,9 @@ CREATE TABLE IF NOT EXISTS images (
   local_file             TEXT NOT NULL DEFAULT '',
   cloud_url              TEXT NOT NULL DEFAULT '',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 一次群发/cohort 一行。run_id 唯一键(比 Name 安全,便于重传/回链)。
@@ -242,7 +268,9 @@ CREATE TABLE IF NOT EXISTS campaign_runs (
   device_key             TEXT,
   started_at             TEXT NOT NULL,
   finished_at            TEXT,
-  payload_json           TEXT NOT NULL DEFAULT '{}'
+  payload_json           TEXT NOT NULL DEFAULT '{}',
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 单条发送任务(排程/多段/重试的最小单元)。
@@ -260,7 +288,9 @@ CREATE TABLE IF NOT EXISTS send_jobs (
   error_code             TEXT NOT NULL DEFAULT '',
   error_message          TEXT NOT NULL DEFAULT '',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- fact_key = project_code:category_slug:fact_slug。AI 只能引用 verified=1。
@@ -274,7 +304,9 @@ CREATE TABLE IF NOT EXISTS project_knowledge (
   source                 TEXT NOT NULL DEFAULT '',
   valid_until            TEXT,
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- Golden Conversation Ledger。这里保存的是「如何判断和推进约看」，不是楼盘事实。 一行 = 一个匿名 lead 的完整对话；PII 必须在写入前清洗。
@@ -304,7 +336,9 @@ CREATE TABLE IF NOT EXISTS golden_conversations (
   pk_conflicts           TEXT NOT NULL DEFAULT '[]',
   created_at             TEXT NOT NULL,
   source_hash            TEXT NOT NULL UNIQUE,
-  last_customer_reply_at TEXT
+  last_customer_reply_at TEXT,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- objection_key = scenario_slug:customer_says_slug
@@ -315,7 +349,9 @@ CREATE TABLE IF NOT EXISTS objection_bank (
   customer_says          TEXT NOT NULL DEFAULT '',
   handling               TEXT NOT NULL DEFAULT '',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- reply_log_key = message_id || phone:timestamp。存 robot 草稿 + 人工最终版。
@@ -328,7 +364,9 @@ CREATE TABLE IF NOT EXISTS ai_reply_log (
   robot_draft            TEXT NOT NULL DEFAULT '',
   final_reply            TEXT NOT NULL DEFAULT '',
   decision               TEXT NOT NULL DEFAULT '' CHECK (decision IN ('','AUTO_SENT','HUMAN_SENT','SKIPPED')),
-  created_at             TEXT NOT NULL
+  created_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 后台 Sync Worker 的任务队列(方向按数据类型定,见 ADR 第四节)。
@@ -345,7 +383,9 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
   last_error_message     TEXT NOT NULL DEFAULT '',
   payload_json           TEXT NOT NULL DEFAULT '{}',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 每次批处理操作(发送/归属修复等)的审计头。
@@ -360,7 +400,9 @@ CREATE TABLE IF NOT EXISTS operations (
   failed_count           INTEGER NOT NULL DEFAULT 0,
   payload_json           TEXT NOT NULL DEFAULT '{}',
   started_at             TEXT NOT NULL,
-  finished_at            TEXT
+  finished_at            TEXT,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 归属/字段变更明细(before/after + 重试),支持按 operation_id 精确回滚。
@@ -376,6 +418,8 @@ CREATE TABLE IF NOT EXISTS ownership_changes (
   error_message          TEXT NOT NULL DEFAULT '',
   retry_count            INTEGER NOT NULL DEFAULT 0,
   updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT '',
   UNIQUE (operation_id, notion_page_id)
 );
 
@@ -391,7 +435,9 @@ CREATE TABLE IF NOT EXISTS import_runs (
   failed_count           INTEGER NOT NULL DEFAULT 0,
   report_json            TEXT NOT NULL DEFAULT '{}',
   started_at             TEXT NOT NULL,
-  finished_at            TEXT
+  finished_at            TEXT,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- append-only 系统日志(带结构化错误码)。
@@ -403,7 +449,9 @@ CREATE TABLE IF NOT EXISTS system_logs (
   event                  TEXT NOT NULL DEFAULT '',
   code                   TEXT NOT NULL DEFAULT '',
   message                TEXT NOT NULL DEFAULT '',
-  payload_json           TEXT NOT NULL DEFAULT '{}'
+  payload_json           TEXT NOT NULL DEFAULT '{}',
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- Sync Worker 单例状态。
@@ -416,20 +464,26 @@ CREATE TABLE IF NOT EXISTS sync_worker_state (
   last_finished_at       TEXT,
   last_error_code        TEXT NOT NULL DEFAULT '',
   last_error_message     TEXT NOT NULL DEFAULT '',
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 键值元数据 + 迁移记录。
 CREATE TABLE IF NOT EXISTS metadata (
   key                    TEXT PRIMARY KEY,
   value                  TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version                INTEGER PRIMARY KEY,
   name                   TEXT NOT NULL,
-  applied_at             TEXT NOT NULL
+  applied_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS whatsapp_accounts (
@@ -447,7 +501,9 @@ CREATE TABLE IF NOT EXISTS whatsapp_accounts (
   lifetime_sent_messages INTEGER NOT NULL DEFAULT 0 CHECK (lifetime_sent_messages >= 0),
   lifetime_failed        INTEGER NOT NULL DEFAULT 0 CHECK (lifetime_failed >= 0),
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS device_bindings (
@@ -460,7 +516,9 @@ CREATE TABLE IF NOT EXISTS device_bindings (
   bound_at               TEXT,
   released_at            TEXT,
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- Mutable current state. The PRIMARY KEY is the atomic send gate.
@@ -484,7 +542,9 @@ CREATE TABLE IF NOT EXISTS send_claims (
   sent_at                TEXT,
   updated_at             TEXT NOT NULL,
   last_error_code        TEXT NOT NULL DEFAULT '',
-  last_error_message     TEXT NOT NULL DEFAULT ''
+  last_error_message     TEXT NOT NULL DEFAULT '',
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- Append-only audit log. Application code may INSERT only.
@@ -501,7 +561,9 @@ CREATE TABLE IF NOT EXISTS send_events (
   at_utc                 TEXT NOT NULL,
   myt_date               TEXT NOT NULL,
   error_code             TEXT NOT NULL DEFAULT '',
-  detail                 TEXT NOT NULL DEFAULT ''
+  detail                 TEXT NOT NULL DEFAULT '',
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- Crash-recoverable cooperative transfer state machine.
@@ -521,7 +583,9 @@ CREATE TABLE IF NOT EXISTS handoff_transfers (
   error_message          TEXT NOT NULL DEFAULT '',
   created_at             TEXT NOT NULL,
   updated_at             TEXT NOT NULL,
-  completed_at           TEXT
+  completed_at           TEXT,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS handoff_log (
@@ -535,7 +599,9 @@ CREATE TABLE IF NOT EXISTS handoff_log (
   to_generation          INTEGER,
   bundle_checksum        TEXT NOT NULL DEFAULT '',
   reason                 TEXT NOT NULL DEFAULT '',
-  created_at             TEXT NOT NULL
+  created_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 真实库里存在、文档 schema 未收录的表
@@ -547,7 +613,9 @@ CREATE TABLE IF NOT EXISTS golden_conversations_legacy_v3 (
   conversation_text      TEXT NOT NULL DEFAULT '',
   conversation_hash      TEXT NOT NULL DEFAULT '',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 真实库里存在、文档 schema 未收录的表
@@ -561,6 +629,8 @@ CREATE TABLE IF NOT EXISTS followup_log (
   content_summary        TEXT,
   revival                INTEGER NOT NULL CHECK (revival IN (0,1)),
   revival_gap_hours      INTEGER,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT '',
   UNIQUE(lead_code, seq)
 );
 
@@ -572,7 +642,9 @@ CREATE TABLE IF NOT EXISTS lid_map (
   confidence             INTEGER NOT NULL DEFAULT 0,
   evidence               TEXT NOT NULL DEFAULT '',
   created_at             TEXT NOT NULL,
-  updated_at             TEXT NOT NULL
+  updated_at             TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
 
 -- 真实库里存在、文档 schema 未收录的表
@@ -581,8 +653,138 @@ CREATE TABLE IF NOT EXISTS instance_identity (
   whatsapp_number        TEXT NOT NULL,
   source                 TEXT NOT NULL DEFAULT 'evolution',
   first_seen_at          TEXT NOT NULL,
-  last_seen_at           TEXT NOT NULL
+  last_seen_at           TEXT NOT NULL,
+  source_device_key      TEXT NOT NULL DEFAULT '',
+  synced_at              TEXT NOT NULL DEFAULT ''
 );
+
+-- ---------------------------------------------------------------------------
+-- 来源栏位(已经建过表的库靠这段补上)
+-- ---------------------------------------------------------------------------
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE whatsapp_connections ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE whatsapp_connections ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE project_leads ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE project_leads ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE ads_leads ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE ads_leads ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE recycle_leads ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE recycle_leads ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE lead_groups ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE lead_groups ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE lead_group_members ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE lead_group_members ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE images ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE images ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE campaign_runs ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE campaign_runs ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE send_jobs ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE send_jobs ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE project_knowledge ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE golden_conversations ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE golden_conversations ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE objection_bank ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE objection_bank ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE ai_reply_log ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE ai_reply_log ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE operations ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE operations ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE ownership_changes ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE ownership_changes ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE import_runs ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE import_runs ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE sync_worker_state ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE sync_worker_state ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE metadata ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE metadata ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE whatsapp_accounts ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE whatsapp_accounts ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE device_bindings ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE device_bindings ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE send_claims ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE send_claims ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE send_events ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE send_events ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE handoff_transfers ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE handoff_transfers ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE handoff_log ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE handoff_log ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE golden_conversations_legacy_v3 ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE golden_conversations_legacy_v3 ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE followup_log ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE followup_log ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE lid_map ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE lid_map ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE instance_identity ADD COLUMN IF NOT EXISTS source_device_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE instance_identity ADD COLUMN IF NOT EXISTS synced_at TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_projects_source_device ON projects (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_devices_source_device ON devices (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_connections_source_device ON whatsapp_connections (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_contacts_source_device ON contacts (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_project_leads_source_device ON project_leads (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_ads_leads_source_device ON ads_leads (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_recycle_leads_source_device ON recycle_leads (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_lead_groups_source_device ON lead_groups (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_lead_group_members_source_device ON lead_group_members (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_conversations_source_device ON conversations (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_messages_source_device ON messages (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_templates_source_device ON templates (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_images_source_device ON images (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_campaign_runs_source_device ON campaign_runs (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_send_jobs_source_device ON send_jobs (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_project_knowledge_source_device ON project_knowledge (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_golden_conversations_source_device ON golden_conversations (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_objection_bank_source_device ON objection_bank (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_ai_reply_log_source_device ON ai_reply_log (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_source_device ON sync_jobs (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_operations_source_device ON operations (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_ownership_changes_source_device ON ownership_changes (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_import_runs_source_device ON import_runs (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_system_logs_source_device ON system_logs (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_sync_worker_state_source_device ON sync_worker_state (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_metadata_source_device ON metadata (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_schema_migrations_source_device ON schema_migrations (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_accounts_source_device ON whatsapp_accounts (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_device_bindings_source_device ON device_bindings (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_send_claims_source_device ON send_claims (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_send_events_source_device ON send_events (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_handoff_transfers_source_device ON handoff_transfers (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_handoff_log_source_device ON handoff_log (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_golden_conversations_legacy_v3_source_device ON golden_conversations_legacy_v3 (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_followup_log_source_device ON followup_log (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_lid_map_source_device ON lid_map (source_device_key);
+CREATE INDEX IF NOT EXISTS idx_instance_identity_source_device ON instance_identity (source_device_key);
+
+-- 每台电脑每次同步一行:谁、什么时候、传了多少
+CREATE TABLE IF NOT EXISTS sync_runs (
+  id                BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  source_device_key TEXT NOT NULL,
+  device_name       TEXT NOT NULL DEFAULT '',
+  sender_phone      TEXT NOT NULL DEFAULT '',
+  started_at        TEXT NOT NULL,
+  rows_total        INTEGER NOT NULL DEFAULT 0,
+  detail_json       TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_sync_runs_device ON sync_runs (source_device_key, started_at);
 
 -- ---------------------------------------------------------------------------
 -- 索引
