@@ -2,7 +2,10 @@
 # install_sync_agent.sh — Sync Agent 排程(每台电脑各装一次).
 #
 # 装一个后台任务,把本机 SQLite 定时同步进 Global PostgreSQL:
-#   com.mamba.syncagent   tools/pg/sync-agent.mjs   — 每天 07:30 / 13:30 / 21:30
+#   com.mamba.syncagent   tools/pg/sync-agent.mjs   — 每天 07:30 / 13:30 / 23:30
+#
+# 每次会做:同步本机 SQLite → Global Postgres,吸收 incoming/ 里别台上传的档案,
+# 最后重新生成 mamba-sql.html。所以早上打开面板看到的就是昨晚 23:30 的最新资料。
 #
 # 它同时会吸收 campaign-data/incoming/ 里别台电脑上传的 .sqlite,同步完自动归档。
 #
@@ -76,7 +79,7 @@ cat > "$PLIST" <<EOF
   <array>
     <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
     <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>30</integer></dict>
   </array>
   <key>StandardOutPath</key><string>$LOGS/$LABEL.log</string>
   <key>StandardErrorPath</key><string>$LOGS/$LABEL.err.log</string>
@@ -93,7 +96,7 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 echo "loaded $LABEL"
 
 echo ""
-echo "装好了。每天 07:30 / 13:30 / 21:30 各同步一次。"
+echo "装好了。每天 07:30 / 13:30 / 23:30 各跑一次(同步 Postgres + 刷新 SQL 面板)。"
 echo "  立刻跑一次:  launchctl kickstart -k gui/\$(id -u)/$LABEL"
 echo "  看状态:      bash launchd/install_sync_agent.sh --status"
 echo "  看日志:      tail -f $LOGS/$LABEL.log"

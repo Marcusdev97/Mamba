@@ -119,14 +119,16 @@ group by 1,2,3;
 ```bash
 node tools/pg/sync-agent.mjs              # 同步本机 + 吸收 incoming/ 里别台传来的
 node tools/pg/sync-agent.mjs --dry-run    # 只说会做什么
-bash launchd/install_sync_agent.sh        # 装排程(每天 07:30 / 13:30 / 21:30)
+bash launchd/install_sync_agent.sh        # 装排程(每天 07:30 / 13:30 / 23:30)
 bash launchd/install_sync_agent.sh --status
 ```
 
 连线字串放仓库根目录的 `.env.pg`(一行,已 gitignore),或环境变数 `DATABASE_URL`。
 
 Agent 做的事:跑一次建表脚本(幂等,新栏位自动补)→ 同步本机 → 把
-`campaign-data/incoming/` 里别台上传的 `.sqlite` 一并同步并归档到 `incoming/done/`。
+`campaign-data/incoming/` 里别台上传的 `.sqlite` 一并同步并归档到 `incoming/done/`
+→ 最后重新生成 `mamba-sql.html`。所以早上打开面板,看到的就是昨晚 23:30 的最新资料。
+面板重建失败只会警告,不影响已经完成的 Postgres 同步(`--no-panel` 可关掉这步)。
 有锁档,排程和手动跑撞在一起不会同时跑两份;任何一步失败就非 0 结束,launchd 的
 `.err.log` 里看得到。
 

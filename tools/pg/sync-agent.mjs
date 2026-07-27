@@ -4,6 +4,7 @@
 //   node tools/pg/sync-agent.mjs --dry-run    # 只说会做什么,不碰资料库
 //   node tools/pg/sync-agent.mjs --self-only  # 只同步本机,不处理 incoming/
 //   node tools/pg/sync-agent.mjs --skip-schema
+//   node tools/pg/sync-agent.mjs --no-panel   # 不重新生成 SQL 面板
 //
 // 连线字串取用顺序:环境变数 DATABASE_URL → 仓库根目录的 .env.pg。
 // .env.pg 一行就好:postgresql://user@host:5432/dbname
@@ -14,6 +15,7 @@
 //   · 每次先跑一次建表脚本(幂等),所以 schema 有新栏位会自动补上。
 //   · 每张表带 source_device_key,Postgres 里永远分得清哪台电脑传的。
 //   · incoming/ 里别台电脑上传的 .sqlite 同步成功后移到 incoming/done/。
+//   · 最后顺手重新生成 mamba-sql.html,所以早上打开面板看到的就是昨晚的最新资料。
 //   · 任何一步失败就以非 0 结束,launchd 的 err log 里看得到。
 import { spawnSync } from 'node:child_process';
 import {
@@ -28,6 +30,7 @@ const argv = process.argv.slice(2);
 const DRY = argv.includes('--dry-run');
 const SELF_ONLY = argv.includes('--self-only');
 const SKIP_SCHEMA = argv.includes('--skip-schema');
+const NO_PANEL = argv.includes('--no-panel');
 
 const INCOMING = path.join(ROOT, 'campaign-data/incoming');
 const DONE = path.join(INCOMING, 'done');
@@ -83,6 +86,14 @@ function run(cmd, args, label) {
   }
   return (r.stdout || '').trim();
 }
+// 失败只回报、不中断 —— 给「就算挂了也不该让整次同步算失败」的步骤用
+function runSoft(cmd, args) {
+  const r = spawnSync(cmd, args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) return { ok: false, detail: r.error.message };
+  if (r.status !== 0) return { ok: false, detail: (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ') };
+  return { ok: true, out: (r.stdout || '').trim() };
+}
+
 const psql = (url, file) => run('psql', [url, '-v', 'ON_ERROR_STOP=1', '-q', '-f', file], `psql ${path.basename(file)}`);
 const dump = (out, extra = []) =>
   run(process.execPath, [path.join(ROOT, 'tools/pg/dump-data.mjs'), '--if-newer', '--out', out, ...extra], 'dump-data');
@@ -152,6 +163,18 @@ if (!DRY) {
        where started_at = (select max(started_at) from sync_runs where source_device_key = s.source_device_key)
        order by device_name) t`], 'sync_runs 汇总');
   log(`Postgres 现况:${summary || '(空)'}`);
+}
+
+// 顺手把 SQL 面板刷新成最新 —— 面板是快照,不重新生成就一直是旧的
+if (!NO_PANEL) {
+  if (DRY) {
+    log('会重新生成 mamba-sql.html');
+  } else {
+    const r = runSoft(process.execPath, [path.join(ROOT, 'tools/sql-html/build.mjs')]);
+    if (r.ok) log(`✓ SQL 面板已刷新 ${r.out.match(/\(([\d.]+ MB)\)/)?.[1] || ''}`);
+    // 面板刷不出来不该让整次同步算失败 —— Postgres 那边已经成功了
+    else console.error(`[${ts()}] ⚠ SQL 面板重建失败(不影响已完成的同步):${r.detail}`);
+  }
 }
 
 log(`完成,共 ${rowsTotal} 行。`);
