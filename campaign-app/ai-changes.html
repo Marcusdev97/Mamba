@@ -3,25 +3,66 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AI 改动记录 · Mamba</title>
+<title>AI Changes · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
-  .change-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
-  .change-filters { display:flex; gap:8px; flex-wrap:wrap; }
-  .filter-btn { min-height:34px; padding:7px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); color:var(--muted); font:inherit; font-size:12px; cursor:pointer; }
-  .filter-btn.active { border-color:rgba(37,211,102,.5); background:var(--green-bg); color:var(--green); }
-  .change-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+  .change-intro {
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:16px;
+    margin-bottom:16px;
+    padding:14px 16px;
+    border:1px solid rgba(75,163,255,.28);
+    border-radius:var(--radius-l);
+    background:rgba(75,163,255,.06);
+  }
+  .change-intro strong { display:block; margin-bottom:4px; color:var(--blue); font-size:12px; }
+  .change-intro p { margin:0; color:var(--muted); font-size:12.5px; line-height:1.65; }
+  .change-standard { display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap; max-width:560px; }
+  .standard-step { padding:4px 8px; border:1px solid var(--line); border-radius:999px; background:var(--panel); color:var(--faint); font-size:10.5px; white-space:nowrap; }
+  .change-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
   .summary-box { padding:14px; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
   .summary-box small { display:block; color:var(--muted); font-size:11px; }
   .summary-box strong { display:block; margin-top:4px; font-size:22px; }
+  .summary-box.is-green strong { color:var(--green); }
+  .change-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .change-tools-left { display:flex; align-items:center; gap:10px; flex:1 1 680px; flex-wrap:wrap; }
+  .change-search {
+    width:min(330px,100%);
+    min-height:36px;
+    padding:8px 11px;
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    outline:none;
+    background:var(--panel-2);
+    color:var(--text);
+    font:inherit;
+    font-size:12px;
+  }
+  .change-search:focus { border-color:rgba(75,163,255,.55); box-shadow:0 0 0 3px rgba(75,163,255,.08); }
+  .change-filters { display:flex; gap:7px; flex-wrap:wrap; }
+  .filter-btn { min-height:34px; padding:7px 11px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); color:var(--muted); font:inherit; font-size:12px; cursor:pointer; }
+  .filter-btn.active { border-color:rgba(37,211,102,.5); background:var(--green-bg); color:var(--green); }
   .change-list { display:grid; gap:14px; }
+  .change-date-group { display:grid; gap:10px; }
+  .change-date-label { display:flex; align-items:center; gap:10px; margin:6px 2px 0; color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.05em; }
+  .change-date-label::after { content:""; height:1px; flex:1; background:var(--line); }
   .change-card { overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
+  .change-card.is-current { border-color:rgba(37,211,102,.3); }
   .change-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:16px 18px; border-bottom:1px solid var(--line); }
+  .change-area { margin-bottom:5px; color:var(--blue); font-size:10.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
   .change-title { margin:0; font-size:16px; letter-spacing:0; text-transform:none; }
-  .change-summary-text { margin-top:5px; color:var(--muted); font-size:12.5px; }
-  .change-meta { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:wrap; color:var(--faint); font-size:11px; }
+  .change-summary-text { margin-top:5px; color:var(--muted); font-size:12.5px; line-height:1.55; }
+  .change-meta { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:wrap; max-width:390px; color:var(--faint); font-size:11px; }
   .change-tag { padding:3px 7px; border:1px solid var(--line-2); border-radius:999px; background:var(--panel-2); color:var(--muted); font-weight:700; }
-  .change-compare { display:grid; grid-template-columns:minmax(0,1fr) 42px minmax(0,1fr); gap:12px; align-items:stretch; padding:16px 18px; }
+  .status-tag { padding:4px 8px; border:1px solid rgba(37,211,102,.35); border-radius:999px; background:var(--green-bg); color:var(--green); font-weight:800; }
+  .commit-tag { padding:3px 7px; border-radius:6px; background:#0d1117; color:#aeb8c8; font-family:var(--font-mono); }
+  .change-reason { margin:14px 18px 0; padding:12px 14px; border-left:3px solid var(--amber); border-radius:0 var(--radius) var(--radius) 0; background:rgba(245,179,66,.07); }
+  .detail-label { display:block; margin-bottom:5px; color:var(--faint); font-size:10.5px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
+  .change-reason .detail-label { color:var(--amber); }
+  .detail-text { color:var(--text); font-size:12.5px; line-height:1.65; }
+  .change-compare { display:grid; grid-template-columns:minmax(0,1fr) 42px minmax(0,1fr); gap:12px; align-items:stretch; padding:14px 18px; }
   .compare-box { min-width:0; padding:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
   .compare-box.before { border-color:rgba(245,179,66,.3); }
   .compare-box.after { border-color:rgba(37,211,102,.35); }
@@ -30,14 +71,33 @@
   .compare-box.after .compare-label { color:var(--green); }
   .compare-text { margin-top:7px; color:var(--text); font-size:13px; line-height:1.65; }
   .compare-arrow { display:grid; place-items:center; color:var(--blue); font-size:22px; font-weight:900; }
-  .change-files { padding:0 18px 16px; color:var(--faint); font-family:var(--font-mono); font-size:10.5px; line-height:1.65; overflow-wrap:anywhere; }
+  .change-details { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:0 18px 14px; }
+  .detail-box { min-width:0; padding:12px 14px; border:1px solid var(--line); border-radius:var(--radius); background:rgba(255,255,255,.015); }
+  .detail-box.impact .detail-label { color:var(--blue); }
+  .detail-box.usage .detail-label { color:var(--green); }
+  .verification { margin:0 18px 14px; padding:13px 14px; border:1px solid var(--line); border-radius:var(--radius); background:rgba(37,211,102,.035); }
+  .verification .detail-label { color:var(--green); }
+  .verification-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px 16px; margin:0; padding:0; list-style:none; }
+  .verification-list li { position:relative; padding-left:18px; color:var(--muted); font-size:11.5px; line-height:1.55; }
+  .verification-list li::before { content:"✓"; position:absolute; left:0; color:var(--green); font-weight:900; }
+  .change-files { padding:0 18px 15px; color:var(--faint); font-family:var(--font-mono); font-size:10.5px; line-height:1.65; overflow-wrap:anywhere; }
+  .change-files summary { width:max-content; max-width:100%; cursor:pointer; color:var(--faint); font-family:var(--font-sans); }
+  .change-files div { margin-top:7px; }
   .empty { padding:30px; border:1px dashed var(--line-2); border-radius:var(--radius-l); color:var(--muted); text-align:center; }
+  @media (max-width:900px) {
+    .change-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .change-intro { flex-direction:column; }
+    .change-standard { justify-content:flex-start; max-width:none; }
+  }
   @media (max-width:760px) {
-    .change-summary { grid-template-columns:1fr; }
     .change-head { flex-direction:column; }
-    .change-meta { justify-content:flex-start; }
-    .change-compare { grid-template-columns:1fr; }
+    .change-meta { justify-content:flex-start; max-width:none; }
+    .change-compare, .change-details, .verification-list { grid-template-columns:1fr; }
     .compare-arrow { min-height:24px; transform:rotate(90deg); }
+  }
+  @media (max-width:520px) {
+    .change-summary { grid-template-columns:1fr 1fr; }
+    .change-search { width:100%; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
@@ -46,26 +106,38 @@
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>AI 改动记录</h1>
-      <div class="sub">看 AI 把什么 UI、结构或逻辑，从什么样子改成什么样子。</div>
+      <h1>AI Changes</h1>
+      <div class="sub">每一次更新，都说明为什么改、改了什么、影响哪里，以及怎么确认它真的可用。</div>
     </div>
     <span class="badge b-sent" id="updatedAt">读取中</span>
   </header>
 
+  <section class="change-intro" aria-label="AI Changes recording standard">
+    <div>
+      <strong>以后不会只写「改好了」</strong>
+      <p>新更新会留下完整说明和 Git commit。你可以从这里回看系统为什么变、现在该怎么用，也能确认有没有经过测试。</p>
+    </div>
+    <div class="change-standard" id="recordingStandard"></div>
+  </section>
+
   <div class="change-summary" aria-label="AI change summary">
-    <div class="summary-box"><small>总改动</small><strong id="totalCount">0</strong></div>
-    <div class="summary-box"><small>UI 改动</small><strong id="uiCount">0</strong></div>
-    <div class="summary-box"><small>结构 / Data 改动</small><strong id="structureCount">0</strong></div>
+    <div class="summary-box"><small>全部记录</small><strong id="totalCount">0</strong></div>
+    <div class="summary-box"><small>今天更新</small><strong id="todayCount">0</strong></div>
+    <div class="summary-box is-green"><small>已验证</small><strong id="verifiedCount">0</strong></div>
+    <div class="summary-box"><small>Safety 相关</small><strong id="safetyCount">0</strong></div>
   </div>
 
   <div class="change-toolbar">
-    <div class="change-filters" id="filters" aria-label="Change type filters">
-      <button class="filter-btn active" data-filter="All">全部</button>
-      <button class="filter-btn" data-filter="UI">UI</button>
-      <button class="filter-btn" data-filter="Structure">结构</button>
-      <button class="filter-btn" data-filter="Logic">逻辑</button>
-      <button class="filter-btn" data-filter="Data">Data</button>
-      <button class="filter-btn" data-filter="Safety">Safety</button>
+    <div class="change-tools-left">
+      <input class="change-search" id="searchInput" type="search" placeholder="搜索功能、原因、影响或 commit…" aria-label="搜索 AI Changes" />
+      <div class="change-filters" id="filters" aria-label="Change type filters">
+        <button class="filter-btn active" data-filter="All">全部</button>
+        <button class="filter-btn" data-filter="UI">UI</button>
+        <button class="filter-btn" data-filter="Structure">结构</button>
+        <button class="filter-btn" data-filter="Logic">逻辑</button>
+        <button class="filter-btn" data-filter="Data">Data</button>
+        <button class="filter-btn" data-filter="Safety">Safety</button>
+      </div>
     </div>
     <div class="muted" id="visibleCount">0 条</div>
   </div>
@@ -80,27 +152,51 @@ const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
   "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;",
 })[char]);
+const today = new Date().toLocaleDateString("en-CA");
 let changes = [];
 let activeFilter = "All";
+let searchTerm = "";
 
-function render() {
-  const visible = activeFilter === "All"
-    ? changes
-    : changes.filter((item) => (item.types || []).includes(activeFilter));
-  $("visibleCount").textContent = `${visible.length} 条`;
-  $("changeList").innerHTML = visible.length ? visible.map((item) => `
-    <article class="change-card" data-change-id="${esc(item.id)}">
+function searchableText(item) {
+  return [
+    item.title,
+    item.summary,
+    item.area,
+    item.reason,
+    item.impact,
+    item.usage,
+    item.commit,
+    item.before?.text,
+    item.after?.text,
+    ...(item.types || []),
+    ...(item.verification || []),
+    ...(item.files || []),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function renderCard(item) {
+  const hasDetails = item.impact || item.usage;
+  const verification = Array.isArray(item.verification) ? item.verification : [];
+  return `
+    <article class="change-card ${item.date === today ? "is-current" : ""}" data-change-id="${esc(item.id)}">
       <div class="change-head">
         <div>
+          ${item.area ? `<div class="change-area">${esc(item.area)}</div>` : ""}
           <h2 class="change-title">${esc(item.title)}</h2>
           <div class="change-summary-text">${esc(item.summary)}</div>
         </div>
         <div class="change-meta">
+          ${item.status === "verified" ? '<span class="status-tag">✓ 已验证</span>' : ""}
           ${(item.types || []).map((type) => `<span class="change-tag">${esc(type)}</span>`).join("")}
           <span>${esc(item.date)}</span>
-          ${item.commit ? `<span>commit ${esc(item.commit)}</span>` : ""}
+          ${item.commit ? `<span class="commit-tag">${esc(item.commit)}</span>` : ""}
         </div>
       </div>
+      ${item.reason ? `
+        <section class="change-reason">
+          <span class="detail-label">为什么要改</span>
+          <div class="detail-text">${esc(item.reason)}</div>
+        </section>` : ""}
       <div class="change-compare">
         <section class="compare-box before">
           <div class="compare-label">${esc(item.before?.label || "以前")}</div>
@@ -112,8 +208,53 @@ function render() {
           <div class="compare-text">${esc(item.after?.text || "")}</div>
         </section>
       </div>
-      <div class="change-files">相关文件：${esc((item.files || []).join(" · ") || "未记录")}</div>
-    </article>`).join("") : '<div class="empty">这个分类还没有改动记录。</div>';
+      ${hasDetails ? `
+        <div class="change-details">
+          ${item.impact ? `
+            <section class="detail-box impact">
+              <span class="detail-label">影响哪里</span>
+              <div class="detail-text">${esc(item.impact)}</div>
+            </section>` : ""}
+          ${item.usage ? `
+            <section class="detail-box usage">
+              <span class="detail-label">现在怎么用</span>
+              <div class="detail-text">${esc(item.usage)}</div>
+            </section>` : ""}
+        </div>` : ""}
+      ${verification.length ? `
+        <section class="verification">
+          <span class="detail-label">验证结果</span>
+          <ul class="verification-list">
+            ${verification.map((check) => `<li>${esc(check)}</li>`).join("")}
+          </ul>
+        </section>` : ""}
+      <details class="change-files">
+        <summary>相关文件 · ${(item.files || []).length}</summary>
+        <div>${esc((item.files || []).join(" · ") || "未记录")}</div>
+      </details>
+    </article>`;
+}
+
+function render() {
+  const visible = changes
+    .filter((item) => activeFilter === "All" || (item.types || []).includes(activeFilter))
+    .filter((item) => !searchTerm || searchableText(item).includes(searchTerm))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  $("visibleCount").textContent = `${visible.length} 条`;
+  if (!visible.length) {
+    $("changeList").innerHTML = '<div class="empty">找不到符合条件的更新记录。</div>';
+    return;
+  }
+  const groups = new Map();
+  visible.forEach((item) => {
+    if (!groups.has(item.date)) groups.set(item.date, []);
+    groups.get(item.date).push(item);
+  });
+  $("changeList").innerHTML = [...groups.entries()].map(([date, items]) => `
+    <section class="change-date-group">
+      <div class="change-date-label">${esc(date === today ? `今天 · ${date}` : date)} · ${items.length} 项</div>
+      ${items.map(renderCard).join("")}
+    </section>`).join("");
 }
 
 async function loadChanges() {
@@ -123,15 +264,19 @@ async function loadChanges() {
     const payload = await response.json();
     changes = Array.isArray(payload.changes) ? payload.changes : [];
     $("totalCount").textContent = changes.length;
-    $("uiCount").textContent = changes.filter((item) => (item.types || []).includes("UI")).length;
-    $("structureCount").textContent = changes.filter((item) => (item.types || []).some((type) => ["Structure","Data"].includes(type))).length;
+    $("todayCount").textContent = changes.filter((item) => item.date === today).length;
+    $("verifiedCount").textContent = changes.filter((item) => item.status === "verified").length;
+    $("safetyCount").textContent = changes.filter((item) => (item.types || []).includes("Safety")).length;
+    $("recordingStandard").innerHTML = (payload.recordingStandard || [])
+      .map((step, index) => `<span class="standard-step">${index + 1}. ${esc(step)}</span>`)
+      .join("");
     $("updatedAt").textContent = payload.updatedAt
-      ? `更新 ${new Date(payload.updatedAt).toLocaleDateString("en-MY")}`
+      ? `更新 ${new Date(payload.updatedAt).toLocaleString("zh-MY", { dateStyle:"short", timeStyle:"short" })}`
       : "尚未记录日期";
     render();
   } catch (error) {
     $("updatedAt").textContent = "读取失败";
-    $("changeList").innerHTML = `<div class="empty">无法读取 AI 改动记录：${esc(error.message)}</div>`;
+    $("changeList").innerHTML = `<div class="empty">无法读取 AI Changes：${esc(error.message)}</div>`;
   }
 }
 
@@ -140,6 +285,11 @@ $("filters").addEventListener("click", (event) => {
   if (!button) return;
   activeFilter = button.dataset.filter;
   document.querySelectorAll("[data-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  render();
+});
+
+$("searchInput").addEventListener("input", (event) => {
+  searchTerm = event.target.value.trim().toLowerCase();
   render();
 });
 

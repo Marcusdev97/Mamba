@@ -1,7 +1,239 @@
 {
-  "version": 1,
-  "updatedAt": "2026-07-25T22:00:00+08:00",
+  "version": 2,
+  "updatedAt": "2026-07-27T21:11:00+08:00",
+  "recordingStandard": [
+    "为什么要改",
+    "改了什么",
+    "影响哪里",
+    "现在怎么用",
+    "怎么验证",
+    "对应 Git commit"
+  ],
   "changes": [
+    {
+      "id": "mamba-view-native-ios",
+      "date": "2026-07-27",
+      "title": "Mamba View：Cable 安装的只读 iPhone App",
+      "summary": "新增原生 Mamba View iPhone App，以及独立的只读 Phone View 安全入口；手机和 Mac 在同一 Wi-Fi 时，可查看两台电脑、号码、Campaign 与汇总状态。",
+      "types": [
+        "UI",
+        "Safety",
+        "Structure"
+      ],
+      "status": "verified",
+      "area": "Team View / iPhone",
+      "commit": "5c305f2",
+      "reason": "手机版不希望依赖 Tailscale，也不适合直接开放完整 Mamba 后台。需要一个可以用 Xcode 和 cable 安装、只看运行状态而不能发送或修改资料的个人 App。",
+      "before": {
+        "label": "以前",
+        "text": "Team View 只能在电脑浏览器打开；手机没有独立 App，也没有专门过滤敏感资料与限制操作的手机入口。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "新增原生 SwiftUI App「Mamba View」，通过 Mac 的 Phone View 服务读取两台 Mamba 状态。App 显示设备、在线号码、今日汇总、Campaign 与健康提醒，设定和 access token 保存在手机 Keychain。"
+      },
+      "impact": "手机入口只读，不提供发送、停止、分配客户或修改资料；服务会移除客户姓名、对话内容、客户活动与 Queue 明细，并用独立 access token 和频率限制保护访问。",
+      "usage": "先让 iPhone 与 Mac 使用同一个可信任局域网，再用 cable 和 Xcode 安装 Mamba View。安装工具可把稳定的 `OK.local` 地址与 access token 一次性写入 iPhone Keychain，之后直接打开或刷新即可；连接设置仍保留手动修改入口。",
+      "verification": [
+        "Mamba View 已完成 Personal Team 真机签名、安装并在 iPhone 16 Pro 启动",
+        "已通过 cable 注入配置，再以普通方式重启验证 Keychain 持久保存",
+        "Mac IP 从 192.168.68.52 改变后，已改用并验证 OK.local 稳定本地地址",
+        "Phone View 资料过滤与授权测试通过",
+        "Team View、Control Center 与 AI Changes 回归测试通过",
+        "Phone View 已安装为 Mac 自动启动服务，Mamba 主程序不需重启"
+      ],
+      "files": [
+        "ios/MambaView/MambaView.xcodeproj/project.pbxproj",
+        "ios/MambaView/MambaView/App/ContentView.swift",
+        "ios/MambaView/MambaView/App/TeamViewModel.swift",
+        "ios/MambaView/MambaView/App/AppSettings.swift",
+        "campaign-app/phone-view-server.mjs",
+        "campaign-app/test_phone_view_server.mjs",
+        "launchd/com.mamba.phone-view.plist",
+        "launchd/install_phone_view.sh"
+      ]
+    },
+    {
+      "id": "mamba-team-view",
+      "date": "2026-07-27",
+      "title": "Team View：一个画面看两台 Mamba",
+      "summary": "在 Mamba APP 新增两台电脑只读总览，同时显示号码、Campaign 进度、今天发送／回复与需要注意的服务。",
+      "types": [
+        "UI",
+        "Safety"
+      ],
+      "status": "verified",
+      "area": "Control Center",
+      "commit": "5c305f2",
+      "reason": "Global PostgreSQL 能看两台合并资料，但不是即时运行画面；Remote Mamba 能打开另一台，却需要在两个页面之间切换，无法快速比较两边目前在做什么。",
+      "before": {
+        "label": "以前",
+        "text": "本机 Control Center 只显示这台电脑。要看另一台必须另外打开 Remote Mamba；两台是否在线、各自号码和 Campaign 进度没有共同画面。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "导航新增 Team View，把本机与 Remote Mac 放在同一个画面。每张电脑卡片显示 WhatsApp、今天发送／回复、Follow-up、Appointments、当前 Campaign 与服务异常，每 15 秒自动刷新。"
+      },
+      "impact": "操作员可以从自己的 Mamba APP 同时观察两台电脑，又不会改变原本每台各自 SQLite-first 的运行方式。",
+      "usage": "先在 Remote Mamba 连好另一台 Mac，再打开左侧 Team View。另一台未连接时会显示设置入口，本机仍可正常查看。",
+      "verification": [
+        "Team View route、远程安全映射与页面结构测试通过",
+        "原有 Control Center 回归测试通过",
+        "远程地址只允许 127.0.0.1 的 SSH 安全映射",
+        "页面明确保持只读，不提供发送、停止或分配客户操作"
+      ],
+      "files": [
+        "campaign-app/team-view.html",
+        "campaign-app/routes/team-view.routes.mjs",
+        "campaign-app/app/createApp.mjs",
+        "campaign-app/routes/static.routes.mjs",
+        "campaign-app/assets/mamba-shell.js"
+      ]
+    },
+    {
+      "id": "campaign-console-live-clarity",
+      "date": "2026-07-27",
+      "title": "发送台：真实号码、下一位与结果筛选",
+      "summary": "发送进度改成操作员看得懂的状态：显示实际发送号码、下一位客户与预计时间，并把已联系、跳过、异常清楚分开。",
+      "types": [
+        "UI",
+        "Safety"
+      ],
+      "status": "verified",
+      "area": "发送台",
+      "commit": "998eea7",
+      "reason": "旧画面虽然有百分比和技术日志，但容易把「已处理」误看成「已成功联系」，也看不出多号码 Campaign 目前真正由哪个号码发送。",
+      "before": {
+        "label": "以前",
+        "text": "WA_01 + WA_03 只显示候选号码；17% 可能包含无 WhatsApp 或手动跳过，却看起来像发送成功。要从运行记录里自己找下一位和等待时间，也无法快速只看跳过或异常客户。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "卡片会标出实际发送号码与备用号码，显示下一位客户和 ETA；进度拆成已处理、已触达、待处理、已跳过、发送异常，并提供全部／已触达／待处理／已跳过／异常筛选。"
+      },
+      "impact": "操作员可以更快判断 Campaign 是否健康、为什么进度增加但触达数没增加，也不需要阅读技术日志才能知道下一步。",
+      "usage": "照常开 Campaign；展开该批次后可直接看「下一位」与预计时间，需要检查问题时点结果筛选即可。",
+      "verification": [
+        "5 组 Campaign 相关自动测试通过",
+        "1280px 宽度实测没有横向溢出",
+        "已检查下一位、ETA、友善时间线与结果筛选",
+        "只改显示与状态说明，没有改变发送节奏或发送核心"
+      ],
+      "files": [
+        "campaign-app/send.html",
+        "campaign-app/console.html"
+      ]
+    },
+    {
+      "id": "multi-sender-sqlite-queue",
+      "date": "2026-07-27",
+      "title": "多号码发送：SQLite 与号码 Queue 正确分开",
+      "summary": "修好多号码 Campaign 的本机写入与排队判断，让 WA_01、WA_03 按实际发送号码各跑各的，不再被预览或备用号码误挡。",
+      "types": [
+        "Logic",
+        "Data",
+        "Safety"
+      ],
+      "status": "verified",
+      "area": "发送核心",
+      "commit": "0a62b2a",
+      "reason": "多号码名单选到 WA_03 时，本机 SQLite 可能还没有对应连接记录而触发外键错误；同时系统曾把候选号码和预览也当成正在占用 Queue，造成明明不是同一号码却走不到下一批。",
+      "before": {
+        "label": "以前",
+        "text": "WA_03 写入 checkpoint 可能因缺少父记录失败；勾选 WA_01 + WA_03 会让两条号码车道一起被锁，预览生成后也可能出现 QUEUED_BATCH，必须人工确认或取消。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "启动时会把所有 OPEN 号码登记进 SQLite，写入 checkpoint 前也会补齐连接记录；Queue 只锁实际分配到的发送号码，预览不会占车道，不同号码可以各自继续。"
+      },
+      "impact": "SQLite 仍然先保存、PostgreSQL／Notion 后同步；刷新程序后会重新识别号码。只要实际号码不同，两批可以独立运行，同一号码才会安全排队。",
+      "usage": "选择一个或多个号码后照常生成并发送，系统会按每位客户实际分配到的号码自动判断 Queue，不需要手动指定谁让谁。",
+      "verification": [
+        "SQLite v3 导入、Primary 切换与连接父记录测试通过",
+        "Campaign runner registry 与号码冲突测试通过",
+        "Queue、排程、route conflict 与 run service 测试通过",
+        "确认预览不会占用号码车道，实际 WA_03 才只锁 WA_03"
+      ],
+      "files": [
+        "campaign-app/lib/local-database-service.mjs",
+        "campaign-app/lib/campaign-runner-registry.mjs",
+        "campaign-app/routes/campaign.routes.mjs",
+        "campaign-app/server.mjs",
+        "campaign-app/send.html"
+      ]
+    },
+    {
+      "id": "sql-panel-relationship-map",
+      "date": "2026-07-27",
+      "title": "SQL 面板：新增资料表关系图",
+      "summary": "SQL 面板加入可互动的关系图，用圆点和箭头把资料表之间的外键关系直接画出来。",
+      "types": [
+        "UI",
+        "Structure",
+        "Data"
+      ],
+      "status": "verified",
+      "area": "SQL 面板",
+      "commit": "23729d4",
+      "reason": "表格数量增加后，只看表名和外键文字很难快速理解哪张表连接哪张表，也不容易找到父表与下游资料。",
+      "before": {
+        "label": "以前",
+        "text": "要逐张打开资料表、阅读外键栏位，才能拼出整个 SQLite／PostgreSQL 的结构关系。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "侧边栏顶部有「关系图」：滑过会高亮相连资料表，点一下跳进该表；可拖动、双击固定、滚轮缩放，孤立表会排在外围。"
+      },
+      "impact": "检查 SQL 结构、追查资料来源和确认外键时更直观；关系图只读取快照，不会修改数据库。",
+      "usage": "打开 SQL 面板后点「关系图」，滑到任一圆点查看它指向谁、又被谁引用。",
+      "verification": [
+        "Global 版 38 张表、44 条外键完成实测",
+        "重复指向同一父表的关系会正确去重",
+        "点击跳转、拖动、固定、缩放与孤立表布局均已检查",
+        "保持单一 HTML、零外部依赖、离线可开"
+      ],
+      "files": [
+        "tools/sql-html/template.html",
+        "tools/README.md"
+      ]
+    },
+    {
+      "id": "global-postgres-sql-panel",
+      "date": "2026-07-27",
+      "title": "SQL 面板：可以看两台电脑合并后的 Global PostgreSQL",
+      "summary": "SQL 面板菜单分成 Global PostgreSQL 与本机 SQLite，Global 画面会显示两台电脑合并后的真实资料。",
+      "types": [
+        "UI",
+        "Structure",
+        "Data"
+      ],
+      "status": "verified",
+      "area": "SQL / PostgreSQL",
+      "commit": "31e3231",
+      "reason": "原本「看数据」只打开这台电脑的 SQLite；虽然资料已经同步到 Global PostgreSQL，却没有一个容易查看两台合并结果的入口。",
+      "before": {
+        "label": "以前",
+        "text": "面板只显示本机 SQLite 约 17,510 行，无法从同一个画面确认 Marcus 与 Cici 两台电脑是否都已进入 Global PostgreSQL。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "SQL 面板菜单可选「看全部数据（Global PostgreSQL）」或「只看这台（本机 SQLite）」。Global 快照按 PostgreSQL 实际结构生成，并保留 source_device_key 看资料来自哪台电脑。"
+      },
+      "impact": "可以直接核对 SQLite 先跑、PostgreSQL 后汇总的结果，也能分辨每一行来自哪台电脑；面板本身仍是只读快照。",
+      "usage": "双击「SQL 面板」，选 1 看两台合并的 Global PostgreSQL，选 2 只看目前这台电脑的 SQLite。",
+      "verification": [
+        "Global PostgreSQL 实测读取 38 张表、26,156 行",
+        "project_leads 与 messages 可按 source_device_key 分出两台电脑",
+        "sync_runs 同步台账可在 Global 面板查看",
+        "生成过程沿用 psql，不需要额外安装数据库套件"
+      ],
+      "files": [
+        "tools/lib/pg-snapshot.mjs",
+        "tools/sql-html/build.mjs",
+        "launchers/SQL 面板.command",
+        "tools/README.md"
+      ]
+    },
     {
       "id": "chat-room-inbox",
       "date": "2026-07-25",
