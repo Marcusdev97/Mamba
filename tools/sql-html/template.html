@@ -114,6 +114,22 @@
   .cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
   .cell.null { color: var(--muted); font-style: italic; }
 
+  /* 关系图 */
+  .gwrap { position: relative; height: calc(100vh - 230px); min-height: 420px; background: var(--panel);
+           border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  #gcanvas { width: 100%; height: 100%; display: block; cursor: grab; }
+  .glegend { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px;
+             font-size: 11px; color: var(--muted); max-width: 60%; }
+  .glegend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .gbtns { position: absolute; right: 12px; top: 12px; display: flex; gap: 6px; }
+  .ginfo { position: absolute; left: 12px; top: 12px; display: none; background: var(--panel);
+           border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px;
+           max-width: 300px; box-shadow: 0 4px 16px #0002; pointer-events: none; }
+  .ginfo code { background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 4px;
+                font-size: 11px; display: inline-block; margin: 1px 0; }
+  .tbtn.gnav { font-family: inherit; font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+  .gicon { color: var(--accent); font-size: 15px; }
+
   /* modal */
   .mask { position: fixed; inset: 0; background: #0008; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 50; overflow-y: auto; }
   .modal { background: var(--panel); border-radius: 10px; border: 1px solid var(--line); width: min(880px, 100%); }
@@ -199,6 +215,7 @@ let rowFilter = '';
 let showAllCols = false;
 let page = 0;
 let quotaWarned = false;
+let view = 'table';        // 'table' | 'graph'
 
 /* ---------- storage ---------- */
 function loadOverlay() {
@@ -336,19 +353,285 @@ function renderSidebar() {
     (groups[sectionOf(t)] ||= []).push(t);
   }
   const nav = document.getElementById('tlist');
-  nav.innerHTML = Object.entries(groups).map(([g, ts]) => `
+  nav.innerHTML = `<button class="tbtn gnav ${view === 'graph' ? 'on' : ''}" id="btn-graph">
+      <span class="gicon">◍</span> 关系图</button>` + Object.entries(groups).map(([g, ts]) => `
     <div class="grp">${esc(g)}</div>
     ${ts.map(t => `<button class="tbtn ${t.name === current ? 'on' : ''} ${t.designOnly ? 'dim' : ''}" data-t="${t.name}" title="${t.designOnly ? '文档里有,库里还没建' : ''}">
       ${t.name}<span class="n">${(db[t.name] || []).length.toLocaleString()}</span></button>`).join('')}
   `).join('');
-  nav.querySelectorAll('.tbtn').forEach(b => b.onclick = () => {
-    current = b.dataset.t; rowFilter = ''; showAllCols = false; page = 0; render();
+  nav.querySelector('#btn-graph').onclick = () => { view = 'graph'; render(); };
+  nav.querySelectorAll('.tbtn[data-t]').forEach(b => b.onclick = () => {
+    current = b.dataset.t; view = 'table'; rowFilter = ''; showAllCols = false; page = 0; render();
   });
+}
+
+/* ---------- 关系图 ----------
+   自己写的力导向布局(不引任何库,面板必须保持零依赖)。
+   节点 = 表,连线 = 外键(子表 → 父表),大小按行数,颜色按分层。 */
+const GRAPH_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+let graph = null;
+
+function buildGraph() {
+  const sections = [...new Set(TABLES.map(sectionOf))];
+  const nodes = TABLES.map((t, i) => {
+    const n = (db[t.name] || []).length;
+    return {
+      id: t.name, table: t, rows: n,
+      r: 6 + Math.log10(n + 1) * 5,
+      color: GRAPH_COLORS[sections.indexOf(sectionOf(t)) % GRAPH_COLORS.length],
+      x: 0, y: 0, vx: 0, vy: 0, pinned: false, deg: 0,
+    };
+  });
+  const index = Object.fromEntries(nodes.map((n, i) => [n.id, i]));
+  const links = [];
+  for (const t of TABLES) {
+    for (const c of t.columns) {
+      if (!c.ref || !byName[c.ref.table] || c.ref.table === t.name) continue;
+      links.push({ s: index[t.name], t: index[c.ref.table], col: c.name, to: c.ref.column });
+      nodes[index[t.name]].deg++;
+      nodes[index[c.ref.table]].deg++;
+    }
+  }
+  // 有连线的排在中间圈,孤立表甩到外圈,一眼看出谁没接上
+  const linked = nodes.filter(n => n.deg), lone = nodes.filter(n => !n.deg);
+  linked.forEach((n, i) => {
+    const a = (i / linked.length) * Math.PI * 2;
+    n.x = Math.cos(a) * 140; n.y = Math.sin(a) * 140;
+  });
+  lone.forEach((n, i) => {
+    const a = (i / Math.max(1, lone.length)) * Math.PI * 2;
+    n.x = Math.cos(a) * 330; n.y = Math.sin(a) * 330;
+  });
+  return { nodes, links, sections, tx: 0, ty: 0, scale: 1, hover: null, drag: null, alpha: 1 };
+}
+
+function stepGraph(g) {
+  const REPEL = 9000, SPRING = 0.012, LEN = 110, DAMP = 0.86;
+  for (let i = 0; i < g.nodes.length; i++) {
+    const a = g.nodes[i];
+    for (let j = i + 1; j < g.nodes.length; j++) {
+      const b = g.nodes[j];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d2 = dx * dx + dy * dy || 0.01;
+      if (d2 > 160000) continue;                       // 太远的不互相推,省算力
+      const f = REPEL / d2, d = Math.sqrt(d2);
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
+    }
+  }
+  for (const l of g.links) {
+    const a = g.nodes[l.s], b = g.nodes[l.t];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const f = (d - LEN) * SPRING;
+    const fx = (dx / d) * f, fy = (dy / d) * f;
+    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+  }
+  for (const n of g.nodes) {
+    n.vx -= n.x * 0.004; n.vy -= n.y * 0.004;          // 轻微向心,别飘走
+    if (n.pinned || n === g.drag) { n.vx = n.vy = 0; continue; }
+    n.vx *= DAMP; n.vy *= DAMP;
+    n.x += n.vx * g.alpha; n.y += n.vy * g.alpha;
+  }
+  g.alpha *= 0.995;
+}
+
+function drawGraph() {
+  const cv = document.getElementById('gcanvas');
+  if (!cv || !graph) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== w * dpr || cv.height !== h * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+  const ctx = cv.getContext('2d');
+  const css = getComputedStyle(document.body);
+  const line = css.getPropertyValue('--line').trim() || '#ddd';
+  const text = css.getPropertyValue('--text').trim() || '#222';
+  const muted = css.getPropertyValue('--muted').trim() || '#888';
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w / 2 + graph.tx, h / 2 + graph.ty);
+  ctx.scale(graph.scale, graph.scale);
+
+  const hov = graph.hover;
+  const near = new Set();
+  if (hov) {
+    near.add(hov);
+    for (const l of graph.links) {
+      if (graph.nodes[l.s] === hov) near.add(graph.nodes[l.t]);
+      if (graph.nodes[l.t] === hov) near.add(graph.nodes[l.s]);
+    }
+  }
+
+  // 连线
+  for (const l of graph.links) {
+    const a = graph.nodes[l.s], b = graph.nodes[l.t];
+    const lit = hov && (a === hov || b === hov);
+    ctx.strokeStyle = lit ? a.color : line;
+    ctx.globalAlpha = hov ? (lit ? 0.9 : 0.12) : 0.5;
+    ctx.lineWidth = lit ? 1.8 : 1;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    // 箭头:指向父表
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+    const px = b.x - (dx / d) * (b.r + 3), py = b.y - (dy / d) * (b.r + 3);
+    const ang = Math.atan2(dy, dx);
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px - Math.cos(ang - 0.4) * 6, py - Math.sin(ang - 0.4) * 6);
+    ctx.lineTo(px - Math.cos(ang + 0.4) * 6, py - Math.sin(ang + 0.4) * 6);
+    ctx.closePath(); ctx.fillStyle = ctx.strokeStyle; ctx.fill();
+  }
+
+  // 节点
+  ctx.globalAlpha = 1;
+  for (const n of graph.nodes) {
+    const dim = hov && !near.has(n);
+    ctx.globalAlpha = dim ? 0.2 : 1;
+    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+    ctx.fillStyle = n.table.designOnly ? 'transparent' : n.color;
+    ctx.fill();
+    ctx.lineWidth = n === hov ? 3 : n.table.name === current ? 2.5 : 1.2;
+    ctx.strokeStyle = n === hov || n.table.name === current ? text : n.color;
+    ctx.stroke();
+    if (n.pinned) { ctx.beginPath(); ctx.arc(n.x, n.y, 2, 0, Math.PI * 2); ctx.fillStyle = text; ctx.fill(); }
+
+    const showLabel = graph.scale > 0.55 || n.deg > 2 || n === hov || n.table.name === current;
+    if (showLabel) {
+      ctx.font = `${n === hov ? '600 ' : ''}11px ui-monospace, Menlo, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = dim ? muted : text;
+      ctx.fillText(n.id, n.x, n.y + n.r + 12);
+      if (n === hov && n.rows) {
+        ctx.fillStyle = muted;
+        ctx.fillText(`${n.rows.toLocaleString()} 行`, n.x, n.y + n.r + 24);
+      }
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+// 算出所有节点的外框,缩放平移到刚好塞进画布
+function fitGraph() {
+  const cv = document.getElementById('gcanvas');
+  if (!cv || !graph || !graph.nodes.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const n of graph.nodes) {
+    x0 = Math.min(x0, n.x - n.r - 30); x1 = Math.max(x1, n.x + n.r + 30);
+    y0 = Math.min(y0, n.y - n.r - 20); y1 = Math.max(y1, n.y + n.r + 30);
+  }
+  const w = cv.clientWidth, h = cv.clientHeight;
+  graph.scale = Math.min(3, Math.max(0.25, Math.min(w / (x1 - x0), h / (y1 - y0)) * 0.92));
+  graph.tx = -((x0 + x1) / 2) * graph.scale;
+  graph.ty = -((y0 + y1) / 2) * graph.scale;
+}
+
+function renderGraph() {
+  const g = graph ||= buildGraph();
+  document.getElementById('main').innerHTML = `
+    <div class="thead">
+      <h2>关系图 <span class="tag">${g.nodes.length} 表 · ${g.links.length} 条外键</span></h2>
+      <p>圆点是表,箭头指向被引用的父表。圆越大行数越多,颜色是分层。
+         <b>拖</b>可以搬动 · <b>双击</b>钉住/放开 · <b>点一下</b>打开那张表 · <b>滚轮</b>缩放 · 空白处拖动整个图</p>
+    </div>
+    <div class="gwrap">
+      <canvas id="gcanvas"></canvas>
+      <div class="glegend">${g.sections.map((s, i) =>
+        `<span><i style="background:${GRAPH_COLORS[i % GRAPH_COLORS.length]}"></i>${esc(s.replace(/\(.*/, ''))}</span>`).join('')}
+        <span><i style="background:transparent;border:1px solid var(--muted)"></i>库里还没建</span>
+      </div>
+      <div class="gbtns">
+        <button class="mini" id="g-reset">重新排列</button>
+        <button class="mini" id="g-fit">回到中间</button>
+      </div>
+      <div class="ginfo" id="ginfo"></div>
+    </div>`;
+
+  const cv = document.getElementById('gcanvas');
+  const info = document.getElementById('ginfo');
+  const toWorld = (e) => {
+    const b = cv.getBoundingClientRect();
+    return {
+      x: (e.clientX - b.left - b.width / 2 - g.tx) / g.scale,
+      y: (e.clientY - b.top - b.height / 2 - g.ty) / g.scale,
+    };
+  };
+  const pick = (p) => g.nodes.find(n => Math.hypot(n.x - p.x, n.y - p.y) <= n.r + 4);
+
+  let panning = null, moved = false;
+  cv.onmousedown = (e) => {
+    const p = toWorld(e);
+    const n = pick(p);
+    moved = false;
+    if (n) { g.drag = n; g.dragOff = { x: p.x - n.x, y: p.y - n.y }; }
+    else panning = { x: e.clientX - g.tx, y: e.clientY - g.ty };
+  };
+  cv.onmousemove = (e) => {
+    const p = toWorld(e);
+    if (g.drag) { moved = true; g.drag.x = p.x - g.dragOff.x; g.drag.y = p.y - g.dragOff.y; g.alpha = Math.max(g.alpha, 0.5); return; }
+    if (panning) { moved = true; g.tx = e.clientX - panning.x; g.ty = e.clientY - panning.y; return; }
+    const n = pick(p);
+    if (n !== g.hover) {
+      g.hover = n;
+      cv.style.cursor = n ? 'pointer' : 'grab';
+      info.innerHTML = n ? nodeInfo(n) : '';
+      info.style.display = n ? 'block' : 'none';
+    }
+  };
+  cv.onmouseup = (e) => {
+    const wasDrag = g.drag;
+    g.drag = null; panning = null;
+    if (wasDrag && !moved) { current = wasDrag.id; view = 'table'; tab = 'schema'; page = 0; render(); }
+  };
+  cv.onmouseleave = () => { g.drag = null; panning = null; g.hover = null; info.style.display = 'none'; };
+  cv.ondblclick = (e) => {
+    const n = pick(toWorld(e));
+    if (n) { n.pinned = !n.pinned; n.vx = n.vy = 0; }
+  };
+  cv.onwheel = (e) => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    g.scale = Math.min(3, Math.max(0.25, g.scale * f));
+  };
+  document.getElementById('g-reset').onclick = () => { graph = buildGraph(); renderGraph(); };
+  document.getElementById('g-fit').onclick = fitGraph;
+  // 等力导向散开一点再自动对齐,不然一开始挤成一团缩放会算歪
+  if (!g.fitted) { g.fitted = true; setTimeout(fitGraph, 700); setTimeout(fitGraph, 1800); }
+  addEventListener('resize', fitGraph, { once: true });
+}
+
+function nodeInfo(n) {
+  // 同一张父表可能被指两次(assigned_sender_key / last_sender_key),去重
+  const out = [...new Set(n.table.columns.filter(c => c.ref && byName[c.ref.table]).map(c => c.ref.table))];
+  const inbound = [...new Set(TABLES.flatMap(t =>
+    t.columns.filter(c => c.ref && c.ref.table === n.id && t.name !== n.id).map(() => t.name)))];
+  return `<strong class="mono">${n.id}</strong>
+    <div class="muted" style="margin:2px 0 6px">${n.rows.toLocaleString()} 行 · ${n.table.columns.length} 列${n.table.designOnly ? ' · 库里还没建' : ''}</div>
+    ${out.length ? `<div><span class="muted">指向 →</span> ${out.map(t => `<code>${t}</code>`).join(' ')}</div>` : ''}
+    ${inbound.length ? `<div style="margin-top:4px"><span class="muted">被引用 ←</span> ${inbound.slice(0, 6).map(t => `<code>${t}</code>`).join(' ')}${inbound.length > 6 ? ` +${inbound.length - 6}` : ''}</div>` : ''}
+    ${!out.length && !inbound.length ? '<div class="muted">没有外键关联</div>' : ''}`;
+}
+
+let graphTimer = null;
+function graphLoop() {
+  if (view !== 'graph') { graphTimer = null; return; }
+  if (graph && graph.alpha > 0.02) stepGraph(graph);
+  drawGraph();
+  graphTimer = requestAnimationFrame(graphLoop);
 }
 
 /* ---------- main ---------- */
 function render() {
   renderSidebar();
+  if (view === 'graph') {
+    document.getElementById('hdr-sub').textContent = SCHEMA.db
+      ? `${SCHEMA.db.path} · ${TABLES.length} 张表`
+      : `${TABLES.length} 张表`;
+    renderGraph();
+    if (!graphTimer) graphLoop();
+    return;
+  }
   const T = byName[current];
   const n = rows(current).length;
   const info = SCHEMA.db;
