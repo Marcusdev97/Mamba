@@ -7,6 +7,7 @@ const HTML_ROUTES = {
   "/lanes": "lanes.html",
   "/inbox": "inbox.html",
   "/control-center": "control-center.html",
+  "/team-view": "team-view.html",
   "/next-flow": "next-flow.html",
   "/templates": "templates.html",
   "/lookup": "lookup.html",

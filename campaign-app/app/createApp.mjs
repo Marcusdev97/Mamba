@@ -20,6 +20,7 @@ import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
 import { registerSystemLogsRoutes } from "../routes/system-logs.routes.mjs";
 import { registerTemplatesRoutes } from "../routes/templates.routes.mjs";
+import { registerTeamViewRoutes } from "../routes/team-view.routes.mjs";
 
 export function createApp(runtime) {
   const router = createRouter(runtime);
@@ -28,6 +29,7 @@ export function createApp(runtime) {
   registerProjectsRoutes(router);
   registerProjectBrainRoutes(router);
   registerRemoteMambaRoutes(router);
+  registerTeamViewRoutes(router);
   registerControlCenterRoutes(router);
   registerDailyCampaignRoutes(router);
   registerInstancesRoutes(router);

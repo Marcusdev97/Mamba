@@ -27,6 +27,10 @@ campaign-data/*
 .DS_Store
 assets/manifest.json
 
+# ─── Xcode 每位使用者的本机界面状态:不提交 ─────────────
+**/xcuserdata/
+*.xcuserstate
+
 # ─── Cloudflare 图片入口:图片上传到 R2,本地只保留文件夹骨架 ───
 assets/inbox/*
 assets/templates/*

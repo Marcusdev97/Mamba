@@ -4,6 +4,7 @@
   const groups = [
     { title: "Overview", links: [
       { code: "CC", label: "Control Center", href: "/control-center", paths: ["/control-center"] },
+      { code: "TV", label: "Team View", href: "/team-view", paths: ["/team-view"] },
     ] },
     { title: "Customers", links: [
       { code: "IN", label: "Customer Inbox", href: "/conversations", paths: ["/conversations"] },

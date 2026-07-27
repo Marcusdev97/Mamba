@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Team View · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .team-wrap { max-width:1500px; margin:0 auto; padding:24px 24px 56px; }
+  .team-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:18px; }
+  .team-head h1 { margin:0; font-size:24px; letter-spacing:-.025em; }
+  .team-head p { margin:6px 0 0; color:var(--muted); font-size:13px; }
+  .head-state { display:flex; align-items:center; gap:9px; flex-wrap:wrap; justify-content:flex-end; }
+  .readonly { padding:7px 10px; border:1px solid rgba(75,163,255,.35); border-radius:999px; background:rgba(75,163,255,.07); color:var(--blue); font-size:11px; font-weight:800; }
+  .last-refresh { color:var(--faint); font-size:11px; white-space:nowrap; }
+  .overview { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+  .overview-card { min-height:92px; padding:14px 15px; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
+  .overview-card span { display:block; color:var(--muted); font-size:10.5px; font-weight:700; }
+  .overview-card strong { display:block; margin-top:5px; color:var(--text); font-size:25px; letter-spacing:-.03em; }
+  .overview-card small { display:block; margin-top:3px; color:var(--faint); font-size:10.5px; }
+  .overview-card.good strong { color:var(--green); }
+  .overview-card.warn strong { color:var(--amber); }
+  .device-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
+  .device-card { overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
+  .device-card.online { border-color:rgba(37,211,102,.3); }
+  .device-card.offline { border-color:rgba(239,68,68,.23); }
+  .device-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:16px 17px; border-bottom:1px solid var(--line); }
+  .device-role { margin-bottom:4px; color:var(--blue); font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+  .device-head h2 { margin:0; font-size:17px; letter-spacing:-.015em; }
+  .device-head p { margin:5px 0 0; color:var(--muted); font-size:11.5px; }
+  .connection { display:inline-flex; align-items:center; gap:7px; padding:5px 8px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:10.5px; font-weight:800; white-space:nowrap; }
+  .connection i { width:7px; height:7px; border-radius:50%; background:var(--faint); }
+  .connection.online { border-color:rgba(37,211,102,.28); color:var(--green); }
+  .connection.online i { background:var(--green); box-shadow:0 0 0 3px rgba(37,211,102,.1); }
+  .connection.offline { color:var(--red); }
+  .connection.offline i { background:var(--red); }
+  .sender-row { display:flex; align-items:center; gap:7px; min-height:43px; padding:9px 17px; border-bottom:1px solid var(--line); overflow-x:auto; }
+  .sender-label { color:var(--faint); font-size:10px; font-weight:800; text-transform:uppercase; white-space:nowrap; }
+  .sender-chip { display:inline-flex; align-items:center; gap:6px; padding:5px 8px; border-radius:7px; background:var(--panel-2); color:var(--muted); font-size:10.5px; white-space:nowrap; }
+  .sender-chip i { width:6px; height:6px; border-radius:50%; background:var(--green); }
+  .device-body { display:grid; gap:12px; padding:14px 17px 16px; }
+  .device-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+  .metric { min-width:0; padding:10px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
+  .metric span { display:block; color:var(--faint); font-size:9.5px; }
+  .metric strong { display:block; margin-top:4px; font-size:18px; }
+  .section-label { color:var(--faint); font-size:9.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+  .campaign-box { padding:12px 13px; border:1px solid var(--line); border-radius:var(--radius); background:rgba(255,255,255,.015); }
+  .campaign-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .campaign-top h3 { margin:3px 0 0; font-size:13.5px; }
+  .campaign-top p { margin:4px 0 0; color:var(--muted); font-size:10.5px; }
+  .campaign-status { padding:4px 7px; border-radius:6px; background:var(--panel-2); color:var(--muted); font-size:9.5px; font-weight:800; }
+  .campaign-status.running { background:var(--green-bg); color:var(--green); }
+  .progress { height:6px; margin-top:11px; overflow:hidden; border-radius:999px; background:var(--line); }
+  .progress i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--green),#41e981); }
+  .campaign-counts { display:flex; justify-content:space-between; gap:10px; margin-top:7px; color:var(--muted); font-size:10px; }
+  .campaign-empty { padding:16px; border:1px dashed var(--line); border-radius:var(--radius); color:var(--muted); text-align:center; font-size:11px; }
+  .health-list { display:grid; gap:6px; }
+  .health-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:8px 10px; border-radius:7px; background:var(--panel-2); }
+  .health-row b { display:block; font-size:10.5px; }
+  .health-row small { display:block; margin-top:2px; color:var(--faint); font-size:9.5px; line-height:1.4; }
+  .health-row em { color:var(--muted); font-size:9.5px; font-style:normal; font-weight:800; text-transform:uppercase; }
+  .health-row.warning em { color:var(--amber); }
+  .health-row.offline em { color:var(--red); }
+  .all-good { padding:10px; border-radius:7px; background:var(--green-bg); color:var(--green); font-size:10.5px; }
+  .device-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 17px; border-top:1px solid var(--line); }
+  .device-footer span { color:var(--faint); font-size:9.5px; }
+  .open-link { padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:var(--panel-2); color:var(--text); font-size:10.5px; font-weight:800; text-decoration:none; }
+  .open-link:hover { border-color:rgba(75,163,255,.45); color:var(--blue); }
+  .offline-body { padding:42px 20px; text-align:center; }
+  .offline-body .icon { display:grid; place-items:center; width:44px; height:44px; margin:0 auto 12px; border:1px solid var(--line); border-radius:12px; background:var(--panel-2); color:var(--muted); font-weight:900; }
+  .offline-body h3 { margin:0; font-size:14px; }
+  .offline-body p { max-width:380px; margin:7px auto 14px; color:var(--muted); font-size:11.5px; line-height:1.6; }
+  .notice { margin-top:16px; padding:11px 13px; border:1px solid rgba(75,163,255,.2); border-radius:var(--radius); background:rgba(75,163,255,.045); color:var(--muted); font-size:10.5px; line-height:1.55; }
+  .empty-page { padding:40px; border:1px dashed var(--line); border-radius:var(--radius-l); color:var(--muted); text-align:center; }
+  @media (max-width:1100px) {
+    .overview { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .device-grid { grid-template-columns:1fr; }
+  }
+  @media (max-width:700px) {
+    .team-wrap { padding:17px 12px 42px; }
+    .team-head { flex-direction:column; }
+    .head-state { justify-content:flex-start; }
+    .device-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  }
+</style>
+<script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+<main class="team-wrap">
+  <header class="team-head">
+    <div>
+      <h1>Mamba Team View</h1>
+      <p>在一个画面看两台电脑；每台仍然各自运行、各自保存 SQLite。</p>
+    </div>
+    <div class="head-state">
+      <span class="readonly">只读总览 · 不会发送</span>
+      <span class="last-refresh" id="lastRefresh">正在读取…</span>
+    </div>
+  </header>
+
+  <section class="overview" aria-label="Team overview">
+    <div class="overview-card good"><span>电脑在线</span><strong id="onlineDevices">0/2</strong><small>本机 + Remote Mac</small></div>
+    <div class="overview-card"><span>WhatsApp 在线</span><strong id="onlineSenders">0</strong><small id="senderNote">读取号码中</small></div>
+    <div class="overview-card"><span>正在发送</span><strong id="runningCampaigns">0</strong><small>两台合计 Campaign</small></div>
+    <div class="overview-card warn"><span>需要注意</span><strong id="attentionCount">0</strong><small>Offline + Warning</small></div>
+  </section>
+
+  <section class="device-grid" id="deviceGrid">
+    <div class="empty-page">正在读取两台电脑状态…</div>
+  </section>
+
+  <div class="notice">Team View 目前只负责查看。它不会把客户移去另一台电脑、不会启动或停止 Campaign，也不会改变任何号码设定。</div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;",
+})[char]);
+
+function relative(value) {
+  const ms = Date.now() - new Date(value || 0).getTime();
+  if (!Number.isFinite(ms)) return "-";
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} 秒前`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} 分钟前` : `${Math.round(minutes / 60)} 小时前`;
+}
+
+function healthProblems(items) {
+  return (items || []).filter((item) => ["warning", "offline"].includes(item.state));
+}
+
+function campaignHtml(campaign) {
+  if (!campaign) return '<div class="campaign-empty">这台电脑目前没有 Campaign。</div>';
+  const processed = Number(campaign.processed || 0);
+  const total = Number(campaign.total || 0);
+  const percent = total ? Math.min(100, Math.round(processed / total * 100)) : 0;
+  return `
+    <section class="campaign-box">
+      <div class="campaign-top">
+        <div>
+          <span class="section-label">Current Campaign</span>
+          <h3>${esc(campaign.project || "Campaign")}</h3>
+          <p>${esc((campaign.instances || []).join(" / ") || "没有发送号码")} · ${esc(campaign.mode || "")}</p>
+        </div>
+        <span class="campaign-status ${campaign.running ? "running" : ""}">${esc(campaign.status || "READY")}</span>
+      </div>
+      <div class="progress"><i style="width:${percent}%"></i></div>
+      <div class="campaign-counts">
+        <span>${percent}% 已处理</span>
+        <span>${Number(campaign.sent || 0)} 已发送 · ${Number(campaign.pending || 0)} 等待 · ${Number(campaign.failed || 0)} 异常</span>
+      </div>
+    </section>`;
+}
+
+function healthHtml(health) {
+  const problems = healthProblems(health);
+  if (!problems.length) return '<div class="all-good">✓ 目前没有需要处理的服务异常</div>';
+  return `
+    <div class="health-list">
+      ${problems.slice(0, 4).map((item) => `
+        <div class="health-row ${esc(item.state)}">
+          <div><b>${esc(item.label)}</b><small>${esc(item.detail)}</small></div>
+          <em>${item.state === "warning" ? "注意" : "离线"}</em>
+        </div>`).join("")}
+    </div>`;
+}
+
+function unavailableCard(device) {
+  const name = device.remoteName || (device.kind === "local" ? "这台电脑" : "Remote Mac");
+  const href = device.kind === "local" ? "/control-center" : "/remote-mamba";
+  return `
+    <article class="device-card offline">
+      <div class="device-head">
+        <div><div class="device-role">${device.kind === "local" ? "This Mac" : "Remote Mac"}</div><h2>${esc(name)}</h2></div>
+        <span class="connection offline"><i></i>未连接</span>
+      </div>
+      <div class="offline-body">
+        <div class="icon">${device.kind === "local" ? "!" : "RM"}</div>
+        <h3>${device.kind === "local" ? "本机状态暂时读不到" : "另一台电脑尚未连接"}</h3>
+        <p>${esc(device.error || "请先连接 Remote Mamba，再回到这里查看。")}</p>
+        <a class="open-link" href="${href}">${device.kind === "local" ? "打开 Control Center" : "设置 Remote Mamba"} →</a>
+      </div>
+    </article>`;
+}
+
+function deviceCard(device) {
+  if (!device.connected || !device.data) return unavailableCard(device);
+  const data = device.data;
+  const scope = data.scope || {};
+  const metrics = data.metrics || {};
+  const campaign = data.campaign;
+  const senders = scope.senders || [];
+  const name = scope.device?.name || scope.device?.id || (device.kind === "local" ? "这台电脑" : "Remote Mac");
+  const openTarget = device.kind === "remote" ? ' target="_blank" rel="noopener"' : "";
+  return `
+    <article class="device-card online">
+      <div class="device-head">
+        <div>
+          <div class="device-role">${device.kind === "local" ? "This Mac" : "Remote Mac"}</div>
+          <h2>${esc(name)}</h2>
+          <p>${esc(scope.device?.hostname || "")}</p>
+        </div>
+        <span class="connection online"><i></i>在线</span>
+      </div>
+      <div class="sender-row">
+        <span class="sender-label">WhatsApp</span>
+        ${senders.length ? senders.map((sender) => `<span class="sender-chip"><i></i>${esc(sender.name)}${sender.number ? ` · ${esc(sender.number)}` : ""}</span>`).join("") : '<span class="sender-chip">没有本机号码</span>'}
+      </div>
+      <div class="device-body">
+        <div class="device-metrics">
+          <div class="metric"><span>今天发送</span><strong>${Number(metrics.todaySent || 0)}</strong></div>
+          <div class="metric"><span>今天回复</span><strong>${Number(metrics.todayReplies || 0)}</strong></div>
+          <div class="metric"><span>Follow-up</span><strong>${Number(metrics.followUps || 0)}</strong></div>
+          <div class="metric"><span>Appointments</span><strong>${Number(metrics.appointments || 0)}</strong></div>
+        </div>
+        ${campaignHtml(campaign)}
+        <section>
+          <div class="section-label" style="margin-bottom:7px">Needs Attention</div>
+          ${healthHtml(data.health || [])}
+        </section>
+      </div>
+      <div class="device-footer">
+        <span>状态更新 ${esc(relative(data.generatedAt))}</span>
+        <a class="open-link" href="${esc(device.openUrl || "/control-center")}"${openTarget}>打开这台详情 →</a>
+      </div>
+    </article>`;
+}
+
+function render(payload) {
+  const devices = payload.devices || [];
+  const connected = devices.filter((device) => device.connected && device.data);
+  const senders = connected.flatMap((device) => device.data.scope?.senders || []);
+  const running = connected.filter((device) => device.data.campaign?.running).length;
+  const attention = connected.reduce((sum, device) => sum + healthProblems(device.data.health).length, 0)
+    + devices.filter((device) => !device.connected).length;
+  $("onlineDevices").textContent = `${connected.length}/${devices.length || 2}`;
+  $("onlineSenders").textContent = senders.filter((sender) => String(sender.status).toUpperCase() === "OPEN").length;
+  $("senderNote").textContent = `${senders.length} 个号码已登记`;
+  $("runningCampaigns").textContent = running;
+  $("attentionCount").textContent = attention;
+  $("lastRefresh").textContent = `更新 ${new Date(payload.generatedAt).toLocaleTimeString("zh-MY", { hour:"2-digit", minute:"2-digit", second:"2-digit" })}`;
+  $("deviceGrid").innerHTML = devices.map(deviceCard).join("");
+}
+
+async function loadTeamView() {
+  try {
+    const response = await fetch("/api/team-view", { cache:"no-store" });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`);
+    render(payload);
+  } catch (error) {
+    $("lastRefresh").textContent = "读取失败";
+    $("deviceGrid").innerHTML = `<div class="empty-page">Team View 暂时无法读取：${esc(error.message)}</div>`;
+  }
+}
+
+loadTeamView();
+setInterval(loadTeamView, 15000);
+</script>
+</body>
+</html>
