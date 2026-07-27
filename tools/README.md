@@ -3,7 +3,12 @@
 两个互不依赖的小工具，都**只读**打开 `campaign-data/mamba.sqlite`，永远不会写生产库。
 不属于运行时代码，删掉也不影响发送。
 
-日常用双击就好：`launchers/SQL 面板.command`、`launchers/导出数据给 Postgres.command`。
+日常只有一个入口：双击 `launchers/SQL 面板.command`，菜单里选 1-4：
+
+```
+1  看数据库          2  给另一台电脑看
+3  收另一台的数据     4  立刻同步一次
+```
 
 ---
 
@@ -28,7 +33,7 @@ overlay），要真的落库得用页面上的「导出 SQL」。
 
 ## 2. 让另一台电脑连过来看(同一个 Wi-Fi)
 
-双击 `launchers/SQL 面板 (给另一台电脑看).command`,或者:
+菜单选 **2**,或者:
 
 ```bash
 node tools/sql-html/serve.mjs
@@ -51,7 +56,7 @@ node tools/sql-html/serve.mjs --new-token     # 换存取码,旧网址立刻失�
 
 ## 3. 让另一台电脑把它的数据传过来
 
-双击 `launchers/收另一台电脑的数据.command`(或 `serve.mjs --allow-upload`)。
+菜单选 **3**(或 `serve.mjs --allow-upload`)。
 终端机会印出一条 `http://192.168.x.x:8900/upload?key=xxxx`,发给那台电脑,
 那边**开网址 → 选档案 → 上传**就完事,不用装 Node、不用会命令行。
 
