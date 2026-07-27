@@ -322,7 +322,11 @@ export async function startNextQueued(runtime, { force = false } = {}) {
   let next = null;
   let blocker = null;
   for (const item of queueSnapshot.items) {
-    const conflict = conflictingRunner(campaign, item.instanceNames, item.runId, { force });
+    // A generated preview has not started sending and does not own a sender lane.
+    const conflict = conflictingRunner(campaign, item.instanceNames, item.runId, {
+      force,
+      ignoreReadyPreviews: true,
+    });
     if (!conflict) {
       next = item;
       break;
@@ -387,7 +391,7 @@ export function registerCampaignRoutes(router) {
     const instances = selectedOpenInstances(open, body.instances);
     const leads = selectLeads(campaign, project, mode, body);
     const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null, {
-      ignoreReadyPreviews: mode === "TEST",
+      ignoreReadyPreviews: true,
     }));
     const { startAt, endAt, scheduleMode } = resolveSchedule(campaign, config, body, leads.length);
 
@@ -491,7 +495,7 @@ export function registerCampaignRoutes(router) {
 
     const instanceNames = runnerInstanceNames(runner);
     const activeConflict = conflictingRunner(campaign, instanceNames, runner.state.runId, {
-      ignoreReadyPreviews: runner.state?.mode === "TEST",
+      ignoreReadyPreviews: true,
     });
     const existingQueue = await campaign.queue.snapshot();
     const earlierLaneBatch = queuedLaneConflict(existingQueue.items, instanceNames, runner.state.runId);
@@ -723,7 +727,7 @@ export function registerCampaignRoutes(router) {
     }
 
     // 一个号码不能同时跑两批。
-    const conflict = conflictingRunner(campaign, [instanceName], null, { ignoreReadyPreviews: sendMode === "TEST" });
+    const conflict = conflictingRunner(campaign, [instanceName], null, { ignoreReadyPreviews: true });
     if (conflict) throw httpError(409, `号码 ${instanceName} 已经在跑另一批 Campaign：${conflict.state?.runId}`, "LANE_BUSY");
 
     // 套上这个号码的节奏（crazy 20-30s / 普通 45-75s / 保守 90-150s）。

@@ -6,16 +6,22 @@ function runnerId(runner) {
 }
 
 export function runnerInstanceNames(runner) {
-  const names = new Set();
-  for (const item of runner?.state?.instances || []) {
-    const name = typeof item === "string" ? item : item?.name;
-    if (name) names.add(String(name));
-  }
+  const assigned = new Set();
   for (const job of runner?.state?.assignments || []) {
     const name = job?.instanceKey || job?.instanceName;
-    if (name) names.add(String(name));
+    if (name) assigned.add(String(name));
   }
-  return [...names];
+  // A preview may include every checked OPEN instance even when sticky sender
+  // ownership assigns all customers to only one of them. Lock only the senders
+  // that actually have work, otherwise an unused number is incorrectly queued.
+  if (assigned.size) return [...assigned];
+
+  const selected = new Set();
+  for (const item of runner?.state?.instances || []) {
+    const name = typeof item === "string" ? item : item?.name;
+    if (name) selected.add(String(name));
+  }
+  return [...selected];
 }
 
 export function instanceSetsOverlap(left, right) {

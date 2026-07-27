@@ -36,6 +36,19 @@ assert.deepEqual(runnerInstanceNames(flow1), ["wa_02"]);
 assert.equal(instanceSetsOverlap(runnerInstanceNames(flow1), runnerInstanceNames(flow2)), false, "different senders may run together");
 assert.equal(instanceSetsOverlap(["wa_01"], runnerInstanceNames(flow2)), true, "same sender must conflict");
 
+const stickySenderRun = runner("run_sticky_wa01", "wa_01");
+stickySenderRun.state.instances = [{ name: "wa_01" }, { name: "wa_03" }];
+assert.deepEqual(
+  runnerInstanceNames(stickySenderRun),
+  ["wa_01"],
+  "selected but unused senders must not be locked by sticky assignments",
+);
+assert.deepEqual(
+  runnerInstanceNames({ state: { instances: [{ name: "wa_01" }, { name: "wa_03" }], assignments: [] } }),
+  ["wa_01", "wa_03"],
+  "empty legacy states may fall back to selected instances",
+);
+
 await registry.persist();
 const restoredIndex = await createCampaignRunnerRegistry({ rootDir }).loadIndex();
 assert.equal(restoredIndex.latestRunId, "run_flow2_wa01");

@@ -169,9 +169,9 @@ const flow1Checkpoint = await service.recordCampaignFlowProgress({
   assignments: [{
     phone: "60129999999",
     name: "Fresh Flow 1 Lead",
-    instanceName: "wa_01",
-    senderPhone: senderPolicy.expectedSenderPhone,
-    senderKey: "mamba-test-device::60168568756",
+    instanceName: "wa_03",
+    senderPhone: "60148801997",
+    senderKey: "mamba-test-device::60148801997",
     part1SentAt: "2026-07-22T10:01:00.000Z",
     part2SentAt: "2026-07-22T10:02:00.000Z",
     sentAt: "2026-07-22T10:02:00.000Z",
@@ -192,9 +192,12 @@ assert.equal(freshFlow1Lead?.lastFlowSent, "Flow 1 - Project Template");
 assert.equal(freshFlow1Lead?.nextFlow, "Flow 2 - Layout");
 const flow1Rows = JSON.parse(execFileSync(detected.binary, [
   "-batch", "-json", service.databasePath,
-  "SELECT (SELECT COUNT(*) FROM campaign_runs WHERE run_id='run_local_first_flow_1') AS runs, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_1') AS jobs, (SELECT COUNT(*) FROM sync_jobs WHERE idempotency_key='LOCAL_TO_NOTION:campaign_run:run_local_first_flow_1:flow1_upload' AND status='PENDING') AS queued;",
+  "SELECT (SELECT COUNT(*) FROM campaign_runs WHERE run_id='run_local_first_flow_1') AS runs, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_1') AS jobs, (SELECT COUNT(*) FROM sync_jobs WHERE idempotency_key='LOCAL_TO_NOTION:campaign_run:run_local_first_flow_1:flow1_upload' AND status='PENDING') AS queued, (SELECT instance_name FROM whatsapp_connections WHERE connection_key='mamba-test-device::60148801997') AS secondSender;",
 ], { encoding: "utf8" }));
-assert.deepEqual(flow1Rows, [{ runs: 1, jobs: 2, queued: 1 }]);
+assert.deepEqual(flow1Rows, [{ runs: 1, jobs: 2, queued: 1, secondSender: "wa_03" }], "checkpoint must register a previously unseen sender before writing foreign keys");
+
+const connectionSync = await service.syncWhatsAppConnections([{ name: "wa_03", owner: "60148801997" }]);
+assert.equal(connectionSync.upserted, 1, "startup connection discovery must be idempotent");
 
 // Replaying the same checkpoint after a crash is idempotent.
 await service.recordCampaignFlowProgress({
@@ -326,6 +329,7 @@ const crossDeviceBindings = JSON.parse(execFileSync(detected.binary, [
 ], { encoding: "utf8" }));
 assert.deepEqual(crossDeviceBindings, [
   { connectionKey: "another-device::60168568756" },
+  { connectionKey: "mamba-test-device::60148801997" },
   { connectionKey: "mamba-test-device::60168568756" },
 ]);
 

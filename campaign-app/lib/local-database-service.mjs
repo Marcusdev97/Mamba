@@ -252,6 +252,47 @@ export function createLocalDatabaseService({
     return detected.binary;
   }
 
+  async function syncWhatsAppConnections(instances = []) {
+    const deviceKey = clean(device?.id);
+    if (!deviceKey) {
+      const error = new Error("本机 Device ID 缺失，不能登记 WhatsApp 连接。");
+      error.code = "WHATSAPP_CONNECTION_DEVICE_REQUIRED";
+      throw error;
+    }
+    const connections = [...new Map((Array.isArray(instances) ? instances : []).map((item) => {
+      const senderPhone = normalizePhone(item?.senderPhone || item?.owner || item?.number || item?.phone);
+      const instanceName = clean(item?.instanceName || item?.name);
+      const connectionKey = buildSenderKey(deviceKey, senderPhone);
+      return connectionKey ? [connectionKey, { connectionKey, instanceName, senderPhone }] : null;
+    }).filter(Boolean)).values()];
+    if (!connections.length) return { upserted: 0, connections: [] };
+
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    const statements = ["PRAGMA foreign_keys = ON;", "BEGIN IMMEDIATE;"];
+    for (const connection of connections) {
+      statements.push(`
+INSERT INTO whatsapp_connections(
+  connection_key, instance_name, whatsapp_number, owner, team, device_key, status,
+  last_health_check, last_seen_at, created_at, updated_at
+) VALUES (
+  ${sqlText(connection.connectionKey)}, ${sqlText(connection.instanceName)}, ${sqlText(connection.senderPhone)},
+  '', '', ${sqlText(deviceKey)}, 'OPEN', ${sqlText(now)}, ${sqlText(now)}, ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(connection_key) DO UPDATE SET
+  instance_name=CASE WHEN excluded.instance_name<>'' THEN excluded.instance_name ELSE whatsapp_connections.instance_name END,
+  whatsapp_number=excluded.whatsapp_number,
+  device_key=excluded.device_key,
+  status='OPEN',
+  last_health_check=excluded.last_health_check,
+  last_seen_at=excluded.last_seen_at,
+  updated_at=excluded.updated_at;`);
+    }
+    statements.push("COMMIT;");
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 60000);
+    return { upserted: connections.length, connections };
+  }
+
   function requireLeadGroupScope() {
     const deviceKey = clean(device?.id);
     const senderPhone = senderPolicy?.configured ? normalizePhone(senderPolicy.expectedSenderPhone) : "";
@@ -914,6 +955,7 @@ SELECT COALESCE(
     const id = clean(runId);
     const code = clean(projectCode);
     const sentFlow = clean(flowLabel);
+    const checkpointDeviceKey = clean(deviceId || device?.id);
     if (!id || !code || !sentFlow || clean(mode).toUpperCase() !== "LIVE") {
       return { recorded: 0, skipped: Array.isArray(assignments) ? assignments.length : 0, reason: "not_live_flow_run" };
     }
@@ -926,7 +968,7 @@ SELECT COALESCE(
         name: clean(item?.name),
         sentAt: new Date(sentAt).toISOString(),
         dueDate: item?.dueDate || null,
-        senderKey: clean(item?.senderKey),
+        senderKey: clean(item?.senderKey) || buildSenderKey(checkpointDeviceKey, item?.senderPhone),
         senderPhone: normalizePhone(item?.senderPhone),
         instanceName: clean(item?.instanceName),
         part1SentAt: item?.part1SentAt || null,
@@ -943,6 +985,18 @@ SELECT COALESCE(
     const senderSet = [...new Set(rows.map((row) => row.instanceName).filter(Boolean))].join(",");
     const runPayload = JSON.stringify({ source: "run-json", localFirst: true, flowLabel: sentFlow });
     const statements = ["PRAGMA foreign_keys = ON;", "BEGIN IMMEDIATE;", `
+${checkpointDeviceKey ? `INSERT INTO devices(
+  device_key, device_name, owner, hostname, last_online_at, created_at, updated_at
+) VALUES (
+  ${sqlText(checkpointDeviceKey)}, ${sqlText(device?.name)}, '', ${sqlText(device?.hostname)},
+  ${sqlText(now)}, ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(device_key) DO UPDATE SET
+  device_name=CASE WHEN excluded.device_name<>'' THEN excluded.device_name ELSE devices.device_name END,
+  hostname=CASE WHEN excluded.hostname<>'' THEN excluded.hostname ELSE devices.hostname END,
+  last_online_at=excluded.last_online_at,
+  updated_at=excluded.updated_at;` : ""}
+
 INSERT INTO projects(project_code, project_name, aliases_json, active, created_at, updated_at)
 VALUES (${sqlText(code)}, ${sqlText(projectName || code)}, '[]', 1, ${sqlText(now)}, ${sqlText(now)})
 ON CONFLICT(project_code) DO UPDATE SET
@@ -957,13 +1011,41 @@ INSERT INTO campaign_runs(
   ${sqlText(id)}, NULL, ${sqlText(`${projectName || code} · ${sentFlow}`)}, ${sqlText(code)},
   ${sqlText(sentFlow)}, NULL, ${sqlText(senderSet)}, 'LIVE', ${sqlText(allowedRunStatus)},
   ${sqlNumber(Array.isArray(assignments) ? assignments.length : rows.length)}, ${sqlNumber(rows.length)}, 0,
-  ${sqlNullable(deviceId)}, ${sqlText(startedAt || rows[0].sentAt || now)},
+  ${sqlNullable(checkpointDeviceKey)}, ${sqlText(startedAt || rows[0].sentAt || now)},
   ${sqlNullable(finishedAt)}, ${sqlText(runPayload)}
 )
 ON CONFLICT(run_id) DO UPDATE SET
   status=excluded.status, sent_count=MAX(campaign_runs.sent_count, excluded.sent_count),
   finished_at=COALESCE(excluded.finished_at, campaign_runs.finished_at),
   payload_json=excluded.payload_json;`];
+
+    const senderConnections = [...new Map(rows.map((row) => (
+      row.senderKey && row.senderPhone
+        ? [row.senderKey, {
+          connectionKey: row.senderKey,
+          instanceName: row.instanceName,
+          senderPhone: row.senderPhone,
+        }]
+        : null
+    )).filter(Boolean)).values()];
+    for (const connection of senderConnections) {
+      statements.push(`
+INSERT INTO whatsapp_connections(
+  connection_key, instance_name, whatsapp_number, owner, team, device_key, status,
+  last_health_check, last_seen_at, created_at, updated_at
+) VALUES (
+  ${sqlText(connection.connectionKey)}, ${sqlText(connection.instanceName)}, ${sqlText(connection.senderPhone)},
+  '', '', ${sqlNullable(checkpointDeviceKey)}, 'OPEN', ${sqlText(now)}, ${sqlText(now)}, ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(connection_key) DO UPDATE SET
+  instance_name=CASE WHEN excluded.instance_name<>'' THEN excluded.instance_name ELSE whatsapp_connections.instance_name END,
+  whatsapp_number=excluded.whatsapp_number,
+  device_key=COALESCE(excluded.device_key, whatsapp_connections.device_key),
+  status='OPEN',
+  last_health_check=excluded.last_health_check,
+  last_seen_at=excluded.last_seen_at,
+  updated_at=excluded.updated_at;`);
+    }
 
     for (const row of rows) {
       const leadKey = `${code}:${row.phone}`;
@@ -991,7 +1073,7 @@ INSERT INTO project_leads(
   ${cohortNumber(cohortDay) === null ? "NULL" : sqlNumber(cohortNumber(cohortDay))}, ${sqlNullable(row.dueDate)},
   ${sqlNullable(row.part1SentAt || row.sentAt)}, ${sqlText(row.sentAt)},
   ${sqlNullable(row.senderKey)}, ${sqlNullable(row.senderKey)}, ${sqlText(row.senderPhone)},
-  ${sqlNullable(deviceId)}, ${sqlText(id)}, ${sqlText(JSON.stringify({ source: "campaign-checkpoint", localFirst: true }))},
+  ${sqlNullable(checkpointDeviceKey)}, ${sqlText(id)}, ${sqlText(JSON.stringify({ source: "campaign-checkpoint", localFirst: true }))},
   NULL, ${sqlText(now)}, ${sqlText(now)}
 )
 ON CONFLICT(project_lead_key) DO UPDATE SET
@@ -1360,6 +1442,7 @@ COMMIT;
     applyNotionImport,
     syncNotionRecords,
     readLeadCache,
+    syncWhatsAppConnections,
     recordCampaignFlowProgress,
     setLeadFlowState,
     recordLeadReply,

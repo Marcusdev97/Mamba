@@ -170,7 +170,7 @@ localDatabaseService.configureNotionImport({
   }),
   resolveProjectCode: (name) => localProjectCodeByName.get(String(name || "").trim().toLowerCase()) || "",
 });
-await localDatabaseService.initialize().catch(async (error) => {
+const localDatabaseState = await localDatabaseService.initialize().catch(async (error) => {
   console.log(`[local-database] startup initialization held: ${error.code || "SQLITE_STARTUP_FAILED"} ${error.message}`);
   await systemLogService.write({
     level: "error",
@@ -179,7 +179,22 @@ await localDatabaseService.initialize().catch(async (error) => {
     message: "SQLite Shadow could not initialize or migrate at Mamba startup.",
     context: { code: error.code || "SQLITE_STARTUP_FAILED", error: error.message },
   }).catch(() => {});
+  return null;
 });
+if (localDatabaseState?.health === "ready") {
+  deviceOpenInstances()
+    .then((instances) => localDatabaseService.syncWhatsAppConnections(instances))
+    .catch(async (error) => {
+      console.log(`[local-database] WhatsApp connection discovery held: ${error.code || "WHATSAPP_CONNECTION_SYNC_FAILED"} ${error.message}`);
+      await systemLogService.write({
+        level: "warn",
+        area: "local_database",
+        event: "whatsapp_connection_sync_failed",
+        message: "Active WhatsApp connections could not be registered in SQLite at startup.",
+        context: { code: error.code || "WHATSAPP_CONNECTION_SYNC_FAILED", error: error.message },
+      }).catch(() => {});
+    });
+}
 await goldenLedgerService.initialize().catch(async (error) => {
   console.log(`[golden-ledger] startup initialization held: ${error.code || "GC_STARTUP_FAILED"} ${error.message}`);
   await systemLogService.write({

@@ -20,6 +20,21 @@ const campaign = { listRunners: () => [ready] };
 assert.equal(conflictingRunner(campaign, ["wa_01"])?.state.runId, "run_ready", "normal Start must still respect an existing READY preview");
 assert.equal(conflictingRunner(campaign, ["wa_01"], null, { ignoreReadyPreviews: true }), null, "Resume may ignore a preview that has never started");
 
+const stickyWa01 = {
+  running: true,
+  state: {
+    runId: "run_sticky_wa01",
+    status: "RUNNING",
+    instances: [{ name: "wa_01" }, { name: "wa_03" }],
+    assignments: [{ instanceName: "wa_01" }],
+  },
+};
+assert.equal(
+  conflictingRunner({ listRunners: () => [stickyWa01] }, ["wa_03"]),
+  null,
+  "an OPEN but unused sender must remain available for a parallel lane",
+);
+
 const activelyRunning = runner("run_live", "RUNNING", { running: true });
 assert.equal(
   conflictingRunner({ listRunners: () => [ready, activelyRunning] }, ["wa_01"], null, { ignoreReadyPreviews: true })?.state.runId,

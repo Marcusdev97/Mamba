@@ -593,6 +593,10 @@ function monitorRunIsActive(run) {
   return run?.running === true || run?.state?.status === "RUNNING" || syncStatus === "RUNNING";
 }
 
+function monitorRunIsPreview(run) {
+  return run?.running !== true && ["READY", "READY_TEST"].includes(String(run?.state?.status || ""));
+}
+
 document.getElementById("monitorToggle").addEventListener("click", () => {
   const collapsed = document.getElementById("campaignMonitors").classList.contains("collapsed");
   setCampaignMonitorsCollapsed(!collapsed, { remember: true });
@@ -600,7 +604,9 @@ document.getElementById("monitorToggle").addEventListener("click", () => {
 
 function renderCampaignMonitor(status, queue) {
   const supplied = Array.isArray(status?.runs) ? status.runs : [];
-  const runs = supplied.length ? supplied : (status?.state ? [status] : []);
+  // Preview stays in the lower confirmation area; show a top card only after it is queued or started.
+  const runs = (supplied.length ? supplied : (status?.state ? [status] : []))
+    .filter((item) => !monitorRunIsPreview(item));
   const dismissedNow = runs.filter((item) => item?.state?.runId && dismissedCampaignRuns[item.state.runId]);
   const visible = runs.filter((item) => !item?.state?.runId || !dismissedCampaignRuns[item.state.runId]);
   const container = document.getElementById("campaignMonitors");
