@@ -568,9 +568,10 @@ export function registerCampaignRoutes(router) {
     if (!runner || !runner.state) throw httpError(400, "没有可补发的 run。");
     if (runner.running) throw httpError(409, "campaign 已在运行。");
 
-    const failed = runner.state.assignments.filter((job) =>
+    const failedJobs = runner.state.assignments.filter((job) =>
       job.status === "FAILED" && !isRecipientNotOnWhatsAppError(job)
-    ).length;
+    );
+    const failed = failedJobs.length;
     if (!failed) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
@@ -593,6 +594,12 @@ export function registerCampaignRoutes(router) {
     });
     markNotionSyncWaiting(runner);
     const autoAdvance = markFlowAdvanceWaiting(runner);
+    runner.state.resumeSession = {
+      startedAt: new Date().toISOString(),
+      total: queued,
+      jobIds: failedJobs.map((job) => job.id),
+    };
+    runner.pushLog(`继续发送异常：本次进度从 0/${queued} 开始；已成功的客户与 Part 不会重发。`);
     await runner.saveState();
 
     runCampaignInBackground(runtime, runner, autoAdvance, "campaign_retry_failed_error");
