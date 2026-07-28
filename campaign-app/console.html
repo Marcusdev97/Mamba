@@ -6,6 +6,86 @@
 <title>首轮群发（Flow 1）· Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
+  body {
+    background:
+      radial-gradient(circle at 50% -180px, rgba(74,158,255,.08), transparent 430px),
+      var(--bg);
+  }
+  .wrap { max-width:1180px; }
+  .project-context {
+    display:grid; grid-template-columns:minmax(180px,240px) minmax(0,1fr); gap:18px; align-items:center;
+    padding:14px 16px; border-color:rgba(74,158,255,.22);
+    background:linear-gradient(135deg, rgba(74,158,255,.07), rgba(24,27,33,.98) 42%);
+  }
+  .project-control { display:flex; align-items:center; gap:10px; min-width:0; }
+  .project-control label {
+    color:#7dd3fc; font-size:10.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase;
+  }
+  .project-control select { min-width:0; flex:1; }
+  .project-summary { min-width:0; padding-left:18px; border-left:1px solid var(--line); }
+  .project-summary strong { display:block; margin-bottom:2px; color:var(--text); font-size:13px; }
+  .project-summary span { display:block; line-height:1.55; }
+  .setup-grid { grid-template-columns:minmax(0,1.16fr) minmax(340px,.84fr); align-items:start; }
+  .flow-card {
+    padding:0; overflow:hidden; border-color:#313744;
+    box-shadow:0 10px 28px rgba(0,0,0,.14);
+  }
+  .flow-card > .section-body { padding:16px; }
+  .flow-section-head {
+    display:flex; align-items:flex-start; justify-content:space-between; gap:14px;
+    padding:16px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(255,255,255,.025), transparent);
+  }
+  .flow-heading { display:flex; gap:11px; min-width:0; }
+  .flow-heading .step-no { flex:0 0 auto; margin:1px 0 0; }
+  .flow-title { margin:0; color:var(--text); font-size:15px; font-weight:750; letter-spacing:0; text-transform:none; }
+  .flow-description { margin-top:3px; color:var(--muted); font-size:12px; line-height:1.55; }
+  .section-block {
+    padding:14px; border:1px solid var(--line); border-radius:11px;
+    background:rgba(31,35,43,.58);
+  }
+  .section-block + .section-block { margin-top:12px; }
+  .section-block-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .section-block-title { color:var(--text); font-size:13px; font-weight:720; }
+  .section-block-note { margin-top:2px; color:var(--faint); font-size:11.5px; line-height:1.45; }
+  .section-block-index {
+    flex:0 0 auto; min-width:24px; padding:2px 7px; border:1px solid var(--line);
+    border-radius:999px; color:var(--muted); font-size:10.5px; font-weight:750; text-align:center;
+  }
+  .config-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .config-fields .fld { margin-bottom:0; }
+  .inline-help { margin:9px 0 0; color:var(--muted); font-size:11.5px; line-height:1.55; }
+  .mode-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .mode-copy { min-width:0; }
+  .mode-copy strong { display:block; color:var(--text); font-size:13px; }
+  .mode-copy span { color:var(--faint); font-size:11.5px; }
+  .sender-box { max-height:190px; padding:10px; border:1px solid var(--line); border-radius:9px; background:var(--panel); }
+  .prepare-bar {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px;
+    padding-top:14px; border-top:1px solid var(--line);
+  }
+  .prepare-bar span { color:var(--muted); font-size:11.5px; line-height:1.45; }
+  .prepare-bar .btn { flex:0 0 auto; }
+  .active-group { margin:12px 0 0; }
+  .lead-review { margin-top:12px; border:1px solid var(--line); border-radius:11px; background:rgba(31,35,43,.58); overflow:hidden; }
+  .lead-review summary {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:12px 14px; cursor:pointer; list-style:none; color:var(--text); font-size:13px; font-weight:700;
+  }
+  .lead-review summary::-webkit-details-marker { display:none; }
+  .lead-review summary::after { content:"展开查看"; color:var(--blue); font-size:11.5px; font-weight:650; }
+  .lead-review[open] summary { border-bottom:1px solid var(--line); }
+  .lead-review[open] summary::after { content:"收起名单"; }
+  .lead-review-body { padding:14px; }
+  .section-divider { margin:14px 0; }
+  .progress-card {
+    position:relative; padding:18px; border-color:rgba(74,158,255,.25);
+    box-shadow:0 10px 30px rgba(0,0,0,.16);
+  }
+  .progress-card::before {
+    content:""; position:absolute; inset:0 auto 0 0; width:3px; border-radius:12px 0 0 12px;
+    background:linear-gradient(var(--blue), var(--green));
+  }
   .progress-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
   .progress-head h2 { margin-bottom:4px; }
   .progress-status { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -72,7 +152,16 @@
   .source-advanced { margin:10px 0; border:1px solid var(--line); border-radius:9px; background:var(--panel-2); }
   .source-advanced summary { padding:9px 11px; color:var(--muted); cursor:pointer; font-size:12px; }
   .source-advanced .fld { padding:0 11px 10px; margin:0; }
+  @media (max-width:900px) {
+    .setup-grid { grid-template-columns:1fr; }
+  }
   @media (max-width:780px) {
+    .wrap { padding-inline:12px; }
+    .project-context { grid-template-columns:1fr; gap:12px; }
+    .project-summary { padding:11px 0 0; border-left:0; border-top:1px solid var(--line); }
+    .config-fields { grid-template-columns:1fr; }
+    .mode-row, .prepare-bar { align-items:flex-start; flex-direction:column; }
+    .prepare-bar .btn { width:100%; }
     .outcome-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .progress-head, .progress-caption, .next-action, .result-toolbar { align-items:flex-start; flex-direction:column; }
     .group-picker, .rename-row { grid-template-columns:1fr; }
@@ -94,115 +183,193 @@
   </header>
 
   <!-- Project selector -->
-  <div class="card" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap">
-    <h2 style="margin:0">Project</h2>
-    <select id="projectSel" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px;min-width:200px"></select>
-    <span class="muted" id="projectInfo" style="font-size:12.5px"></span>
+  <div class="card project-context">
+    <div class="project-control">
+      <label for="projectSel">Project</label>
+      <select id="projectSel"></select>
+    </div>
+    <div class="project-summary">
+      <strong>当前发送工作区</strong>
+      <span class="muted" id="projectInfo" style="font-size:12.5px"></span>
+    </div>
   </div>
 
-  <div class="grid">
+  <div class="grid setup-grid">
     <!-- Step 1: customer groups -->
-    <div class="card">
-      <h2><span class="step-no">1</span>客户群</h2>
-      <div class="muted" style="font-size:12.5px;line-height:1.6;margin:-4px 0 12px">选择以前建立的客户群即可继续，不需要重新上传 Excel。客户群只保存在本机，并绑定本机真实 WhatsApp 号码。</div>
-      <div class="group-picker">
-        <label class="fld">
-          <span>现有客户群</span>
-          <select id="leadGroupSel" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px">
-            <option value="">还没有客户群</option>
-          </select>
-        </label>
-        <button class="btn primary" id="btnSelectGroup">使用这个客户群</button>
+    <div class="card flow-card">
+      <div class="flow-section-head">
+        <div class="flow-heading">
+          <span class="step-no">1</span>
+          <div>
+            <h2 class="flow-title">选择客户群</h2>
+            <div class="flow-description">使用已保存名单，或建立一个新的客户群。</div>
+          </div>
+        </div>
       </div>
-      <div class="err" id="groupErr"></div>
+      <div class="section-body">
+        <section class="section-block">
+          <div class="section-block-head">
+            <div>
+              <div class="section-block-title">从现有客户群选择</div>
+              <div class="section-block-note">无需重复上传；每次发送前都会重新做安全排除。</div>
+            </div>
+            <span class="section-block-index">A</span>
+          </div>
+          <div class="group-picker">
+            <label class="fld">
+              <span>现有客户群</span>
+              <select id="leadGroupSel" style="width:100%">
+                <option value="">还没有客户群</option>
+              </select>
+            </label>
+            <button class="btn primary" id="btnSelectGroup">使用这个客户群</button>
+          </div>
+          <div class="err" id="groupErr"></div>
 
-      <div class="active-group hidden" id="activeGroupPanel">
-        <div class="active-group-head">
-          <div><div class="active-group-name" id="activeGroupName">—</div><div class="active-group-meta" id="activeGroupMeta"></div></div>
-          <span class="badge b-sent">使用中</span>
-        </div>
-        <div class="rename-row">
-          <input type="text" id="renameGroupName" maxlength="80" placeholder="修改客户群名称" />
-          <button class="btn" id="btnRenameGroup">保存群名</button>
-        </div>
-        <div class="ok" id="renameMsg"></div>
-      </div>
+          <div class="active-group hidden" id="activeGroupPanel">
+            <div class="active-group-head">
+              <div><div class="active-group-name" id="activeGroupName">—</div><div class="active-group-meta" id="activeGroupMeta"></div></div>
+              <span class="badge b-sent">使用中</span>
+            </div>
+            <div class="rename-row">
+              <input type="text" id="renameGroupName" maxlength="80" placeholder="修改客户群名称" />
+              <button class="btn" id="btnRenameGroup">保存群名</button>
+            </div>
+            <div class="ok" id="renameMsg"></div>
+          </div>
+        </section>
 
-      <div class="section-divider">建立新客户群</div>
-      <label class="fld">
-        <span>客户群名称</span>
-        <input type="text" id="newGroupName" maxlength="80" placeholder="例如：Binastra · July Website Leads" />
-      </label>
-      <div class="seg" id="leadInputMode" style="margin-bottom:12px">
-        <button data-input-mode="paste" class="active">粘贴名字和号码</button>
-        <button data-input-mode="file">上传 Excel / CSV</button>
-      </div>
-      <div id="pasteLeadPanel">
-        <label class="fld">
-          <span>客户名单（一行一个客户）</span>
-          <textarea id="pastedLeads" rows="9" placeholder="Marcus, 60123456789&#10;Chloe Choo&#9;01154515334&#10;陈小姐 012-345 6789" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:14px;line-height:1.6;resize:vertical"></textarea>
-        </label>
-        <div class="muted" style="font-size:12px;margin:-4px 0 10px;line-height:1.55">可以直接从 WhatsApp、Notes 或 Excel 两列复制过来。支持逗号、Tab 或空格分隔；只有号码也可以，名字会先用 “there”。</div>
-      </div>
-      <div id="fileLeadPanel" class="hidden">
-        <input type="file" id="excelFile" class="hidden" accept=".xlsx,.xlsm,.xls,.csv,.tsv" />
-        <div id="excelDrop" class="dropzone" tabindex="0" role="button">
-          <div><b>把 Excel / CSV 拖到这里</b><span class="muted"> 或点击选择文件</span></div>
-          <div class="muted" id="excelFileLabel">支持 .xlsx / .xlsm / .xls / .csv / .tsv</div>
-        </div>
-        <details class="source-advanced">
-          <summary>高级：使用电脑里的文件路径</summary>
+        <section class="section-block">
+          <div class="section-block-head">
+            <div>
+              <div class="section-block-title">建立新客户群</div>
+              <div class="section-block-note">贴上名单或上传文件，整理完成后会保存在本机。</div>
+            </div>
+            <span class="section-block-index">B</span>
+          </div>
           <label class="fld">
-            <span>文件路径（通常不需要填写）</span>
-            <input type="text" id="sourcePath" placeholder="默认：该 Project 配置的文件" />
+            <span>客户群名称</span>
+            <input type="text" id="newGroupName" maxlength="80" placeholder="例如：Binastra · July Website Leads" />
           </label>
-        </details>
-      </div>
-      <div class="muted" style="font-size:12px;margin:-2px 0 10px;line-height:1.55">
-        🛡 建立后会保留完整客户群；每次使用时重新排除本项目已发送、STOP、重复和无效号码，避免旧客户群造成重复发送。
-      </div>
-      <button class="btn" id="btnImport">整理并使用客户群</button>
-      <div class="ok" id="importMsg"></div>
-      <div class="err" id="importErr"></div>
+          <div class="seg" id="leadInputMode" style="margin-bottom:12px">
+            <button data-input-mode="paste" class="active">粘贴名字和号码</button>
+            <button data-input-mode="file">上传 Excel / CSV</button>
+          </div>
+          <div id="pasteLeadPanel">
+            <label class="fld">
+              <span>客户名单（一行一个客户）</span>
+              <textarea id="pastedLeads" rows="7" placeholder="Marcus, 60123456789&#10;Chloe Choo&#9;01154515334&#10;陈小姐 012-345 6789" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:14px;line-height:1.6;resize:vertical"></textarea>
+            </label>
+            <div class="muted" style="font-size:12px;margin:-4px 0 10px;line-height:1.55">可以直接从 WhatsApp、Notes 或 Excel 两列复制过来。支持逗号、Tab 或空格分隔；只有号码也可以，名字会先用 “there”。</div>
+          </div>
+          <div id="fileLeadPanel" class="hidden">
+            <input type="file" id="excelFile" class="hidden" accept=".xlsx,.xlsm,.xls,.csv,.tsv" />
+            <div id="excelDrop" class="dropzone" tabindex="0" role="button">
+              <div><b>把 Excel / CSV 拖到这里</b><span class="muted"> 或点击选择文件</span></div>
+              <div class="muted" id="excelFileLabel">支持 .xlsx / .xlsm / .xls / .csv / .tsv</div>
+            </div>
+            <details class="source-advanced">
+              <summary>高级：使用电脑里的文件路径</summary>
+              <label class="fld">
+                <span>文件路径（通常不需要填写）</span>
+                <input type="text" id="sourcePath" placeholder="默认：该 Project 配置的文件" />
+              </label>
+            </details>
+          </div>
+          <div class="muted" style="font-size:12px;margin:-2px 0 10px;line-height:1.55">
+            🛡 建立后会保留完整客户群；每次使用时重新排除本项目已发送、STOP、重复和无效号码，避免旧客户群造成重复发送。
+          </div>
+          <button class="btn" id="btnImport">整理并使用客户群</button>
+          <div class="ok" id="importMsg"></div>
+          <div class="err" id="importErr"></div>
+        </section>
 
-      <div id="leadsEditWrap" class="hidden" style="margin-top:14px">
-        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span class="muted" id="leadsEditCount"></span>
-          <button class="btn" id="btnSaveNames">保存名字</button>
-        </div>
-        <div class="muted" style="font-size:12px;margin-bottom:8px">改完点「保存名字」，再重新「生成预览」即按新名字发送。</div>
-        <div class="ok" id="namesMsg"></div>
-        <div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:9px">
-          <table>
-            <thead><tr><th>姓名（可改）</th><th>号码</th></tr></thead>
-            <tbody id="leadsEditBody"></tbody>
-          </table>
-        </div>
+        <details id="leadsEditWrap" class="hidden lead-review">
+          <summary><span>名单检查 · <span id="leadsEditCount"></span></span></summary>
+          <div class="lead-review-body">
+          <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span class="muted">确认名字后再生成预览</span>
+            <button class="btn" id="btnSaveNames">保存名字</button>
+          </div>
+          <div class="muted" style="font-size:12px;margin-bottom:8px">改完点「保存名字」，再重新「生成预览」即按新名字发送。</div>
+          <div class="ok" id="namesMsg"></div>
+          <div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:9px">
+            <table>
+              <thead><tr><th>姓名（可改）</th><th>号码</th></tr></thead>
+              <tbody id="leadsEditBody"></tbody>
+            </table>
+          </div>
+          </div>
+        </details>
       </div>
     </div>
 
     <!-- Step 2: configure -->
-    <div class="card">
-      <h2><span class="step-no">2</span>配置</h2>
-      <div class="row">
-        <label class="fld"><span>开始时间（now 或 HH:MM）</span><input type="text" id="startTime" placeholder="now" /></label>
-        <label class="fld"><span>结束时间（可留空）</span><input type="text" id="endTime" placeholder="留空 = 自动尽早完成" /></label>
+    <div class="card flow-card">
+      <div class="flow-section-head">
+        <div class="flow-heading">
+          <span class="step-no">2</span>
+          <div>
+            <h2 class="flow-title">发送配置</h2>
+            <div class="flow-description">设定时间、模式与负责发送的电话号码。</div>
+          </div>
+        </div>
       </div>
-      <div class="muted" style="font-size:12px;margin:-4px 0 14px;line-height:1.55">留空会按安全发送速度自动计算最早完成时间；只有你填写 <b>21:00</b>（或其他时间）时，才会把这一批平均铺到该时间。</div>
-      <label class="fld"><span>模式</span></label>
-      <div class="seg" id="modeSeg" style="margin-bottom:14px">
-        <button data-mode="TEST" class="active">TEST</button>
-        <button data-mode="LIVE">LIVE</button>
+      <div class="section-body">
+        <section class="section-block">
+          <div class="section-block-head">
+            <div>
+              <div class="section-block-title">发送时段</div>
+              <div class="section-block-note">决定何时开始，以及是否平均铺到指定时间。</div>
+            </div>
+            <span class="section-block-index">A</span>
+          </div>
+          <div class="config-fields">
+            <label class="fld"><span>开始时间</span><input type="text" id="startTime" placeholder="now 或 HH:MM" /></label>
+            <label class="fld"><span>结束时间（可留空）</span><input type="text" id="endTime" placeholder="自动尽早完成" /></label>
+          </div>
+          <div class="inline-help">留空结束时间，会按安全速度自动计算；填写 <b>21:00</b> 等时间，才会把这一批平均铺到该时间。</div>
+        </section>
+
+        <section class="section-block">
+          <div class="section-block-head">
+            <div>
+              <div class="section-block-title">发送模式</div>
+              <div class="section-block-note">先 TEST 确认内容，再切换 LIVE 发给客户。</div>
+            </div>
+            <span class="section-block-index">B</span>
+          </div>
+          <div class="mode-row">
+            <div class="mode-copy"><strong>当前模式</strong><span>TEST 不会使用正式客户名单</span></div>
+            <div class="seg" id="modeSeg">
+              <button data-mode="TEST" class="active">TEST</button>
+              <button data-mode="LIVE">LIVE</button>
+            </div>
+          </div>
+          <label class="fld" id="testRecipientsFld" style="margin-top:12px">
+            <span>TEST 收件人（一行一个：名字, 电话, 语言）</span>
+            <textarea id="testRecipients" rows="4" placeholder="Marcus, 60123456789, EN" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px;resize:vertical"></textarea>
+          </label>
+          <label class="fld hidden" id="leadCountFld" style="margin-top:12px"><span>发送 leads 数量（留空=全部）</span><input type="number" id="leadCount" min="1" placeholder="全部" /></label>
+        </section>
+
+        <section class="section-block">
+          <div class="section-block-head">
+            <div>
+              <div class="section-block-title">发送电话号码</div>
+              <div class="section-block-note">只会显示目前 OPEN、可以发送的 Connection Key。</div>
+            </div>
+            <span class="section-block-index">C</span>
+          </div>
+          <div class="checks sender-box" id="senderChecks"><span class="muted">等待号码列表…</span></div>
+        </section>
+
+        <div class="prepare-bar">
+          <span>下一步会显示客户、时间、号码和模板，确认后才真正发送。</span>
+          <button class="btn primary" id="btnPrepare">生成预览</button>
+        </div>
+        <div class="err" id="prepErr"></div>
       </div>
-      <label class="fld" id="testRecipientsFld">
-        <span>TEST 收件人（一行一个：名字, 电话, 语言）</span>
-        <textarea id="testRecipients" rows="4" placeholder="Marcus, 60123456789, EN" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px;resize:vertical"></textarea>
-      </label>
-      <label class="fld hidden" id="leadCountFld"><span>发送 leads 数量（留空=全部）</span><input type="number" id="leadCount" min="1" placeholder="全部" /></label>
-      <label class="fld"><span>Connection Key（OPEN 的才能选）</span></label>
-      <div class="checks" id="senderChecks"><span class="muted">等待号码列表…</span></div>
-      <div style="margin-top:14px"><button class="btn primary" id="btnPrepare">生成预览</button></div>
-      <div class="err" id="prepErr"></div>
     </div>
   </div>
 
@@ -241,7 +408,7 @@
   </div>
 
   <!-- Step 4: progress -->
-  <div class="card hidden" id="progressCard">
+  <div class="card hidden progress-card" id="progressCard">
     <div class="progress-head">
       <div>
         <h2><span class="step-no">4</span>发送进度</h2>

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  buildAssignments,
   CampaignRunner,
   RecipientNotOnWhatsAppError,
   campaignOutcomeSummary,
@@ -52,6 +53,28 @@ assert.equal(isRecipientNotOnWhatsAppError(new Error('send failed: {"exists":fal
 assert.equal(isRecipientNotOnWhatsAppError({ error: "不是 WhatsApp 号码 (not on WhatsApp)" }), true);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("HTTP 500 provider unavailable")), false);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("Could not send WhatsApp message: HTTP 500")), false);
+
+{
+  const stickyConfig = {
+    languageSelection: { weights: { en: 100 } },
+    delivery: { partGapSeconds: 0 },
+    part1: { variants: [{ id: "flow1_en", language: "en", text: "Hello [Name]" }] },
+    part2: { variants: [] },
+    extraParts: [],
+  };
+  const built = buildAssignments([
+    { name: "Second sender lead", phone: "60111111111", language: "en", senderInstance: "wa_02" },
+    { name: "First sender lead", phone: "60122222222", language: "en", senderInstance: "wa_01" },
+  ], [
+    { name: "wa_01", owner: "60100000001" },
+    { name: "wa_02", owner: "60100000002" },
+  ], start, new Date(start.getTime() + 120_000), stickyConfig);
+  assert.deepEqual(
+    built.assignments.map((job) => job.instanceName),
+    ["wa_02", "wa_01"],
+    "Flow follow-up customers must stay on the WhatsApp number that sent their earlier Flow",
+  );
+}
 
 {
   const complete = campaignRestartDecision({
