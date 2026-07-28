@@ -24,7 +24,7 @@
   ```
 - [x] **T2. `.env` 加一行**（evolution-pilot/.env, 2026-07-05 完成; 真实号码只存在 .env, 已 gitignore）:
   ```
-  TEST_LEADS=<Name>:<phone>:en:<templateId>,<Name>:<phone>:en:<templateId>
+  TEST_LEADS=<Name>:<phone>:en,<Name>:<phone>:en
   ```
 - [ ] **T3. Repo 转回 Private**（GitHub → Settings → Change visibility）— 你自己做
 - [x] **T4. MAMBA_STANDARD.md 和本文件也放进 repo 的 `docs/` 一起 commit**（2026-07-05 完成）

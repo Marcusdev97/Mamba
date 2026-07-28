@@ -293,13 +293,6 @@ export function normalizePhone(value) {
   return /^\d{8,15}$/.test(digits) ? digits : null;
 }
 
-export const DEFAULT_TEST_LEADS = [
-  { name: "Anson", phone: "017 206 4505", language: "en" },
-  { name: "Mark", phone: "011 3369 8121", language: "en" },
-  { name: "Chin", phone: "0168568756", language: "en" },
-  { name: "Cici Liu", phone: "017 997 8682", language: "en" },
-];
-
 export async function importLeads(sourcePath) {
   const { FileBlob, SpreadsheetFile } = await import("./xlsx_compat.mjs");
   const resolved = path.resolve(sourcePath || path.join(paths.rootDir, "Untitled spreadsheet.xlsx"));
@@ -432,11 +425,12 @@ export function firstFlowPart2Variants(config, part1Variant) {
   });
 }
 
-// TEST recipients can come from the web UI (one per line: Name, Phone, Lang) or
-// from TEST_LEADS in .env (legacy: Name:phone:lang:templateId).
+// TEST recipients come from TEST_LEADS in .env (Name:phone:lang,
+// comma-separated). There is deliberately no built-in recipient: a missing
+// env value must fail closed.
 export function getTestLeads(raw = process.env.TEST_LEADS || "") {
   const text = String(raw || "").trim();
-  const source = text || DEFAULT_TEST_LEADS.map((lead) => `${lead.name},${lead.phone},${lead.language}`).join("\n");
+  const source = text;
   const entries = (source.includes("\n")
     ? source.split(/\r?\n/)
     : (source.includes(":") && source.includes(",") ? source.split(",") : [source]))
@@ -458,7 +452,7 @@ export function getTestLeads(raw = process.env.TEST_LEADS || "") {
     };
   }).filter(Boolean);
   if (!leads.length) {
-    console.warn("[TEST MODE] 没有测试收件人。请在页面填写，或在 .env 设置 TEST_LEADS。");
+    console.warn("[TEST MODE] 没有测试收件人。请到 Settings 填写并保存 TEST_LEADS。");
   }
   return leads;
 }

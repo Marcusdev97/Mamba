@@ -17,7 +17,14 @@ import os from "node:os";
 import path from "node:path";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createSqliteCli, findSqliteCli } from "./lib/sqlite-cli.mjs";
-import { CampaignRunner } from "./campaign_core.mjs";
+import { CampaignRunner, getTestLeads } from "./campaign_core.mjs";
+
+assert.deepEqual(getTestLeads(""), [], "没有 TEST_LEADS 时必须 fail closed，不能内建真人号码");
+assert.deepEqual(
+  getTestLeads("Test User:60123456789:en").map(({ name, phone, language }) => ({ name, phone, language })),
+  [{ name: "Test User", phone: "60123456789", language: "en" }],
+  "TEST_LEADS 应从 env 格式正常载入",
+);
 
 const binary = await findSqliteCli();
 if (!binary) {

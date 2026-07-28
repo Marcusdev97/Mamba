@@ -242,10 +242,6 @@ function geminiKeyConfigured() {
   return Boolean(env.GEMINI_API_KEY || process.env.GEMINI_API_KEY);
 }
 
-function kimiKeyConfigured() {
-  return Boolean(env.KIMI_API_KEY || process.env.KIMI_API_KEY || env.MOONSHOT_API_KEY || process.env.MOONSHOT_API_KEY);
-}
-
 async function draftWithOpenAI({ system, user }, model) {
   const key = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY 不在 .env — OpenAI 无法起草。");
@@ -298,32 +294,6 @@ async function draftWithGemini({ system, user }, model) {
     .trim();
 }
 
-// Kimi (Moonshot)。API 跟 OpenAI 的 chat/completions 相容，所以请求体是标准那套。
-// 注意：这是**云端付费 API**（要 API key），不是本机跑的开源模型 —— K2 权重虽然开源，
-// 但那是 1T 参数 MoE，笔电跑不动。
-async function draftWithKimi({ system, user }, model) {
-  const key = env.KIMI_API_KEY || process.env.KIMI_API_KEY || env.MOONSHOT_API_KEY || process.env.MOONSHOT_API_KEY;
-  if (!key) throw new Error("KIMI_API_KEY 不在 .env — Kimi 无法起草。");
-  const base = String(env.KIMI_API_BASE || process.env.KIMI_API_BASE || "https://api.moonshot.ai/v1").replace(/\/+$/, "");
-  const r = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      max_completion_tokens: 600,
-      temperature: 0.6,
-    }),
-    signal: AbortSignal.timeout(60000),
-  });
-  const data = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(`Kimi ${r.status}: ${data?.error?.message ?? "unknown"}`);
-  return String(data?.choices?.[0]?.message?.content || "").trim();
-}
-
 function configuredAiProviders() {
   const mode = String(
     env.BRAIN_AI_PROVIDER || process.env.BRAIN_AI_PROVIDER || env.BRAIN_DRAFT_MODE || process.env.BRAIN_DRAFT_MODE || "auto",
@@ -332,11 +302,10 @@ function configuredAiProviders() {
   if (["anthropic", "claude"].includes(mode)) return anthropicKeyConfigured() ? ["anthropic"] : [];
   if (["openai", "gpt"].includes(mode)) return openaiKeyConfigured() ? ["openai"] : [];
   if (["gemini", "google"].includes(mode)) return geminiKeyConfigured() ? ["gemini"] : [];
-  if (["kimi", "moonshot"].includes(mode)) return kimiKeyConfigured() ? ["kimi"] : [];
+  if (mode !== "auto") return [];
   return [
     openaiKeyConfigured() ? "openai" : null,
     geminiKeyConfigured() ? "gemini" : null,
-    kimiKeyConfigured() ? "kimi" : null,
     anthropicKeyConfigured() ? "anthropic" : null,
   ].filter(Boolean);
 }
@@ -354,9 +323,7 @@ async function draftWithConfiguredAi(prompt, tier) {
         ? await draftWithOpenAI(prompt, model)
         : provider === "gemini"
           ? await draftWithGemini(prompt, model)
-          : provider === "kimi"
-            ? await draftWithKimi(prompt, model)
-            : await draftWithClaude(prompt, model);
+          : await draftWithClaude(prompt, model);
       if (!text) throw new Error("empty draft");
       return { text, provider, model };
     } catch (error) {

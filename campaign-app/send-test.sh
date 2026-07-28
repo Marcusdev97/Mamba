@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Quick blast trigger for the Mamba campaign console (port 8787).
 # Usage:
-#   ./send-test.sh test "Marcus, 60123456789, en"   # TEST run to one recipient
+#   ./send-test.sh test                             # TEST run using Settings / TEST_LEADS
 #   ./send-test.sh live YOUR_PROJECT 50             # LIVE run, cap 50 leads
 #   ./send-test.sh status                            # progress snapshot
 #   ./send-test.sh stop                              # halt current run
@@ -11,10 +11,9 @@ cmd="${1:-status}"
 
 case "$cmd" in
   test)
-    recipients="${2:-Marcus, 60123456789, en}"
-    echo "== prepare (TEST) =="
+    echo "== prepare (TEST_LEADS from Settings) =="
     curl -sS -X POST "$BASE/api/prepare" -H "Content-Type: application/json" \
-      -d "{\"mode\":\"TEST\",\"testRecipients\":\"$recipients\"}"; echo
+      -d '{"mode":"TEST"}'; echo
     echo "== start =="
     curl -sS -X POST "$BASE/api/start" -H "Content-Type: application/json" -d '{}'; echo
     ;;

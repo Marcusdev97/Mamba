@@ -71,9 +71,9 @@ function resolveSchedule(campaign, config, body, leadCount) {
 
 function selectLeads(campaign, project, mode, body) {
   if (mode === "TEST") {
-    const leads = campaign.getTestLeads(body.testRecipients || undefined);
+    const leads = campaign.getTestLeads();
     if (!leads.length) {
-      throw httpError(400, "TEST 模式请先填写至少一个测试收件人。格式: 名字, 电话, 语言。");
+      throw httpError(400, "TEST 模式请先到 Settings 填写并保存至少一个 TEST 收件人。");
     }
     return leads;
   }
@@ -714,8 +714,8 @@ export function registerCampaignRoutes(router) {
     let leadGroupId = "";
     let leadGroupName = "";
     if (sendMode === "TEST") {
-      leads = campaign.getTestLeads(body.testRecipients || undefined);
-      if (!leads.length) throw httpError(400, "TEST 模式请先填写测试收件人。", "TEST_RECIPIENTS_REQUIRED");
+      leads = campaign.getTestLeads();
+      if (!leads.length) throw httpError(400, "TEST 模式请先到 Settings 填写并保存测试收件人。", "TEST_RECIPIENTS_REQUIRED");
     } else {
       if (!body.optIn) throw httpError(400, "LIVE 发送前请先确认客户已 opt-in。", "LANE_OPT_IN_REQUIRED");
       leadGroupId = String(body.leadGroupId || "").trim();

@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { FileBlob, SpreadsheetFile } from "./xlsx_compat.mjs";
+import { getTestLeads } from "./campaign_core.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
 
@@ -369,10 +370,10 @@ if (automatedDryRun) {
   mode = modeAnswer === "LIVE" ? "LIVE" : "TEST";
 
   if (mode === "TEST") {
-    selectedLeads = [
-      { id: "test_mark", name: "Mark", phone: "60168568756", language: "en", templateId: "en_part1_quick_update" },
-      { id: "test_ccliu", name: "CC Liu", phone: "60179978682", language: "en", templateId: "en_part1_still_looking" }
-    ];
+    selectedLeads = getTestLeads(env.TEST_LEADS);
+    if (!selectedLeads.length) {
+      throw new Error("TEST_LEADS 没有设置。请先到 Mamba Settings 填写 TEST 号码并保存。");
+    }
   } else {
     const limitAnswer = (await rl.question(`Number of leads [${selectedLeads.length}]: `)).trim();
     if (limitAnswer) {
@@ -421,8 +422,8 @@ if (mode === "DRY_RUN") {
 
 let confirmed = false;
 if (mode === "TEST") {
-  console.log("\nTEST sends only to Mark (...8756) and CC Liu (...8682). Both receive Part 1 and Part 2.");
-  confirmed = (await rl.question("Type SEND to run this two-contact test: ")).trim() === "SEND";
+  console.log(`\nTEST sends only to the ${selectedLeads.length} recipient(s) saved in TEST_LEADS. Each receives Part 1 and Part 2.`);
+  confirmed = (await rl.question("Type SEND to run this TEST campaign: ")).trim() === "SEND";
 } else {
   const consent = (await rl.question("Confirm recipients opted in. Type YES: ")).trim();
   const confirmation = (await rl.question("Type SEND to start this campaign: ")).trim();

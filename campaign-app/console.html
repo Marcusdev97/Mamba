@@ -258,7 +258,7 @@
           <div id="pasteLeadPanel">
             <label class="fld">
               <span>客户名单（一行一个客户）</span>
-              <textarea id="pastedLeads" rows="7" placeholder="Marcus, 60123456789&#10;Chloe Choo&#9;01154515334&#10;陈小姐 012-345 6789" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:14px;line-height:1.6;resize:vertical"></textarea>
+              <textarea id="pastedLeads" rows="7" placeholder="测试客户 A, 60123456789&#10;测试客户 B&#9;0112345678&#10;测试客户 C 012-345 6789" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:14px;line-height:1.6;resize:vertical"></textarea>
             </label>
             <div class="muted" style="font-size:12px;margin:-4px 0 10px;line-height:1.55">可以直接从 WhatsApp、Notes 或 Excel 两列复制过来。支持逗号、Tab 或空格分隔；只有号码也可以，名字会先用 “there”。</div>
           </div>
@@ -346,10 +346,10 @@
               <button data-mode="LIVE">LIVE</button>
             </div>
           </div>
-          <label class="fld" id="testRecipientsFld" style="margin-top:12px">
-            <span>TEST 收件人（一行一个：名字, 电话, 语言）</span>
-            <textarea id="testRecipients" rows="4" placeholder="Marcus, 60123456789, EN" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px;resize:vertical"></textarea>
-          </label>
+          <div class="fld" id="testRecipientsFld" style="margin-top:12px">
+            <span>TEST 收件人</span>
+            <div class="muted">测试名单只从 Settings 保存到 <code>evolution-pilot/.env</code> 的 <code>TEST_LEADS</code> 读取。需要修改时请先到 Settings。</div>
+          </div>
           <label class="fld hidden" id="leadCountFld" style="margin-top:12px"><span>发送 leads 数量（留空=全部）</span><input type="number" id="leadCount" min="1" placeholder="全部" /></label>
         </section>
 
@@ -952,7 +952,6 @@ $("btnPrepare").addEventListener("click", async () => {
     endTime: $("endTime").value.trim(),
     instances: senders,
     leadCount: $("leadCount").value.trim() ? Number($("leadCount").value.trim()) : undefined,
-    testRecipients: $("testRecipients").value.trim() || undefined,
   });
   if (!r.ok) { $("prepErr").textContent = r.error; return; }
   renderPreview(r);

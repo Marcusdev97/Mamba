@@ -248,7 +248,7 @@
         <div class="provider-sub">这些号码的回复仍会进入 Tracker 和 Notion，只是不送去 Telegram。每行一个，可写「名字, 电话」。</div>
         <label class="fld">
           <span>不通知号码</span>
-          <textarea id="telegramFilterText" placeholder="Marcus, 01133698121&#10;Test Phone, 0172064505"></textarea>
+          <textarea id="telegramFilterText" placeholder="测试号码 A, 0123456789&#10;测试号码 B, 01123456789"></textarea>
         </label>
         <label class="check-row">
           <input id="autoFilterConnectedSenders" type="checkbox" checked />
@@ -278,8 +278,7 @@
             <option value="anthropic">Anthropic</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Google Gemini</option>
-            <option value="kimi">Kimi (Moonshot)</option>
-            <option value="auto">Auto（OpenAI → Gemini → Kimi → Anthropic → Rules）</option>
+            <option value="auto">Auto（OpenAI → Gemini → Anthropic → Rules）</option>
           </select>
         </label>
         <div class="mode-note" id="brainModeNote">选择 AI Provider。所有 AI 草稿仍需 Telegram 人工批准后才发送。</div>
@@ -368,30 +367,6 @@
           <div class="status-line" id="geminiStatus">读取中...</div>
         </section>
 
-        <section class="ai-provider">
-          <div class="provider-title">Kimi (Moonshot)</div>
-          <div class="provider-sub">K2.6 处理高频日常草稿，K3 旗舰处理复杂销售判断与异议。中文表现强，适合本地客户。</div>
-          <label class="fld">
-            <span>Kimi API Key</span>
-            <input id="kimiApiKey" type="password" autocomplete="off" placeholder="platform.moonshot.ai 的 API Key" />
-          </label>
-          <div class="model-grid">
-            <label class="fld"><span>Fast Model</span>
-              <select id="kimiSimpleModel">
-                <option value="kimi-k2.6">Kimi K2.6（通用 · 256K）</option>
-                <option value="kimi-k3">Kimi K3（旗舰 · 1M）</option>
-              </select>
-            </label>
-            <label class="fld"><span>Smart Model</span>
-              <select id="kimiComplexModel">
-                <option value="kimi-k3">Kimi K3（旗舰 · 1M）</option>
-                <option value="kimi-k2.6">Kimi K2.6（通用 · 256K）</option>
-              </select>
-            </label>
-          </div>
-          <div class="actions"><button class="btn" id="btnTestKimi">测试 Kimi</button></div>
-          <div class="status-line" id="kimiStatus">读取中...</div>
-        </section>
       </div>
     </div>
 
@@ -451,7 +426,7 @@
       <div class="card-head">
         <div>
           <h2 class="step-title"><span class="step-no">T</span> TEST 号码</h2>
-          <div class="card-kicker">Campaign Automations 的 TEST 模式只会发给这里的人。</div>
+          <div class="card-kicker">这里就是 <code>evolution-pilot/.env</code> 的 <code>TEST_LEADS</code> 编辑器。Campaign TEST 只会发给这里的人。</div>
         </div>
         <div class="actions" style="margin-top:0">
           <button class="btn" id="btnAddTestRecipient">+ 添加 TEST 号码</button>
@@ -461,7 +436,8 @@
         <thead><tr><th>名字</th><th>电话号码</th><th>语言</th><th></th></tr></thead>
         <tbody id="testRecipientBody"><tr><td colspan="4" class="muted">读取中...</td></tr></tbody>
       </table>
-      <div class="test-note">电话号码可以写 017 / 011 开头，保存时会自动转成 WhatsApp 可发送格式。这里不会影响真实发送号码，只是 TEST 收件人。</div>
+      <div class="status-line" id="testLeadsEnvStatus">读取 TEST_LEADS...</div>
+      <div class="test-note">填写后点最下方「保存 Settings」，系统会生成或更新 <code>TEST_LEADS</code>。电话号码可以写 017 / 011 开头，保存时会自动转换。没有配置时系统不会提供任何默认真人号码，TEST 会安全停止并要求先填写。</div>
     </div>
 
     <div class="card save-card">
@@ -484,13 +460,6 @@ const $ = (id) => document.getElementById(id);
 let qrName = null;
 let qrTimer = null;
 let qrTicks = 0;
-const DEFAULT_TEST_RECIPIENTS = [
-  { name: "Anson", phone: "017 206 4505", language: "en" },
-  { name: "Mark", phone: "011 3369 8121", language: "en" },
-  { name: "Chin", phone: "0168568756", language: "en" },
-  { name: "Cici Liu", phone: "017 997 8682", language: "en" },
-];
-
 async function api(url, body) {
   const res = await fetch(url, body === undefined ? undefined : {
     method: "POST",
@@ -510,7 +479,6 @@ function values() {
     anthropicApiKey: $("anthropicApiKey").value.trim(),
     openaiApiKey: $("openaiApiKey").value.trim(),
     geminiApiKey: $("geminiApiKey").value.trim(),
-    kimiApiKey: $("kimiApiKey").value.trim(),
     brainEnabled: $("brainEnabled").checked,
     brainProvider: $("brainProvider").value,
     anthropicSimpleModel: $("anthropicSimpleModel").value,
@@ -519,8 +487,6 @@ function values() {
     openaiComplexModel: $("openaiComplexModel").value,
     openaiReasoningEffort: $("openaiReasoningEffort").value,
     geminiSimpleModel: $("geminiSimpleModel").value,
-    kimiSimpleModel: $("kimiSimpleModel").value,
-    kimiComplexModel: $("kimiComplexModel").value,
     geminiComplexModel: $("geminiComplexModel").value,
     testRecipients: readTestRecipients(),
   };
@@ -544,8 +510,8 @@ function testRecipientRow(item = {}) {
   const language = item.language === "zh" ? "zh" : "en";
   return `
     <tr>
-      <td><input class="test-name" type="text" value="${escapeHtml(item.name || "")}" placeholder="Anson" /></td>
-      <td><input class="test-phone" type="tel" value="${escapeHtml(displayPhone(item.phone || ""))}" placeholder="017 206 4505" /></td>
+      <td><input class="test-name" type="text" value="${escapeHtml(item.name || "")}" placeholder="测试员" /></td>
+      <td><input class="test-phone" type="tel" value="${escapeHtml(displayPhone(item.phone || ""))}" placeholder="012 345 6789" /></td>
       <td><select class="test-language"><option value="en"${language === "en" ? " selected" : ""}>EN</option><option value="zh"${language === "zh" ? " selected" : ""}>中文</option></select></td>
       <td><button class="btn" type="button" data-remove-test>删除</button></td>
     </tr>`;
@@ -571,7 +537,6 @@ function renderBrainMode() {
     anthropic: "所有 AI 草稿使用 Anthropic；没有有效 Key 时自动回到 Rule Only。",
     openai: "所有 AI 草稿使用 OpenAI；Medium 是 reasoning effort，不是另一款 model。",
     gemini: "所有 AI 草稿使用 Google Gemini；没有有效 Key 时自动回到 Rule Only。",
-    kimi: "所有 AI 草稿使用 Kimi (Moonshot)；没有有效 Key 时自动回到 Rule Only。",
     auto: "依次尝试 OpenAI、Gemini、Anthropic，最后使用规则草稿；发送前仍需人工批准。",
   };
   $("brainModeNote").textContent = $("brainEnabled").checked
@@ -597,9 +562,6 @@ function render(settings) {
   $("geminiStatus").textContent = s.gemini?.configured
     ? "已设置: " + s.gemini.masked
     : "未设置 Gemini Key";
-  $("kimiStatus").textContent = s.kimi?.configured
-    ? "已设置: " + s.kimi.masked
-    : "未设置 Kimi Key";
   if (s.brain) {
     $("brainEnabled").checked = s.brain.enabled === true;
     $("brainProvider").value = s.brain.provider || "rules";
@@ -608,12 +570,14 @@ function render(settings) {
     $("openaiSimpleModel").value = s.brain.openaiSimpleModel || "gpt-5.4-nano";
     $("openaiComplexModel").value = s.brain.openaiComplexModel || "gpt-5.4";
     $("openaiReasoningEffort").value = s.brain.openaiReasoningEffort || "medium";
-    $("kimiSimpleModel").value = s.brain.kimiSimpleModel || "kimi-k2.6";
-    $("kimiComplexModel").value = s.brain.kimiComplexModel || "kimi-k3";
     $("geminiSimpleModel").value = s.brain.geminiSimpleModel || "gemini-3.5-flash";
     $("geminiComplexModel").value = s.brain.geminiComplexModel || "gemini-3.1-pro-preview";
   }
-  renderTestRecipients(Array.isArray(s.testRecipients) ? s.testRecipients : DEFAULT_TEST_RECIPIENTS);
+  renderTestRecipients(Array.isArray(s.testRecipients) ? s.testRecipients : []);
+  const testEnv = s.testLeadsEnv || {};
+  $("testLeadsEnvStatus").textContent = testEnv.configured
+    ? `已写入 ${testEnv.path || "evolution-pilot/.env"} · ${testEnv.key || "TEST_LEADS"} · ${testEnv.count || 0} 个收件人`
+    : "尚未设置 TEST_LEADS · TEST Campaign 会安全停止，直到你在这里填写并保存";
   renderBrainMode();
 }
 
@@ -822,7 +786,6 @@ $("btnSave").addEventListener("click", async () => {
     $("anthropicApiKey").value = "";
     $("openaiApiKey").value = "";
     $("geminiApiKey").value = "";
-    $("kimiApiKey").value = "";
     refreshIdentity();
     message("已保存。TEST 号码会马上用于 Campaign Automations；自动回复开关需要重新启动 Mamba 才会完全生效。", "");
   } catch (e) {
@@ -877,23 +840,6 @@ $("btnTestOpenAI").addEventListener("click", async () => {
   }
 });
 
-$("btnTestKimi").addEventListener("click", async () => {
-  message("", "");
-  $("btnTestKimi").disabled = true;
-  $("btnTestKimi").textContent = "测试中...";
-  try {
-    const data = await api("/api/settings/test-kimi", values());
-    render(data.settings);
-    $("kimiApiKey").value = "";
-    message(data.warning ? data.warning : ("Kimi 已连接并保存 (" + (data.model || "Kimi") + ")。"), "");
-  } catch (e) {
-    message("", e.message);
-  } finally {
-    $("btnTestKimi").disabled = false;
-    $("btnTestKimi").textContent = "测试 Kimi";
-  }
-});
-
 $("btnTestGemini").addEventListener("click", async () => {
   message("", "");
   $("btnTestGemini").disabled = true;
@@ -902,7 +848,6 @@ $("btnTestGemini").addEventListener("click", async () => {
     const data = await api("/api/settings/test-gemini", values());
     render(data.settings);
     $("geminiApiKey").value = "";
-    $("kimiApiKey").value = "";
     message(data.warning ? data.warning : ("Gemini 已连接并保存 (" + (data.model || "Gemini") + ")。"), "");
   } catch (e) {
     message("", e.message);

@@ -369,30 +369,6 @@
       ]
     },
     {
-      "id": "kimi-provider",
-      "date": "2026-07-23",
-      "title": "Sales Brain 支援 Kimi (Moonshot)",
-      "summary": "Sales Brain 起草多一个选择：Kimi (Moonshot)，跟 Anthropic / OpenAI / Gemini 并列。",
-      "types": [
-        "Logic"
-      ],
-      "commit": "ca58725",
-      "before": {
-        "label": "以前",
-        "text": "AI 起草只能选 Anthropic、OpenAI、Gemini 三家。"
-      },
-      "after": {
-        "label": "现在",
-        "text": "Settings 多一张 Kimi 卡片，可以填 Key、选型号（K2.6 日常 / K3 复杂）、测试。Auto 模式的备援链也加了 Kimi。这是付费云端 API，不是本机跑的模型，也不会自动开启自动回复。"
-      },
-      "files": [
-        "campaign-app/brain_service.mjs",
-        "campaign-app/brain_core.mjs",
-        "campaign-app/routes/settings.routes.mjs",
-        "campaign-app/settings.html"
-      ]
-    },
-    {
       "id": "parallel-lanes-launch",
       "date": "2026-07-24",
       "title": "多号码并行：真的能开跑了",

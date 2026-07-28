@@ -64,7 +64,7 @@ TEST 和 LIVE **不是两套逻辑**,是同一个引擎:
 
 每天上班那一下就一句话:**"今天谁到期了 → 发下一个 Flow;除非他回复过,那就交给人。"**
 
-真实客户已经在用这套(状态存在 Notion)。TEST cohort 是同一个状态机的迷你版:4 个号码,存在一个小 JSON 里,自己往前推。所以"跟着 Flow 链、多久跑多久"是天然的 —— 天数从链算出来,不写死。
+真实客户已经在用这套(状态存在 Notion)。TEST cohort 是同一个状态机的迷你版；号码只从 Settings 写入 `evolution-pilot/.env` 的 `TEST_LEADS` 读取，状态由系统自己往前推。所以"跟着 Flow 链、多久跑多久"是天然的 —— 天数从链算出来,不写死。
 
 ### Flow 链 (当前)
 自动主链是 `Flow 1 → 2 → 3 → 4 → 6 → 7 → 8 → 10`,即 `Day 0 / 2 / 4 / 6 / 9 / 12 / 15 / 18`。
@@ -79,7 +79,7 @@ Flow 5(Furnished)、Flow 9(Rental)保留为条件式模板,不进入每天自动
 | 写死的常量 | 值 |
 |---|---|
 | `WORK_START` / `WORK_END` | `10:00` / `21:00` |
-| `TEST_RECIPIENTS` | CCLIU / Mark / Chin / Anson(`TEST_LEADS`) |
+| `TEST_RECIPIENTS` | Settings → `evolution-pilot/.env` → `TEST_LEADS`；源码无默认号码 |
 | `PROJECTS` | `Binastra`, `Enlace` |
 | `FLOW_CHAIN` | 自动主链 Flow 1/2/3/4/6/7/8/10；Flow 5/9 条件式 |
 | `SEND_FLOOR` | 两发之间最小间隔(防封号),默认 ~60 秒(可调 TBD) |
@@ -214,7 +214,7 @@ Flow 5(Furnished)、Flow 9(Rental)保留为条件式模板,不进入每天自动
 ## 11. 落地顺序 (Build order)
 
 1. **只读控制塔** —— 先接真实数据、只显示不发送,把界面看懂。
-2. **TEST cohort 引擎** —— 状态机 + 4 个测试号码走完整条链(真实 24 天时序)+ 回复即停。
+2. **TEST cohort 引擎** —— 状态机 + Settings / `TEST_LEADS` 测试名单走完整条链(真实 24 天时序)+ 回复即停。
 3. **接真实客户 = LIVE** —— 同一个引擎打开阀门,补上每日通知 + 总开关。
 4. **值班循环** —— 把"10–21 铺发 + 边发边盯回复"接上。
 
