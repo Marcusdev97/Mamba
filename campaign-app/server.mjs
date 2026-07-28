@@ -16,11 +16,13 @@ import { createConversationLogService } from "./lib/conversation-log-service.mjs
 import { createLidMapService } from "./lib/lid-map-service.mjs";
 import { createInstanceIdentityService } from "./lib/instance-identity-service.mjs";
 import { createInboxSendService } from "./lib/inbox-send-service.mjs";
+import { createManualLeadSetupService } from "./lib/manual-lead-setup-service.mjs";
 import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
+import { createConversationDispositionService } from "./lib/conversation-disposition-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
 import { createLocalDatabaseService } from "./lib/local-database-service.mjs";
 import { createGoldenConversationLedgerService } from "./lib/golden-conversation-ledger-service.mjs";
@@ -64,6 +66,8 @@ import { runCampaignInBackground, startNextQueued } from "./routes/campaign.rout
 import { FLOW_SEQUENCE, flowByLabel, flowStateAfter, classifyReplyText } from "./flow_sequence.mjs";
 import { collectMessageObjects, extractText, phoneFromJid, messageTime } from "./morning_followup.mjs";
 import { describeMessage, resolvePhone } from "./reply_intake.mjs";
+import { addLocalStop } from "./suppression.mjs";
+import { createNotionSync } from "./notion_sync.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const HOST = "127.0.0.1";
@@ -254,6 +258,20 @@ async function writeLeadStore(records) {
   await localDatabaseService.syncNotionRecords(payload.records, { reason: "notion_write_through" });
   return localDatabaseService.readLeadCache();
 }
+const conversationDispositionService = createConversationDispositionService({
+  hasBlastDatabase: Boolean(blastDsId),
+  blastDatabaseId: blastDsId,
+  notion,
+  queryNotionRows: blastCacheService.queryRows,
+  readCache: readLeadStore,
+  writeCache: writeLeadStore,
+  normalizePhone: nfNormalizePhone,
+  device: deviceIdentity,
+  history: conversationHistoryService,
+  systemLogs: systemLogService,
+  addLocalStop,
+  updateLocalDisposition: (options) => localDatabaseService.recordConversationDisposition(options),
+});
 const templateService = await createTemplateService({
   rootDir: paths.rootDir,
   notionConfig,
@@ -469,6 +487,7 @@ const runtime = await loadRuntime({
     classifyReplyText,
     systemLogs: systemLogService,
     history: conversationHistoryService,
+    dispositions: conversationDispositionService,
     readCache: readLeadStore,
     syncCache: syncLeadStore,
     writeCache: writeLeadStore,
@@ -647,6 +666,16 @@ deviceListInstances()
   })
   .catch((error) => console.log(`[instance-identity] 号码对照建立失败：${error.message}`));
 runtime.inboxSend = createInboxSendService({ api, dataDir: paths.dataDir, conversationLog });
+const manualLeadNotionSync = await createNotionSync({
+  env,
+  onLog: (message) => console.log(`[manual-lead] ${message}`),
+});
+runtime.inboxLeadSetup = createManualLeadSetupService({
+  localDatabase: localDatabaseService,
+  conversationLog,
+  notionSync: manualLeadNotionSync,
+  loadProjects,
+});
 
 // 「一键同步 Evolution 历史」的背景任务。要几分钟，所以记状态让前端轮询进度。
 {

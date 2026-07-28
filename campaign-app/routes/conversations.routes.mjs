@@ -390,6 +390,30 @@ function manualCorrectionProperties(schema, correction) {
 }
 
 export function registerConversationsRoutes(router) {
+  router.get("/api/conversations/dispositions", async (_req, res, runtime) => {
+    const conversations = requireConversations(runtime);
+    if (!conversations.dispositions) {
+      throw httpError(500, "Conversation Quick Remark service 没有载入。请重启 Mamba server。");
+    }
+    json(res, 200, { ok: true, dispositions: conversations.dispositions.list() });
+  });
+
+  router.post("/api/conversations/disposition", async (req, res, runtime) => {
+    const conversations = requireConversations(runtime);
+    if (!conversations.dispositions) {
+      throw httpError(500, "Conversation Quick Remark service 没有载入。请重启 Mamba server。");
+    }
+    const body = await readJson(req);
+    const result = await conversations.dispositions.apply({
+      id: body.id,
+      dispositionKey: body.disposition,
+      phone: body.phone,
+      name: body.name,
+      project: body.project,
+    });
+    json(res, 200, { ok: true, disposition: result });
+  });
+
   router.get("/api/conversations/history", async (req, res, runtime) => {
     const conversations = requireConversations(runtime);
     if (!conversations.history) {

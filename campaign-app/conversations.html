@@ -60,6 +60,14 @@
   .manual-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .manual-form textarea { min-height:92px; resize:vertical; }
   .manual-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .quick-remark { margin-top:14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:12px; }
+  .quick-remark-copy { color:var(--muted); font-size:12px; margin-top:4px; }
+  .quick-remark-actions { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
+  .quick-remark-btn { min-height:50px; text-align:left; display:flex; flex-direction:column; justify-content:center; align-items:flex-start; gap:2px; }
+  .quick-remark-btn small { color:var(--muted); font-weight:500; }
+  .quick-remark-btn.positive { border-color:rgba(37,211,102,.45); }
+  .quick-remark-btn.warning { border-color:rgba(245,179,66,.55); }
+  .quick-remark-btn.danger { border-color:rgba(255,93,93,.55); color:var(--red); }
   @media (max-width: 980px) {
     .filters { grid-template-columns:1fr 1fr; }
     .layout { grid-template-columns:1fr; }
@@ -165,6 +173,17 @@
         </div>
         <div class="replybox" id="dReply"></div>
         <div class="replybox" id="dSummary" style="min-height:80px"></div>
+        <div class="quick-remark" id="quickRemarkPanel" style="display:none">
+          <div class="history-head" style="margin-top:0">
+            <h3>Quick Remark</h3>
+          </div>
+          <div class="quick-remark-copy">一次更新 Status、Sequence、Next Action、本机资料和 Notion；不会发送 WhatsApp。</div>
+          <div id="quickRemarkActions" class="quick-remark-actions">
+            <span class="mutedline">Loading actions...</span>
+          </div>
+          <div id="quickRemarkMsg" class="mutedline"></div>
+          <div id="quickRemarkErr" class="err"></div>
+        </div>
         <div class="manual-form">
           <div class="history-head" style="margin-top:0">
             <h3>Classification Review</h3>
@@ -202,6 +221,7 @@ const $ = (id) => document.getElementById(id);
 let records = [];
 let selectedId = "";
 let selectedPhone = "";
+let dispositions = [];
 
 const MANUAL_OPTIONS = {
   status: ["Blasted", "Warm", "Replied", "Appointment", "Follow Up", "Not Interested", "Stop", "Cold", "Invalid", "Needs Review"],
@@ -333,7 +353,81 @@ function selectRecord(id, silent = false) {
   $("editStopReason").value = record.stopReason || "";
   $("manualMsg").textContent = "";
   $("manualErr").textContent = "";
+  $("quickRemarkMsg").textContent = "";
+  $("quickRemarkErr").textContent = "";
   loadHistory(record.phone);
+}
+
+function renderDispositionActions() {
+  const container = $("quickRemarkActions");
+  if (!dispositions.length) {
+    container.innerHTML = '<span class="mutedline">Quick Remark 暂时不可用。</span>';
+    return;
+  }
+  container.innerHTML = dispositions.map((item) => `
+    <button class="btn quick-remark-btn ${esc(item.tone || "")}" type="button" data-disposition="${esc(item.key)}">
+      <span>${esc(item.label)}</span>
+      <small>${esc(item.description || "")}</small>
+    </button>
+  `).join("");
+  container.querySelectorAll("button[data-disposition]").forEach((button) => {
+    button.addEventListener("click", () => applyDisposition(button.dataset.disposition));
+  });
+}
+
+async function loadDispositions() {
+  try {
+    const res = await fetch("/api/conversations/dispositions");
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Quick Remark load failed");
+    dispositions = data.dispositions || [];
+    $("quickRemarkPanel").style.display = "";
+    renderDispositionActions();
+  } catch (error) {
+    $("quickRemarkPanel").style.display = "none";
+  }
+}
+
+async function applyDisposition(key) {
+  const record = records.find((item) => item.id === selectedId);
+  const disposition = dispositions.find((item) => item.key === key);
+  if (!record || !disposition) return;
+  if (disposition.requiresConfirmation) {
+    const warning = key === "DO_NOT_CONTACT"
+      ? "确认把这个号码设为 Do Not Contact？这会加入全局 STOP，之后所有 Project 都不会再联系。"
+      : "确认标记为 Not Interested？自动 Flow 会停止，但不会加入全局 STOP。";
+    if (!window.confirm(warning)) return;
+  }
+
+  $("quickRemarkErr").textContent = "";
+  $("quickRemarkMsg").textContent = "更新中...";
+  document.querySelectorAll("#quickRemarkActions button").forEach((button) => { button.disabled = true; });
+  try {
+    const res = await fetch("/api/conversations/disposition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: record.id,
+        phone: record.phone,
+        name: record.name,
+        project: record.project,
+        disposition: key,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (data.details?.localApplied) await load();
+      throw new Error(data.details?.impact ? `${data.error} ${data.details.impact}` : (data.error || "Quick Remark failed"));
+    }
+    $("quickRemarkMsg").textContent = `已更新：${data.disposition?.label || disposition.label}`;
+    await load();
+    await loadHistory(record.phone);
+  } catch (error) {
+    $("quickRemarkMsg").textContent = "";
+    $("quickRemarkErr").textContent = error.message;
+  } finally {
+    document.querySelectorAll("#quickRemarkActions button").forEach((button) => { button.disabled = false; });
+  }
 }
 
 function historyTone(entry) {
@@ -592,6 +686,7 @@ $("refresh").addEventListener("click", load);
 ["project", "status", "sequenceStatus", "onlyReplied"].forEach((id) => $(id).addEventListener("change", load));
 $("q").addEventListener("keydown", (event) => { if (event.key === "Enter") load(); });
 load();
+loadDispositions();
 </script>
 </body>
 </html>

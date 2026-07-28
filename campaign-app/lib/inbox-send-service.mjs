@@ -17,6 +17,15 @@ function digits(value) {
   return String(value ?? "").replace(/\D/g, "");
 }
 
+export function normalizeManualRecipientPhone(value) {
+  const raw = clean(value);
+  let number = digits(raw);
+  if (raw.startsWith("00")) number = number.slice(2);
+  else if (number.startsWith("0")) number = `60${number.slice(1)}`;
+  if (!/^[1-9]\d{7,14}$/.test(number)) return "";
+  return number;
+}
+
 // data URL 或纯 base64 都接受，回 { base64, mime, ext }。
 function parseImageInput(dataUrl) {
   const raw = clean(dataUrl);
@@ -30,10 +39,27 @@ function parseImageInput(dataUrl) {
 export function createInboxSendService({ api, dataDir, conversationLog, simulate = false } = {}) {
   const mediaDir = path.join(dataDir, "inbox-media");
 
+  async function prepareContact({ instance, phone, name = "" }) {
+    const instanceName = clean(instance);
+    const number = normalizeManualRecipientPhone(phone);
+    if (!instanceName) throw badRequest("缺少发送号码(instance)。");
+    if (!number) throw badRequest("电话号码格式不正确。请填写 012…、60… 或 +60… 的完整号码。");
+    if (!conversationLog?.prepareManualContact) {
+      const error = new Error("聊天室新增号码功能尚未载入。请重启 Mamba。");
+      error.statusCode = 503;
+      throw error;
+    }
+    return conversationLog.prepareManualContact({
+      phone: number,
+      name: clean(name),
+      instanceName,
+    });
+  }
+
   // 手动回复文字。发出去之后记进对话纪录(outbound, source=manual)，聊天室立刻看到。
   async function sendText({ instance, phone, text }) {
     const instanceName = clean(instance);
-    const number = digits(phone);
+    const number = normalizeManualRecipientPhone(phone);
     const body = clean(text);
     if (!instanceName) throw badRequest("缺少号码(instance)。");
     if (!number) throw badRequest("缺少客户电话。");
@@ -52,14 +78,14 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     await conversationLog?.recordOutbound({
       phone: number, text: body, instanceName, messageId,
       source: "manual", flowTopic: "manual_reply",
-    }).catch((error) => console.log(`[inbox] 对话纪录写入失败(讯息已发出) ${number}: ${error.message}`));
+    }, { requireExisting: true }).catch((error) => console.log(`[inbox] 对话纪录写入失败(讯息已发出) ${number}: ${error.message}`));
     return { sent: true, messageId };
   }
 
   // 手动发照片给客户（可带 caption）。图存本机一份，讯息记 outbound。
   async function sendImage({ instance, phone, imageDataUrl, caption = "" }) {
     const instanceName = clean(instance);
-    const number = digits(phone);
+    const number = normalizeManualRecipientPhone(phone);
     if (!instanceName) throw badRequest("缺少号码(instance)。");
     if (!number) throw badRequest("缺少客户电话。");
     const { base64, mime, ext } = parseImageInput(imageDataUrl);
@@ -87,7 +113,7 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     await conversationLog?.recordOutbound({
       phone: number, text: clean(caption) || "[已发送图片]", instanceName, messageId,
       source: "manual", flowTopic: "manual_image",
-    }).catch((error) => console.log(`[inbox] 图片纪录写入失败(已发出) ${number}: ${error.message}`));
+    }, { requireExisting: true }).catch((error) => console.log(`[inbox] 图片纪录写入失败(已发出) ${number}: ${error.message}`));
     return { sent: true, messageId, fileName };
   }
 
@@ -133,7 +159,13 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     };
   }
 
-  return { sendText, sendImage, fetchInboundMedia };
+  return {
+    normalizePhone: normalizeManualRecipientPhone,
+    prepareContact,
+    sendText,
+    sendImage,
+    fetchInboundMedia,
+  };
 }
 
 function badRequest(message) {

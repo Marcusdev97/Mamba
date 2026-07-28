@@ -108,6 +108,20 @@ function choice(schema, propertyName, optionName) {
   return type === "status" ? { status: { name: optionName } } : { select: { name: optionName } };
 }
 
+function typedTextOrChoice(schema, propertyName, value) {
+  const type = schema?.[propertyName]?.type;
+  if (type === "status" || type === "select") return choice(schema, propertyName, value);
+  if (type === "phone_number") return phoneNumber(value);
+  if (type === "title") return title(value);
+  return richTextOrEmpty(value);
+}
+
+function optionalTypedProperty(schema, propertyName, value) {
+  const type = schema?.[propertyName]?.type;
+  if (!type || ["formula", "rollup", "created_time", "last_edited_time"].includes(type)) return {};
+  return { [propertyName]: typedTextOrChoice(schema, propertyName, value) };
+}
+
 function phoneNumber(value) {
   return { phone_number: String(value ?? "") };
 }
@@ -397,6 +411,59 @@ export class NotionSync {
     return result?.results?.[0] ?? null;
   }
 
+  async findBlastLeadByPhoneAndProject(phone, project) {
+    const result = await this.queryDataSource(blastLeadsDatabase(this.config), {
+      property: "Phone",
+      phone_number: { equals: phone },
+    }, 20);
+    const wanted = String(project || "").trim().toLowerCase();
+    return (result?.results || []).find((page) => (
+      pageText(page, "Project").trim().toLowerCase() === wanted
+    )) || null;
+  }
+
+  async upsertManualBlastLead(record) {
+    if (!this.enabled || !record?.phone || !record?.projectName) return { action: "skipped" };
+    const schema = await this.getBlastSchema();
+    const existing = await this.findBlastLeadByPhoneAndProject(record.phone, record.projectName);
+    if (existing?.properties?.["Stop Flag"]?.checkbox === true) {
+      return { action: "already_stopped", pageId: cleanId(existing.id) };
+    }
+    const properties = {
+      Name: title(record.name || record.phone),
+      Phone: phoneNumber(record.phone),
+      Project: choice(schema, "Project", record.projectName),
+      Status: choice(schema, "Status", "Warm"),
+      "Sequence Status": choice(schema, "Sequence Status", "Human Takeover"),
+      "Next Action": choice(schema, "Next Action", "Human Takeover"),
+      "AI Category": choice(schema, "AI Category", "Warm"),
+      ...(schema?.["Follow Up At"] ? { "Follow Up At": dateValue(record.createdAt || new Date().toISOString()) } : {}),
+      ...(schema?.Priority ? { Priority: choice(schema, "Priority", "MED") } : {}),
+      ...(schema?.["Sender Instance"] ? { "Sender Instance": choice(schema, "Sender Instance", record.instanceName) } : {}),
+      ...optionalTypedProperty(schema, "Assigned Sender Key", record.assignedSenderKey),
+      ...optionalTypedProperty(schema, "Contact Key", record.phone),
+      ...optionalTypedProperty(schema, "Project Lead Key", `${record.projectCode}:${record.phone}`),
+      ...optionalTypedProperty(schema, "Sales Notes", record.note || "Manual Chat Room setup"),
+    };
+    let page;
+    if (existing) {
+      // Never clear Stop Flag or campaign evidence when an operator re-opens setup.
+      page = await this.updatePage(existing.id, properties);
+    } else {
+      page = await this.request("POST", "/pages", {
+        parent: { type: "database_id", database_id: cleanId(blastLeadsDatabase(this.config)) },
+        properties: {
+          ...properties,
+          "Stop Flag": checkbox(false),
+        },
+      });
+    }
+    return {
+      action: existing ? "updated" : "created",
+      pageId: cleanId(page?.id || existing?.id),
+    };
+  }
+
   async findLeadForReply(phone) {
     if (!this.enabled || !phone) return null;
     return this.findLeadByPhone(phone);
@@ -478,24 +545,25 @@ export class NotionSync {
       Name: title(event.name || event.phone),
       Phone: phoneNumber(event.phone),
       "Lead Status": select("Warm"),
-      "Last Touch Type": select("Customer Replied"),
+      "Last Touch Type": select(event.touchType || "Customer Replied"),
       "Last Message Text": richTextOrEmpty(event.text || ""),
       "Last Touch At": dateValue(now),
-      "Next Action": select("Send Details"),
+      "Next Action": select(event.nextAction || "Send Details"),
     };
     // Only stamp "received" the first time we see them, so it stays the ad date.
     if (!existing) properties["Lead Received At"] = dateValue(now);
 
+    let page;
     if (existing) {
-      await this.updatePage(existing.id, properties);
+      page = await this.updatePage(existing.id, properties);
     } else {
-      await this.request("POST", "/pages", {
+      page = await this.request("POST", "/pages", {
         parent: { type: "database_id", database_id: cleanId(database) },
         properties,
       });
     }
     console.log(`[notion-sync] ads lead ${existing ? "updated" : "created"} phone=${event.phone}`);
-    return { action: existing ? "updated" : "created" };
+    return { action: existing ? "updated" : "created", pageId: cleanId(page?.id || existing?.id) };
   }
 
   async upsertRecycleLead(record) {
@@ -545,7 +613,11 @@ export class NotionSync {
     this.state.recycleLeadPages[record.phone] = cleanId(page.id);
     await this.saveState();
     console.log(`[notion-sync] recycle lead ${existing ? "updated" : "created"} phone=${record.phone}`);
-    return { action: existing ? "updated" : "created", protectedDoNotCall };
+    return {
+      action: existing ? "updated" : "created",
+      protectedDoNotCall,
+      pageId: cleanId(page?.id || existing?.id),
+    };
   }
 
   async upsertLeadBlast({ job, part, sentAt }) {

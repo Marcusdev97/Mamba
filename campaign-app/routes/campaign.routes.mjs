@@ -199,12 +199,18 @@ function campaignRunners(campaign) {
 export function conflictingRunner(campaign, instanceNames, excludeRunId = null, {
   force = false,
   ignoreReadyPreviews = false,
+  ignorePausedRuns = false,
 } = {}) {
   return campaignRunners(campaign).find((candidate) => {
     if (!candidate?.state || candidate.state.runId === excludeRunId) return false;
     if (!instanceSetsOverlap(instanceNames, runnerInstanceNames(candidate))) return false;
     if (candidate.running) return true;
     if (ignoreReadyPreviews && ["READY", "READY_TEST"].includes(candidate.state.status)) return false;
+    // Resume/retry already names the exact run the user wants to recover. An
+    // older paused run is not using the sender lane, so it must not masquerade
+    // as a concurrent send. It remains in the registry and can be handled
+    // separately; a genuinely running runner above still blocks the action.
+    if (ignorePausedRuns && ["STOPPED", "INTERRUPTED"].includes(candidate.state.status)) return false;
     return !force && Boolean(campaignQueueBlockReason(candidate));
   }) || null;
 }
@@ -533,8 +539,11 @@ export function registerCampaignRoutes(router) {
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
       // An unsent preview owns no sender lane. Resume is an explicit action;
-      // once it starts, that preview will in turn be blocked by this RUNNING run.
+      // once it starts, other recovery actions will be blocked by this RUNNING
+      // run. Older paused runs remain recoverable but are not concurrently
+      // using the sender.
       ignoreReadyPreviews: true,
+      ignorePausedRuns: true,
     });
     if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 
@@ -566,8 +575,10 @@ export function registerCampaignRoutes(router) {
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
       // An old preview has never used the sender. Explicit recovery of an
-      // interrupted LIVE batch takes priority over that unsent preview.
+      // interrupted LIVE batch takes priority over that unsent preview and
+      // other paused history; only a genuinely running batch owns the lane.
       ignoreReadyPreviews: true,
+      ignorePausedRuns: true,
     });
     if (conflict) throw httpError(409, `这个号码正在跑另一批 Campaign: ${conflict.state?.runId}`);
 

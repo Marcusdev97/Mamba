@@ -186,6 +186,34 @@
     outline:none;
   }
   .list-search input:focus { border-color:var(--amber); }
+  .list-search-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; }
+  .new-contact-button {
+    min-width:38px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:var(--amber-soft);
+    color:var(--amber);
+    cursor:pointer;
+    font-weight:800;
+  }
+  .new-contact-form { display:grid; gap:7px; margin-top:8px; padding:9px; border:1px solid var(--line); border-radius:6px; background:var(--panel-2); }
+  .new-contact-form.hidden { display:none; }
+  .new-contact-form input, .new-contact-form select, .new-contact-form textarea {
+    height:34px;
+    padding:7px 9px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:var(--bg);
+    color:var(--text);
+  }
+  .new-contact-form textarea { height:54px; resize:vertical; }
+  .new-contact-project.hidden { display:none; }
+  .new-contact-actions { display:grid; grid-template-columns:1fr auto; gap:6px; }
+  .new-contact-actions button { min-height:32px; border:1px solid var(--line); border-radius:6px; cursor:pointer; font-weight:750; }
+  .new-contact-start { background:var(--green-soft); color:var(--green); }
+  .new-contact-cancel { background:transparent; color:var(--muted); }
+  .new-contact-note { color:var(--dim); font-size:9px; line-height:1.4; }
+  .new-contact-error { color:var(--red); font-size:9.5px; }
   .list-filters { display:flex; gap:5px; margin-top:7px; }
   .list-filters button {
     flex:1;
@@ -494,6 +522,11 @@ let listFilter = "all";
 let threadsSig = "";
 let currentThreadSig = "";
 let pendingImage = null;
+let newContactEnabled = false;
+let newContactOpen = false;
+let newContactAwaitingFirstSend = null;
+let newContactLeadTypes = [];
+let newContactProjects = [];
 
 async function jget(url) {
   const response = await fetch(url, { cache:"no-store" });
@@ -565,6 +598,13 @@ async function loadNumbers() {
   await loadThreads();
 }
 
+async function loadInboxCapabilities() {
+  const data = await jget("/api/inbox/capabilities").catch(() => null);
+  newContactEnabled = data?.capabilities?.newContact === true;
+  newContactLeadTypes = data?.leadTypes || [];
+  newContactProjects = data?.projects || [];
+}
+
 function renderTabs() {
   $("tabs").innerHTML = numbers.map((number) => `
     <button class="tab ${number.instance === currentInstance ? "active" : ""}" type="button" data-inst="${esc(number.instance)}">
@@ -577,6 +617,8 @@ function renderTabs() {
       currentPhone = "";
       currentThreadSig = "";
       pendingImage = null;
+      newContactOpen = false;
+      newContactAwaitingFirstSend = null;
       renderTabs();
       renderThreadEmpty();
       await loadThreads();
@@ -608,7 +650,30 @@ function renderList() {
     : threads;
   const search = `
     <div class="list-search">
-      <input id="listSearch" type="search" placeholder="搜索名字或号码" value="${esc(searchText)}" aria-label="搜索客户">
+      <div class="list-search-row">
+        <input id="listSearch" type="search" placeholder="搜索名字或号码" value="${esc(searchText)}" aria-label="搜索客户">
+        ${newContactEnabled ? '<button class="new-contact-button" id="newContactButton" type="button" title="新增号码" aria-label="新增号码">＋</button>' : ""}
+      </div>
+      ${newContactEnabled ? `
+        <form class="new-contact-form ${newContactOpen ? "" : "hidden"}" id="newContactForm">
+          <input id="newContactPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="电话号码，例如 0123456789" aria-label="新客户电话号码">
+          <input id="newContactName" type="text" autocomplete="off" placeholder="名字（可不填）" aria-label="新客户名字">
+          <select id="newContactLeadType" required aria-label="客户类型">
+            <option value="">选择客户类型</option>
+            ${newContactLeadTypes.map((type) => `<option value="${esc(type.key)}">${esc(type.label)}</option>`).join("")}
+          </select>
+          <select class="new-contact-project hidden" id="newContactProject" aria-label="Project">
+            <option value="">选择 Project</option>
+            ${newContactProjects.map((project) => `<option value="${esc(project.id)}">${esc(project.name)}</option>`).join("")}
+          </select>
+          <textarea id="newContactNote" placeholder="通话备注（可不填）" aria-label="客户备注"></textarea>
+          <div class="new-contact-note" id="newContactTypeNote">将使用 ${esc(currentInstance)}；请选择客户类型。</div>
+          <div class="new-contact-error" id="newContactError"></div>
+          <div class="new-contact-actions">
+            <button class="new-contact-start" type="submit">开始聊天</button>
+            <button class="new-contact-cancel" id="newContactCancel" type="button">取消</button>
+          </div>
+        </form>` : ""}
       <div class="list-filters">
         <button type="button" class="${listFilter === "all" ? "on" : ""}" data-filter="all">全部回复</button>
         <button type="button" class="${listFilter === "pending" ? "on" : ""}" data-filter="pending">待跟进</button>
@@ -646,6 +711,17 @@ function renderList() {
       }
     });
   }
+  $("newContactButton")?.addEventListener("click", () => {
+    newContactOpen = !newContactOpen;
+    renderList();
+    if (newContactOpen) $("newContactPhone")?.focus();
+  });
+  $("newContactCancel")?.addEventListener("click", () => {
+    newContactOpen = false;
+    renderList();
+  });
+  $("newContactForm")?.addEventListener("submit", startNewContact);
+  $("newContactLeadType")?.addEventListener("change", updateNewContactType);
   document.querySelectorAll(".list-filters button").forEach((button) => {
     button.addEventListener("click", () => {
       if (listFilter === button.dataset.filter) return;
@@ -657,6 +733,64 @@ function renderList() {
   document.querySelectorAll(".customer-row").forEach((row) => {
     row.addEventListener("click", () => openThread(row.dataset.phone));
   });
+}
+
+function updateNewContactType() {
+  const type = newContactLeadTypes.find((item) => item.key === $("newContactLeadType")?.value);
+  const project = $("newContactProject");
+  if (project) {
+    project.classList.toggle("hidden", !type?.requiresProject);
+    project.required = type?.requiresProject === true;
+    if (!type?.requiresProject) project.value = "";
+  }
+  if ($("newContactTypeNote")) {
+    $("newContactTypeNote").textContent = type
+      ? `${type.description} · 将使用 ${currentInstance}`
+      : `将使用 ${currentInstance}；请选择客户类型。`;
+  }
+}
+
+async function startNewContact(event) {
+  event.preventDefault();
+  const phoneInput = $("newContactPhone");
+  const nameInput = $("newContactName");
+  const typeInput = $("newContactLeadType");
+  const projectInput = $("newContactProject");
+  const noteInput = $("newContactNote");
+  const errorBox = $("newContactError");
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  errorBox.textContent = "";
+  submit.disabled = true;
+  submit.textContent = "建立中";
+  try {
+    const response = await fetch("/api/inbox/new-contact", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({
+        instance:currentInstance,
+        phone:phoneInput.value,
+        name:nameInput.value,
+        leadType:typeInput.value,
+        projectId:projectInput.value,
+        note:noteInput.value,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "新增号码失败");
+    newContactOpen = false;
+    newContactAwaitingFirstSend = {
+      phone:data.contact.phone,
+      typeLabel:data.contact.typeLabel || typeInput.selectedOptions[0]?.textContent || "Customer",
+    };
+    await openThread(data.contact.phone);
+    renderList();
+    $("composerText")?.focus();
+    if (data.warning) window.alert(data.warning);
+  } catch (error) {
+    errorBox.textContent = error.message;
+    submit.disabled = false;
+    submit.textContent = "开始聊天";
+  }
 }
 
 function renderThreadEmpty() {
@@ -919,6 +1053,13 @@ async function doSend() {
   const textarea = $("composerText");
   const body = textarea.value.trim();
   if (!body && !pendingImage) return;
+  if (newContactAwaitingFirstSend?.phone === currentPhone) {
+    const preview = body || "[图片]";
+    const confirmed = window.confirm(
+      `确认使用 ${currentInstance} 发给新号码 ${currentPhone}？\n客户类型：${newContactAwaitingFirstSend.typeLabel}\n\n${preview.slice(0, 180)}`
+    );
+    if (!confirmed) return;
+  }
   const send = $("sendButton");
   send.disabled = true;
   send.textContent = "发送中";
@@ -948,6 +1089,7 @@ async function doSend() {
       if (!response.ok || !data.ok) throw new Error(data.error || "发送失败");
     }
     textarea.value = "";
+    if (newContactAwaitingFirstSend?.phone === currentPhone) newContactAwaitingFirstSend = null;
     resizeComposer(textarea);
     await openThread(currentPhone, { refresh:true });
     await loadThreads({ silent:true });
@@ -974,7 +1116,7 @@ function openLightbox(src) {
 }
 
 renderThreadEmpty();
-loadNumbers();
+loadInboxCapabilities().then(loadNumbers);
 setInterval(async () => {
   if (!currentInstance) return;
   await loadThreads({ silent:true });

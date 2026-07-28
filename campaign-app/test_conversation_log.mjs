@@ -278,22 +278,40 @@ CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
   text TEXT NOT NULL DEFAULT '', message_type TEXT NOT NULL DEFAULT 'text', source TEXT NOT NULL DEFAULT 'evolution',
   flow_topic TEXT NOT NULL DEFAULT '', template_key TEXT, sent_at TEXT, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
 CREATE TABLE project_leads (project_lead_key TEXT PRIMARY KEY, contact_key TEXT NOT NULL, phone TEXT NOT NULL);
-CREATE TABLE whatsapp_connections (connection_key TEXT PRIMARY KEY, whatsapp_number TEXT NOT NULL DEFAULT '', instance_name TEXT NOT NULL DEFAULT '');`);
+CREATE TABLE whatsapp_connections (connection_key TEXT PRIMARY KEY, whatsapp_number TEXT NOT NULL DEFAULT '', instance_name TEXT NOT NULL DEFAULT '');
+INSERT INTO whatsapp_connections VALUES ('device-call::601133698121', '601133698121', 'wa_01');`);
 const crLog = createConversationLogService({ dataDir: cr });
+
+const preparedContact = await crLog.prepareManualContact({
+  phone: "60188000008",
+  name: "Phone Call Lead",
+  instanceName: "wa_01",
+});
+assert.equal(preparedContact.phone, "60188000008");
+assert.equal((await crLog.fullThread("60188000008")).messages.length, 0, "preparing a contact must not create a fake message");
+assert.equal((await crLog.inboxThreads({})).length, 0, "an unsent draft contact stays out of the visible list");
+assert.equal((await crLog.recordOutbound({
+  phone: "60188000008",
+  text: "这是通话后的资料",
+  instanceName: "wa_01",
+  messageId: "CALL-1",
+  source: "manual",
+}, { requireExisting: true })).saved, true);
+assert.equal((await crLog.inboxThreads({})).length, 1, "a manually started conversation appears after its first send");
 
 // 名单外客户回复：不加 force 会被挡，加 force 会记
 assert.deepEqual(await crLog.recordReply({ id: "R1", phone: "60177000001", text: "hi", instanceName: "wa_01" }), { saved: false, reason: "not_a_lead" });
 assert.equal((await crLog.recordReply({ id: "R1", phone: "60177000001", text: "hi", instanceName: "wa_01" }, { force: true })).saved, true, "force 要记名单外的回复");
 
 // 只有客户回、我方没回 → 全部视图显示（这就是「漏跟进」的客户），且属于「待跟进」
-assert.equal((await crLog.inboxThreads({})).length, 1, "回复过的客户默认都显示（找漏跟进用）");
+assert.equal((await crLog.inboxThreads({})).length, 2, "回复过或人工开始过的客户默认都显示");
 assert.equal((await crLog.inboxThreads({ filter: "pending" })).length, 1, "最后一句是客户说的 → 待跟进");
 
 // 手机回复：这个号码已经在对话中(上面记过 inbound) → requireExisting 通过
 assert.equal((await crLog.recordOutbound({ phone: "60177000001", text: "我回你", instanceName: "wa_01", messageId: "P1", source: "phone" }, { requireExisting: true })).saved, true, "已在对话中的号码，手机回复要记");
 // 我方回了最后一句 → 不再是待跟进
 assert.equal((await crLog.inboxThreads({ filter: "pending" })).length, 0, "我方回过最后一句 → 不再待跟进");
-assert.equal((await crLog.inboxThreads({})).length, 1, "全部视图仍显示");
+assert.equal((await crLog.inboxThreads({})).length, 2, "全部视图仍显示");
 
 // 手机冷发给从没对话过的号码 → requireExisting 挡下（不记私人冷发）
 assert.deepEqual(

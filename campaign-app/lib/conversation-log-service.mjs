@@ -346,6 +346,72 @@ COMMIT;`);
     return Boolean(rows?.length);
   }
 
+  // 人工从 Chat Room 输入一个新号码时，先建立本机 contact + conversation，
+  // 但不制造假讯息，也不把它塞进 Campaign / Notion。第一次真正发出后，
+  // recordOutbound 才会让它出现在聊天室清单。
+  async function prepareManualContact({ phone, name = "", instanceName = "" } = {}) {
+    const contactKey = digits(phone);
+    const instance = clean(instanceName);
+    if (!contactKey) {
+      const error = new Error("缺少有效客户号码。");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!instance) {
+      const error = new Error("缺少发送号码。");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const database = await cli();
+    const existing = await database.query(`
+SELECT stop_flag AS stopFlag FROM contacts
+WHERE contact_key=${sqlValue(contactKey)} LIMIT 1;`);
+    if (Number(existing?.[0]?.stopFlag || 0) === 1) {
+      const error = new Error("这个号码已经是 Do Not Contact，不能建立新对话。");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const index = await connections();
+    const connectionKey = resolveConnection(index, "", instance);
+    if (!connectionKey) {
+      const error = new Error("找不到这个 WhatsApp connection 的本机绑定。请到 Settings 刷新 Phone Health。");
+      error.statusCode = 409;
+      throw error;
+    }
+    const conversationId = conversationIdFor(contactKey, connectionKey);
+    const nowIso = clock().toISOString();
+    await database.exec(`
+BEGIN IMMEDIATE;
+INSERT OR IGNORE INTO contacts(
+  contact_key, phone, display_name, reply_count, last_reply_text, last_reply_at, created_at, updated_at
+) VALUES (
+  ${sqlValue(contactKey)}, ${sqlValue(contactKey)}, ${sqlValue(clean(name))}, 0, '', NULL,
+  ${sqlValue(nowIso)}, ${sqlValue(nowIso)}
+);
+UPDATE contacts SET
+  display_name=CASE
+    WHEN ${sqlValue(clean(name))}<>'' THEN ${sqlValue(clean(name))}
+    ELSE display_name END,
+  updated_at=${sqlValue(nowIso)}
+WHERE contact_key=${sqlValue(contactKey)};
+INSERT OR IGNORE INTO conversations(
+  id, contact_key, connection_key, customer_phone, last_message_at, created_at, updated_at
+) VALUES (
+  ${sqlValue(conversationId)}, ${sqlValue(contactKey)}, ${sqlValue(connectionKey)},
+  ${sqlValue(contactKey)}, NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)}
+);
+COMMIT;`);
+    return {
+      phone: contactKey,
+      name: clean(name),
+      instance,
+      conversationId,
+      existed: Boolean(existing?.length),
+    };
+  }
+
   // ---------- 单条(线上路径) ----------
 
   // force = 不看名单闸，任何回复都记。聊天室要「有来有回就显示」，所以线上收到的
@@ -434,7 +500,8 @@ GROUP BY v.contact_key;`);
     return new Map(rows.map((row) => [row.contactKey, { sentAt: row.sentAt, times: row.times }]));
   }
 
-  // 聊天室的客户列表：某个号码底下、有回复过、而且没被 STOP 的客户。
+  // 聊天室的客户列表：某个号码底下、有回复过，或由人工在 Chat Room
+  // 主动开始过对话，而且没被 STOP 的客户。
   // 每个带最后一条讯息预览，按最近活动排序 —— 越新的排越前面。
   // filter:
   //   "all"     所有回复过的客户（找漏跟进的用这个）
@@ -445,7 +512,13 @@ GROUP BY v.contact_key;`);
   async function inboxThreads({ instance = "", limit = 200, filter = "all" } = {}) {
     const database = await cli();
     const conditions = [
-      "c.reply_count > 0",       // 客户回复过
+      `(c.reply_count > 0 OR EXISTS (
+        SELECT 1 FROM messages mm
+        JOIN conversations mv ON mv.id = mm.conversation_id
+        WHERE mv.contact_key = c.contact_key
+          AND mm.direction = 'outbound'
+          AND mm.source = 'manual'
+      ))`,
       "c.stop_flag = 0",         // STOP 的不进聊天室
     ];
     if (filter === "pending") {
@@ -563,6 +636,7 @@ ON CONFLICT(key) DO UPDATE SET
     recordReplies,
     recordOutbound,
     recordOutbounds,
+    prepareManualContact,
     recentThread,
     sentFlowSince,
     inboxThreads,

@@ -9,6 +9,12 @@ const schema = {
   "Appointment Status": { type: "select" },
   "Follow Up At": { type: "date" },
   Priority: { type: "select" },
+  Project: { type: "select" },
+  "Sender Instance": { type: "select" },
+  "Assigned Sender Key": { type: "rich_text" },
+  "Contact Key": { type: "rich_text" },
+  "Project Lead Key": { type: "rich_text" },
+  "Sales Notes": { type: "rich_text" },
 };
 
 const rejected = buildLeadReplyProperties(schema, {
@@ -115,6 +121,33 @@ const secondCrossPcResult = await crossPc.upsertLeadReply({
 }, { createIfMissing: false, existingLead: crossPcResult.existingLead });
 assert.equal(secondCrossPcResult.matched, true);
 assert.equal(updatedProperties["Reply Count"].number, 2, "shared lookup must still count every distinct reply");
+
+const manualBlast = new NotionSync({
+  token: "test",
+  config: { databases: { blastLeads: "blast-db" }, dataSources: {} },
+});
+manualBlast.getBlastSchema = async () => schema;
+manualBlast.findBlastLeadByPhoneAndProject = async () => null;
+let manualBlastCreate;
+manualBlast.request = async (method, pathname, body) => {
+  manualBlastCreate = { method, pathname, body };
+  return { id: "manual-blast-page" };
+};
+const manualBlastResult = await manualBlast.upsertManualBlastLead({
+  phone: "60128880000",
+  name: "Manual Lead",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  instanceName: "wa_03",
+  assignedSenderKey: "device::60148801997",
+  createdAt: "2026-07-28T07:00:00.000Z",
+  note: "Called customer",
+});
+assert.equal(manualBlastResult.action, "created");
+assert.equal(manualBlastCreate.pathname, "/pages");
+assert.equal(manualBlastCreate.body.properties.Project.select.name, "Binastra");
+assert.equal(manualBlastCreate.body.properties["Assigned Sender Key"].rich_text[0].text.content, "device::60148801997");
+assert.equal(manualBlastCreate.body.properties["Sequence Status"].select.name, "Human Takeover");
 
 const stranger = new NotionSync({ token: "test", config: { databases: {}, dataSources: {} } });
 stranger.state = { leadPages: {}, syncedReplyIds: {}, creditedResponses: {} };

@@ -65,6 +65,63 @@ export function registerInboxRoutes(router) {
     return runtime.inboxSend;
   }
 
+  function requireLeadSetup(runtime) {
+    if (!runtime.inboxLeadSetup) {
+      throw httpError(503, "客户 Setup 功能尚未启用。请重启 Mamba。", "INBOX_LEAD_SETUP_UNAVAILABLE");
+    }
+    return runtime.inboxLeadSetup;
+  }
+
+  router.get("/api/inbox/capabilities", async (_req, res, runtime) => {
+    const send = requireSend(runtime);
+    const setup = requireLeadSetup(runtime);
+    json(res, 200, {
+      ok: true,
+      capabilities: {
+        newContact: Boolean(send.normalizePhone && setup.setup),
+      },
+      leadTypes: setup.listTypes(),
+      projects: await setup.projects(),
+    });
+  });
+
+  router.post("/api/inbox/new-contact", async (req, res, runtime) => {
+    const send = requireSend(runtime);
+    const setup = requireLeadSetup(runtime);
+    const body = await readJson(req);
+    const instance = String(body?.instance || "").trim();
+    const phone = send.normalizePhone?.(body?.phone);
+    if (!phone) {
+      throw httpError(400, "电话号码格式不正确。请填写 012…、60… 或 +60… 的完整号码。");
+    }
+
+    const open = await runtime.campaign?.openInstances?.().catch(() => []);
+    const selected = (open || []).find((item) => item?.name === instance && item?.allowedOnThisDevice !== false);
+    if (!selected) {
+      throw httpError(409, "这个 WhatsApp connection 目前不是 OPEN。请刷新页面或到 Settings 检查 Phone Health。");
+    }
+
+    const { set: suppressed } = loadSuppressionSync();
+    if (suppressed.has(phone)) {
+      throw httpError(409, "这个号码已经在全局 STOP 名单，不能建立新对话。");
+    }
+
+    const contact = await setup.setup({
+      instanceName: instance,
+      phone,
+      name: body?.name,
+      leadType: body?.leadType,
+      projectId: body?.projectId,
+      note: body?.note,
+    });
+    json(res, 200, {
+      ok: true,
+      contact,
+      notice: contact.notice || "",
+      warning: contact.warning || "",
+    });
+  });
+
   router.post("/api/inbox/send", async (req, res, runtime) => {
     const send = requireSend(runtime);
     const body = await readJson(req);

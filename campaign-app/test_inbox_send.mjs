@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createInboxSendService } from "./lib/inbox-send-service.mjs";
+import { createInboxSendService, normalizeManualRecipientPhone } from "./lib/inbox-send-service.mjs";
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-inbox-send-"));
 
@@ -30,9 +30,24 @@ const fakeApi = async (pathname, options = {}) => {
 
 // 假对话纪录：记录 recordOutbound 收到什么。
 const recorded = [];
-const conversationLog = { async recordOutbound(m) { recorded.push(m); return { saved: true }; } };
+const recordOptions = [];
+const prepared = [];
+const conversationLog = {
+  async prepareManualContact(contact) { prepared.push(contact); return { ...contact, conversationId: "conv-new", existed: false }; },
+  async recordOutbound(m, options) { recorded.push(m); recordOptions.push(options); return { saved: true }; },
+};
 
 const svc = createInboxSendService({ api: fakeApi, dataDir, conversationLog });
+
+assert.equal(normalizeManualRecipientPhone("012-345 6789"), "60123456789");
+assert.equal(normalizeManualRecipientPhone("+60 12-345 6789"), "60123456789");
+assert.equal(normalizeManualRecipientPhone("0060 12-345 6789"), "60123456789");
+assert.equal(normalizeManualRecipientPhone("123"), "");
+
+const newContact = await svc.prepareContact({ instance: "wa_01", phone: "012-345 6789", name: "New Call" });
+assert.equal(newContact.phone, "60123456789");
+assert.equal(prepared[0].instanceName, "wa_01");
+assert.equal(prepared[0].name, "New Call");
 
 // --- 手动回复文字 ---
 const sent = await svc.sendText({ instance: "wa_01", phone: "6011 100 0001", text: "你好，我发你资料" });
@@ -45,11 +60,12 @@ assert.equal(calls[0].body.text, "你好，我发你资料");
 assert.equal(recorded[0].source, "manual");
 assert.equal(recorded[0].messageId, "OUT-TXT-1");
 assert.equal(recorded[0].phone, "60111000001");
+assert.deepEqual(recordOptions[0], { requireExisting: true }, "manual Chat Room sends must already have a local conversation");
 
 // --- 守卫 ---
 await assert.rejects(() => svc.sendText({ instance: "", phone: "60111", text: "x" }), /号码/);
 await assert.rejects(() => svc.sendText({ instance: "wa_01", phone: "", text: "x" }), /客户电话/);
-await assert.rejects(() => svc.sendText({ instance: "wa_01", phone: "60111", text: "  " }), /空/);
+await assert.rejects(() => svc.sendText({ instance: "wa_01", phone: "60111000001", text: "  " }), /空/);
 
 // --- 发图给客户（data URL）---
 const tinyPng = "data:image/png;base64,ZmFrZSBwbmcgaW1hZ2UgYnl0ZXMgZm9yIHRlc3RpbmcgcHVycG9zZXMgMTIzNDU2";

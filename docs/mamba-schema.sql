@@ -187,7 +187,42 @@ CREATE TABLE IF NOT EXISTS recycle_leads (
   FOREIGN KEY (contact_key) REFERENCES contacts(contact_key) ON DELETE RESTRICT
 );
 
--- B5. Flow 1 客户群。Excel/CSV 只是其中一种导入来源；名单导入后长期保留在本机，
+-- B5. 业务人员自己的客户。只保存在本机，不自动进入 Notion 或 Campaign。
+CREATE TABLE IF NOT EXISTS own_leads (
+  own_lead_key       TEXT PRIMARY KEY,         -- own:<device>:<phone>
+  contact_key        TEXT NOT NULL,
+  phone              TEXT NOT NULL,
+  name               TEXT NOT NULL DEFAULT '',
+  assigned_sender_key TEXT,
+  note               TEXT NOT NULL DEFAULT '',
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  FOREIGN KEY (contact_key) REFERENCES contacts(contact_key) ON DELETE RESTRICT,
+  FOREIGN KEY (assigned_sender_key) REFERENCES whatsapp_connections(connection_key) ON DELETE SET NULL
+);
+
+-- B6. Chat Room 人工建档审计。一个客户可同时有多个来源，例如先 Ads、后转 Blast。
+CREATE TABLE IF NOT EXISTS lead_origins (
+  origin_key          TEXT PRIMARY KEY,         -- type:project-or-general:phone
+  contact_key         TEXT NOT NULL,
+  lead_type           TEXT NOT NULL CHECK (lead_type IN ('BLAST','RECYCLE','ADS','OWN')),
+  project_code        TEXT NOT NULL DEFAULT '',
+  assigned_sender_key TEXT,
+  notion_page_id      TEXT,
+  notion_sync_status  TEXT NOT NULL DEFAULT 'LOCAL_ONLY'
+                        CHECK (notion_sync_status IN ('LOCAL_ONLY','PENDING','SYNCED','FAILED')),
+  notion_sync_error   TEXT NOT NULL DEFAULT '',
+  note                TEXT NOT NULL DEFAULT '',
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  FOREIGN KEY (contact_key) REFERENCES contacts(contact_key) ON DELETE RESTRICT,
+  FOREIGN KEY (assigned_sender_key) REFERENCES whatsapp_connections(connection_key) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_origins_contact ON lead_origins(contact_key, lead_type);
+CREATE INDEX IF NOT EXISTS idx_lead_origins_sync ON lead_origins(notion_sync_status, updated_at);
+
+-- B7. Flow 1 客户群。Excel/CSV 只是其中一种导入来源；名单导入后长期保留在本机，
 --     操作者可直接选择、改名和再次预览，不需要每次重新上传文件。
 --     客户群严格绑定 device_key + sender_phone，避免两台电脑都叫 wa_01 时混用名单。
 CREATE TABLE IF NOT EXISTS lead_groups (

@@ -114,6 +114,39 @@ assert.equal(await service.isPrimary(), true);
 // initialize / health checks must not silently reset a deliberate Primary cutover.
 assert.equal((await service.initialize()).storageMode, "primary");
 
+await service.syncWhatsAppConnections([{ name: "wa_01", owner: senderPolicy.expectedSenderPhone }]);
+const ownSetup = await service.setupManualLead({
+  phone: "0123456788",
+  name: "Bob Own",
+  leadType: "OWN",
+  instanceName: "wa_01",
+  note: "Met after call",
+});
+assert.equal(ownSetup.leadType, "OWN");
+assert.equal(ownSetup.assignedSenderKey, "mamba-test-device::60168568756");
+assert.equal(ownSetup.notionSyncStatus, "LOCAL_ONLY");
+
+const blastSetup = await service.setupManualLead({
+  phone: "60123456789",
+  name: "Alice",
+  leadType: "BLAST",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  instanceName: "wa_01",
+  note: "Manual setup",
+});
+assert.equal(blastSetup.notionSyncStatus, "PENDING");
+await service.markManualLeadNotionSync({
+  originKey: blastSetup.originKey,
+  status: "SYNCED",
+  notionPageId: "manual-notion-page",
+});
+const manualSetupRows = JSON.parse(execFileSync(detected.binary, [
+  "-batch", "-json", service.databasePath,
+  "SELECT (SELECT COUNT(*) FROM own_leads WHERE phone='60123456788') AS ownLeads, (SELECT COUNT(*) FROM lead_origins WHERE assigned_sender_key='mamba-test-device::60168568756') AS origins, (SELECT COUNT(*) FROM lead_origins WHERE origin_key='blast:binastra:60123456789' AND notion_sync_status='SYNCED') AS synced;",
+], { encoding: "utf8" }));
+assert.deepEqual(manualSetupRows, [{ ownLeads: 1, origins: 2, synced: 1 }]);
+
 // Campaign facts must land in SQLite before Notion. A stopped/failed cloud sync
 // cannot leave a successfully contacted customer in the old Flow.
 const localAdvance = await service.recordCampaignFlowProgress({
@@ -250,6 +283,24 @@ const manualFlow = await service.setLeadFlowState({
 });
 assert.equal(manualFlow.updated, 1);
 assert.equal((await service.readLeadCache()).records.find((row) => row.id === "page-local-2")?.nextFlow, "Flow 3 - Location");
+
+const localDisposition = await service.recordConversationDisposition({
+  pageId: "page-local-2",
+  phone: "60123456788",
+  status: "Not Interested",
+  sequenceStatus: "Not Interested",
+  aiCategory: "Not Interested",
+  followUpAt: null,
+  stopFlag: false,
+  updatedAt: "2026-07-22T08:30:00.000Z",
+});
+assert.equal(localDisposition.updated, 1);
+const dispositionBob = (await service.readLeadCache()).records.find((row) => row.id === "page-local-2");
+assert.equal(dispositionBob.status, "Not Interested");
+assert.equal(dispositionBob.sequenceStatus, "Not Interested");
+assert.equal(dispositionBob.aiCategory, "Not Interested");
+assert.equal(dispositionBob.followUpAt, null);
+assert.equal(dispositionBob.stopFlag, false, "Not Interested must remain a soft rejection");
 
 const localReply = await service.recordLeadReply({
   pageId: "page-local-1",

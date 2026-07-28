@@ -1220,6 +1220,242 @@ COMMIT;`, 120000);
     return { updated: Number(result?.updated || 0), phone: normalizedPhone, at: replyAt };
   }
 
+  async function recordConversationDisposition({
+    pageId = "",
+    phone = "",
+    status = "",
+    sequenceStatus = "",
+    aiCategory = "",
+    followUpAt = null,
+    stopFlag = false,
+    stopReason = "",
+    updatedAt = "",
+  } = {}) {
+    const notionPageId = clean(pageId).replace(/-/g, "");
+    const normalizedPhone = normalizePhone(phone);
+    if (!notionPageId && !normalizedPhone) return { updated: 0, reason: "missing_identity" };
+    const binary = await requireV3Database();
+    const now = Number.isFinite(new Date(updatedAt || "").getTime())
+      ? new Date(updatedAt).toISOString()
+      : new Date().toISOString();
+    const leadWhere = notionPageId
+      ? `replace(notion_page_id,'-','')=${sqlText(notionPageId)}`
+      : `phone=${sqlText(normalizedPhone)}`;
+    const contactWhere = notionPageId
+      ? `contact_key IN (SELECT contact_key FROM project_leads WHERE replace(notion_page_id,'-','')=${sqlText(notionPageId)})`
+      : `contact_key=${sqlText(normalizedPhone)}`;
+
+    await runProcess(binary, ["-batch", databasePath], `
+BEGIN IMMEDIATE;
+UPDATE contacts SET
+  stop_flag=MAX(stop_flag, ${sqlBoolean(stopFlag)}),
+  stop_reason=CASE
+    WHEN ${sqlBoolean(stopFlag)}=1 AND ${sqlText(clean(stopReason))}<>'' THEN ${sqlText(clean(stopReason))}
+    ELSE stop_reason END,
+  stop_at=CASE WHEN ${sqlBoolean(stopFlag)}=1 THEN COALESCE(stop_at, ${sqlText(now)}) ELSE stop_at END,
+  updated_at=${sqlText(now)}
+WHERE ${contactWhere};
+UPDATE project_leads SET
+  status=CASE WHEN ${sqlText(clean(status))}<>'' THEN ${sqlText(clean(status))} ELSE status END,
+  sequence_status=CASE
+    WHEN ${sqlText(clean(sequenceStatus))}<>'' THEN ${sqlText(clean(sequenceStatus))}
+    ELSE sequence_status END,
+  ai_category=CASE WHEN ${sqlText(clean(aiCategory))}<>'' THEN ${sqlText(clean(aiCategory))} ELSE ai_category END,
+  follow_up_at=${sqlNullable(followUpAt)},
+  updated_at=${sqlText(now)}
+WHERE ${leadWhere};
+COMMIT;`, 120000);
+    const [result] = await queryJson(binary, `SELECT COUNT(*) AS updated FROM project_leads WHERE ${leadWhere};`);
+    return { updated: Number(result?.updated || 0), phone: normalizedPhone, at: now };
+  }
+
+  async function setupManualLead({
+    phone,
+    name = "",
+    leadType,
+    projectCode = "",
+    projectName = "",
+    instanceName,
+    note = "",
+  } = {}) {
+    const normalizedPhone = normalizePhone(phone);
+    const type = clean(leadType).toUpperCase();
+    const code = clean(projectCode || slugCode(projectName));
+    const instance = clean(instanceName);
+    if (!normalizedPhone) {
+      const error = new Error("客户电话号码格式不正确。");
+      error.code = "MANUAL_LEAD_PHONE_INVALID";
+      throw error;
+    }
+    if (!["BLAST", "RECYCLE", "ADS", "OWN"].includes(type)) {
+      const error = new Error("客户类型只支持 Blasting、Recycle、Ads 或 Own Leads。");
+      error.code = "MANUAL_LEAD_TYPE_INVALID";
+      throw error;
+    }
+    if (type === "BLAST" && !code) {
+      const error = new Error("Blasting Lead 必须选择 Project。");
+      error.code = "MANUAL_LEAD_PROJECT_REQUIRED";
+      throw error;
+    }
+    if (!instance) {
+      const error = new Error("缺少 WhatsApp connection。");
+      error.code = "MANUAL_LEAD_INSTANCE_REQUIRED";
+      throw error;
+    }
+
+    const binary = await requireV3Database();
+    const [connection] = await queryJson(binary, `
+SELECT connection_key AS connectionKey
+FROM whatsapp_connections
+WHERE instance_name=${sqlText(instance)}
+  AND device_key=${sqlText(clean(device?.id))}
+LIMIT 1;`);
+    if (!connection?.connectionKey) {
+      const error = new Error("找不到这个 WhatsApp connection 的本机绑定。请到 Settings 刷新 Phone Health。");
+      error.code = "MANUAL_LEAD_CONNECTION_NOT_BOUND";
+      throw error;
+    }
+
+    const now = new Date().toISOString();
+    const displayName = clean(name) || normalizedPhone;
+    const senderKey = clean(connection.connectionKey);
+    const scope = type === "BLAST" ? code : "general";
+    const originKey = `${type.toLowerCase()}:${scope}:${normalizedPhone}`;
+    const payload = JSON.stringify({
+      source: "manual_chat",
+      note: clean(note),
+      assignedSenderKey: senderKey,
+      instanceName: instance,
+    });
+    const statements = [
+      "PRAGMA foreign_keys = ON;",
+      "BEGIN IMMEDIATE;",
+      `INSERT INTO contacts(
+        contact_key, phone, display_name, stop_flag, stop_reason, stop_at, reply_count,
+        last_reply_text, last_reply_at, created_at, updated_at
+      ) VALUES (
+        ${sqlText(normalizedPhone)}, ${sqlText(normalizedPhone)}, ${sqlText(displayName)},
+        0, '', NULL, 0, '', NULL, ${sqlText(now)}, ${sqlText(now)}
+      )
+      ON CONFLICT(contact_key) DO UPDATE SET
+        display_name=CASE WHEN ${sqlText(clean(name))}<>'' THEN ${sqlText(clean(name))} ELSE contacts.display_name END,
+        updated_at=${sqlText(now)};`,
+    ];
+
+    if (type === "BLAST") {
+      statements.push(
+        `INSERT INTO projects(project_code, project_name, aliases_json, active, created_at, updated_at)
+         VALUES (${sqlText(code)}, ${sqlText(clean(projectName) || code)}, '[]', 1, ${sqlText(now)}, ${sqlText(now)})
+         ON CONFLICT(project_code) DO UPDATE SET
+           project_name=CASE WHEN excluded.project_name<>'' THEN excluded.project_name ELSE projects.project_name END,
+           active=1, updated_at=excluded.updated_at;`,
+        `INSERT INTO project_leads(
+          project_lead_key, notion_page_id, contact_key, project_code, phone, name,
+          sequence_status, status, last_flow_sent, next_flow, cohort_day, follow_up_due,
+          first_blast_at, last_blast_at, assigned_sender_key, last_sender_key,
+          last_sender_phone, last_sent_by_device, campaign_run_id,
+          ai_category, ai_summary, priority, follow_up_at, assigned_sales, sales_notes,
+          appointment_date, appointment_time, appointment_place, appointment_status,
+          payload_json, source_updated_at, created_at, updated_at
+        ) VALUES (
+          ${sqlText(`${code}:${normalizedPhone}`)}, NULL, ${sqlText(normalizedPhone)}, ${sqlText(code)},
+          ${sqlText(normalizedPhone)}, ${sqlText(displayName)}, 'Human Takeover', 'Warm', '', '', NULL, NULL,
+          NULL, NULL, ${sqlText(senderKey)}, NULL, '', NULL, NULL, 'Warm', '', 'MED', ${sqlText(now)}, '', ${sqlText(clean(note))},
+          NULL, '', '', '', ${sqlText(payload)}, NULL, ${sqlText(now)}, ${sqlText(now)}
+        )
+        ON CONFLICT(project_lead_key) DO UPDATE SET
+          name=CASE WHEN ${sqlText(clean(name))}<>'' THEN ${sqlText(clean(name))} ELSE project_leads.name END,
+          assigned_sender_key=COALESCE(project_leads.assigned_sender_key, excluded.assigned_sender_key),
+          sales_notes=CASE WHEN ${sqlText(clean(note))}<>'' THEN ${sqlText(clean(note))} ELSE project_leads.sales_notes END,
+          follow_up_at=COALESCE(project_leads.follow_up_at, excluded.follow_up_at),
+          updated_at=excluded.updated_at;`,
+      );
+    } else if (type === "ADS") {
+      statements.push(`INSERT INTO ads_leads(
+        ad_lead_key, notion_page_id, contact_key, phone, name, source_code,
+        lead_received_at, last_touch_at, payload_json, created_at, updated_at
+      ) VALUES (
+        ${sqlText(`ads:${normalizedPhone}`)}, NULL, ${sqlText(normalizedPhone)}, ${sqlText(normalizedPhone)},
+        ${sqlText(displayName)}, 'manual_chat', ${sqlText(now)}, ${sqlText(now)}, ${sqlText(payload)},
+        ${sqlText(now)}, ${sqlText(now)}
+      )
+      ON CONFLICT(ad_lead_key) DO UPDATE SET
+        name=CASE WHEN ${sqlText(clean(name))}<>'' THEN ${sqlText(clean(name))} ELSE ads_leads.name END,
+        last_touch_at=excluded.last_touch_at, payload_json=excluded.payload_json, updated_at=excluded.updated_at;`);
+    } else if (type === "RECYCLE") {
+      statements.push(`INSERT INTO recycle_leads(
+        recycle_lead_key, notion_page_id, contact_key, phone, name, source_batch,
+        payload_json, created_at, updated_at
+      ) VALUES (
+        ${sqlText(`recycle:${normalizedPhone}`)}, NULL, ${sqlText(normalizedPhone)}, ${sqlText(normalizedPhone)},
+        ${sqlText(displayName)}, 'manual_chat', ${sqlText(payload)}, ${sqlText(now)}, ${sqlText(now)}
+      )
+      ON CONFLICT(recycle_lead_key) DO UPDATE SET
+        name=CASE WHEN ${sqlText(clean(name))}<>'' THEN ${sqlText(clean(name))} ELSE recycle_leads.name END,
+        payload_json=excluded.payload_json, updated_at=excluded.updated_at;`);
+    } else {
+      statements.push(`INSERT INTO own_leads(
+        own_lead_key, contact_key, phone, name, assigned_sender_key, note, created_at, updated_at
+      ) VALUES (
+        ${sqlText(`own:${clean(device?.id)}:${normalizedPhone}`)}, ${sqlText(normalizedPhone)},
+        ${sqlText(normalizedPhone)}, ${sqlText(displayName)}, ${sqlText(senderKey)}, ${sqlText(clean(note))},
+        ${sqlText(now)}, ${sqlText(now)}
+      )
+      ON CONFLICT(own_lead_key) DO UPDATE SET
+        name=CASE WHEN ${sqlText(clean(name))}<>'' THEN ${sqlText(clean(name))} ELSE own_leads.name END,
+        assigned_sender_key=excluded.assigned_sender_key, note=excluded.note, updated_at=excluded.updated_at;`);
+    }
+
+    statements.push(
+      `INSERT INTO lead_origins(
+        origin_key, contact_key, lead_type, project_code, assigned_sender_key,
+        notion_page_id, notion_sync_status, notion_sync_error, note, created_at, updated_at
+      ) VALUES (
+        ${sqlText(originKey)}, ${sqlText(normalizedPhone)}, ${sqlText(type)}, ${sqlText(type === "BLAST" ? code : "")},
+        ${sqlText(senderKey)}, NULL, ${sqlText(type === "OWN" ? "LOCAL_ONLY" : "PENDING")}, '',
+        ${sqlText(clean(note))}, ${sqlText(now)}, ${sqlText(now)}
+      )
+      ON CONFLICT(origin_key) DO UPDATE SET
+        assigned_sender_key=excluded.assigned_sender_key,
+        notion_sync_status=CASE WHEN excluded.lead_type='OWN' THEN 'LOCAL_ONLY' ELSE 'PENDING' END,
+        notion_sync_error='', note=excluded.note, updated_at=excluded.updated_at;`,
+      "COMMIT;",
+    );
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 120000);
+    return {
+      originKey,
+      phone: normalizedPhone,
+      name: displayName,
+      leadType: type,
+      projectCode: type === "BLAST" ? code : "",
+      projectName: type === "BLAST" ? clean(projectName) : "",
+      instanceName: instance,
+      assignedSenderKey: senderKey,
+      notionSyncStatus: type === "OWN" ? "LOCAL_ONLY" : "PENDING",
+      createdAt: now,
+    };
+  }
+
+  async function markManualLeadNotionSync({ originKey, status, notionPageId = "", error = "" } = {}) {
+    const key = clean(originKey);
+    const normalizedStatus = clean(status).toUpperCase();
+    if (!key || !["PENDING", "SYNCED", "FAILED"].includes(normalizedStatus)) {
+      throw new Error("Manual lead Notion sync update is invalid.");
+    }
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    await runProcess(binary, ["-batch", databasePath], `
+BEGIN IMMEDIATE;
+UPDATE lead_origins SET
+  notion_page_id=CASE WHEN ${sqlText(clean(notionPageId))}<>'' THEN ${sqlText(clean(notionPageId))} ELSE notion_page_id END,
+  notion_sync_status=${sqlText(normalizedStatus)},
+  notion_sync_error=${sqlText(clean(error).slice(0, 1000))},
+  updated_at=${sqlText(now)}
+WHERE origin_key=${sqlText(key)};
+COMMIT;`, 60000);
+    return { originKey: key, status: normalizedStatus, notionPageId: clean(notionPageId), updatedAt: now };
+  }
+
   async function setStorageMode(mode) {
     const normalized = clean(mode).toLowerCase();
     if (!["shadow", "primary"].includes(normalized)) {
@@ -1446,6 +1682,9 @@ COMMIT;
     recordCampaignFlowProgress,
     setLeadFlowState,
     recordLeadReply,
+    recordConversationDisposition,
+    setupManualLead,
+    markManualLeadNotionSync,
     listLeadGroups,
     readLeadGroup,
     createLeadGroup,

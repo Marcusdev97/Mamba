@@ -1,6 +1,6 @@
 # Mamba — WhatsApp Blast 自动化系统
 
-Mamba 是一套房产销售用的 WhatsApp 批量群发 + 多轮自动跟进系统。核心思路:把一个项目(楼盘)的话术拆成多个 **Flow**(第 1 轮、第 2 轮……),按天数一轮一轮发给客户;客户一旦回复就自动退出序列、转人工;整个过程用网页面板点按钮操作,发送记录和客户状态都同步到 Notion。
+Mamba 是一套房产销售用的 WhatsApp 批量群发 + 多轮自动跟进系统。核心思路:把一个项目(楼盘)的话术拆成多个 **Flow**(第 1 轮、第 2 轮……),按天数一轮一轮发给客户;客户一旦回复就自动退出序列、转人工;整个过程用网页面板操作。发送结果先写入本机 SQLite，Campaign 完成后再通过 outbox 同步到 Notion。
 
 > ⚠️ **仓库里不含任何机密和客户名单**(Notion token、`.env`、Excel 名单、缓存都被 `.gitignore` 挡掉了)。新电脑拉下来后需要自己配 token,见下方「首次安装」。
 
@@ -28,27 +28,34 @@ Mamba 是一套房产销售用的 WhatsApp 批量群发 + 多轮自动跟进系�
 - **客户回复** → 自动退出序列、转人工;根据回复内容自动分类(见「回复分类」)。
 - **STOP / 退订** → 打红旗(Stop Flag),永不再发。
 
-判断"谁该发下一轮"靠 Notion 里三个字段:`Follow Up Due`(到期日)+ `Next Flow`(下一轮是哪个)+ `Sequence Status`(序列是否还在跑)。**没有实时 webhook**,每轮发送前手动在网页上勾人。
+判断"谁该发下一轮"使用本机同步资料里的三个业务字段:`Follow Up Due`(到期日)+ `Next Flow`(下一轮是哪个)+ `Sequence Status`(序列是否还在跑)。人工维护内容可从 Notion 拉入本机；运行期间不把 Notion 放在 WhatsApp 发送关键路径上。
 
 ---
 
 ## 二、系统架构
 
-```
-┌───────────────────────────────┐     ┌─────────────┐
-│ Mamba Server + Control Center │────▶│ Evolution   │
-│ :8787                         │     │ API :8080   │
-└──────────────┬────────────────┘     └─────────────┘
-               │
-               ▼
-        ┌─────────────┐
-        │   Notion    │  名单 / 模板 / 发送记录
-        └─────────────┘
+```text
+Browser / Mamba.app
+        │
+        ▼
+Mamba Server :8787 ───────▶ Evolution API :8080 ───────▶ WhatsApp
+        │
+        ▼
+SQLite 本机运行账本 ──────▶ Notion Outbox ─────────────▶ Notion 镜像
+                                Campaign 完成后同步
 ```
 
 - **Evolution API**(`:8080`)—— WhatsApp 引擎,跑在 Docker / Colima 里,号码扫码上线后才能发。
 - **Mamba Server**(`:8787`,`campaign-app/server.mjs`)—— 唯一主服务。提供 Control Center、发送台、Customer Desk、Settings 和所有 API。
-- **Notion** —— 数据后端:客户名单、话术模板、发送记录都在这。
+- **SQLite**(`campaign-data/mamba.sqlite`)—— Campaign 运行期间的本机真相源。
+- **Notion** —— 人工内容与业务可见镜像；Campaign 完成后最终同步，不参与实时发送事务。
+
+详细边界：
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)—— 当前组件、资料流与目标目录。
+- [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md)—— Evolution、Notion、Telegram、AI 和 R2 契约。
+- [`docs/MAMBA_ARCHITECTURE_ADR.md`](docs/MAMBA_ARCHITECTURE_ADR.md)—— SQLite 主库决策与原因。
+- [`AGENTS.md`](AGENTS.md)—— Codex 修改本项目时必须遵守的工程规则。
 
 ---
 
@@ -56,8 +63,12 @@ Mamba 是一套房产销售用的 WhatsApp 批量群发 + 多轮自动跟进系�
 
 ```
 Mamba/
+├── AGENTS.md               # Codex 工程、安全和验收规则
 ├── campaign-app/            # 所有代码
-│   ├── server.mjs           # Campaign Console(发送核心 + 网页 + 所有 API)
+│   ├── server.mjs           # Composition root + legacy orchestration
+│   ├── app/                 # HTTP app 与 runtime 组装
+│   ├── routes/              # API routes
+│   ├── lib/                 # 当前 services / repositories / adapters 过渡目录
 │   ├── campaign_core.mjs    # 发送引擎(节流、多段、重试、回复取消)
 │   ├── flow_sequence.mjs    # Flow 序列定义 + 回复分类器
 │   ├── morning_followup.mjs # 早间跟进:结算回复、分类、退订
@@ -80,6 +91,7 @@ Mamba/
 │   ├── raw/                 # 原始素材
 │   └── manifest.json        # 同步后自动生成:本地文件 → 云端 URL
 ├── campaign-data/           # 运行时数据(大多不进 git)
+│   ├── mamba.sqlite         # 本机运行真相源(不进 git)
 │   ├── notion_config.json   # Notion 数据库 ID(进 git,无 token)
 │   └── ...                  # 名单缓存、发送记录等(不进 git)
 ├── evolution-pilot/         # WhatsApp 引擎(Docker)
@@ -90,7 +102,7 @@ Mamba/
 │   ├── 发送台.command
 │   ├── Customer Desk.command
 │   └── ...
-└── docs/                    # 标准、任务板、蓝图等内部文档
+└── docs/                    # Architecture、Integrations、ADR、标准与任务板
 ```
 
 ---
@@ -127,12 +139,12 @@ Mamba/
 2. **① 发送 Blast(主控制台)** → 选项目(如 Binastra)→ 导入名单 Excel(要 `Name` / `Phone` 两列)。
    - 导入时会**自动跳过已 blast 过的客户**(对比 Notion 里本项目已存在的号码),避免重复轰炸。
 3. 先 **TEST**(发给自己)看排版 → 没问题切 **LIVE** 正式发。
-4. 发完 → **④ 上传 Blast 名单到 Notion** → 这批人进入序列。
+4. 每位客户的结果先写 SQLite；整批完成后由 Notion outbox 统一同步。
 
 ### B. 发后续轮次(Flow 2 及以后)
 1. **③ 选人发下一轮** → 网页列出今天到期该发下一轮的人。
-2. 选项目 + 勾人(或整组)→ 系统**自动按 flow 从 Notion 取话术**、带对应图发送。
-3. 发完**自动**把 Notion 的 flow 状态往前推进(下一轮到期日、Next Flow)。
+2. 选项目 + 勾人(或整组)→ 系统按本机已同步的 flow 话术、带对应图发送。
+3. 发完先把 flow 状态写入 SQLite；整批完成后再同步 Notion 的下一轮到期日和 `Next Flow`。
 4. 发送过程中如果客户当场回复,会实时给那一行标色(🔴 STOP / 🟢 WARM)并停止后续段。
 
 ### C. 每天早上

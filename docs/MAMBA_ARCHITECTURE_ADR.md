@@ -26,13 +26,16 @@ Mamba 是房产销售用的 WhatsApp 批量群发 + 多轮自动跟进系统,当
 **SQLite 是本机的"运行真相源",坐在热路径正中间;Notion 退为"异步镜像 + 给人看的面板";Evolution 只负责收发 WhatsApp。**
 
 ```
-Blast(Mamba) ⇄ SQLite(本机主库) ⇄ Sync Worker ⇄ Notion(云端镜像/面板)
-                                     Evolution 只管收发 WhatsApp
+Blast(Mamba) ⇄ SQLite(本机主库) → Outbox → Sync Worker ⇄ Notion(云端镜像/面板)
+                                            Evolution 只管收发 WhatsApp
 ```
 
 ![Mamba 推荐架构](assets/mamba-architecture.svg)
 
-要点:任何操作都**先落地本机 SQLite**(毫秒级、断网也能跑),Notion 由后台的 Sync Worker **慢慢补**。Notion 挂了或限流,发送和收回复照跑不误,等它恢复自动追平。
+要点:任何操作都**先落地本机 SQLite**(毫秒级、断网也能跑)。Campaign
+运行结果先进入 outbox，必须等该 Campaign 不再发送后才允许最终同步；每晚
+`22:00` 另有一次兜底处理。Notion 挂了或限流，发送和收回复照跑不误，等它
+恢复后通过有限重试或人工处理追平。
 
 ---
 
@@ -43,7 +46,7 @@ Blast(Mamba) ⇄ SQLite(本机主库) ⇄ Sync Worker ⇄ Notion(云端镜像/�
 2. Mamba 从 **SQLite** 读名单 + 话术状态(不再实时打 Notion)。
 3. Mamba → Evolution API → WhatsApp 发出。
 4. 发完把"已发 / 推进到下一轮"**先写 SQLite**。
-5. Sync Worker 再异步把这些记录推给 Notion。
+5. Campaign 全部跑完后，Sync Worker 才把 outbox 里的最终结果推给 Notion。
 
 ### 入站(回复)
 1. 客户回复 → Evolution webhook → Mamba(Reply Tracker)。
@@ -67,7 +70,9 @@ Blast(Mamba) ⇄ SQLite(本机主库) ⇄ Sync Worker ⇄ Notion(云端镜像/�
 | 运行数据(flow 状态、发送记录、回复、STOP、Reply Count) | **SQLite** | SQLite → Notion(上推) |
 | 人工内容(话术模板、Project Knowledge、脑库、手工改的客户备注) | **Notion** | Notion → SQLite(下拉) |
 
-这样就不会出现"你在 Notion 改的模板被本机旧数据盖回去"这种冲突。同步用 `sync_jobs` 里的幂等键,失败自动重试。
+这样就不会出现"你在 Notion 改的模板被本机旧数据盖回去"这种冲突。同步用
+`sync_jobs` 里的幂等键；暂时性失败使用有限次数退避重试，语义冲突和重试耗尽
+必须保留为可见任务，不能无限自动重试。
 
 ---
 
@@ -85,7 +90,8 @@ Blast(Mamba) ⇄ SQLite(本机主库) ⇄ Sync Worker ⇄ Notion(云端镜像/�
 - **数据量很小**:当前 blast leads 缓存约 1.2MB(几百到一两千客户),回复 350 条。SQLite 轻松扛几万到几十万行,远没到上限。
 - **架构是"一台 Mac = 一个号码"**:数据天然隔离(Device Ownership 在强化这点),不需要中心数据库服务器。
 - **运维成本零**:无常驻服务、不占端口、离线可用、备份就是复制一个文件。
-- **已有云端真相源**:跨设备共享由 Notion 扛,SQLite 只做本机运行账本。
+- **已有云端共享层**:人工内容和跨设备可见性由 Notion 扛；SQLite 保存每台
+  机器自己的运行事实。
 
 **真正的瓶颈不是数据库**:先撞墙的一定是 WhatsApp 号码的发送上限(发太猛被封)和 Notion 限流,不是 SQLite。
 
@@ -110,13 +116,16 @@ Blast(Mamba) ⇄ SQLite(本机主库) ⇄ Sync Worker ⇄ Notion(云端镜像/�
 ## 八、后果(Consequences)
 
 **好处**
-- Notion 超时不再阻塞发送和回复;153 条这类积压变成"后台慢慢补",不影响业务。
+- Notion 超时不再阻塞发送和回复；积压会安全留在本机 outbox，等 Campaign
+  完成及 Notion 恢复后处理。
 - 运行时读本机 SQLite,页面更快,Notion API 调用量大幅下降(更少撞限流)。
 - 断网也能继续发送和记录。
 
 **代价 / 注意**
 - 需要写并维护 Sync Worker(双向、按类型定方向、幂等 + 重试)。
-- Notion 上看到的数据是"最终一致",可能比本机晚几秒到几分钟 —— 这是有意的权衡。
+- Notion 上看到的数据是"最终一致"；Campaign 运行期间不会显示未完成的最终
+  结果，正常可能延迟到 Campaign 完成、人工同步或每晚 `22:00` 兜底 —— 这是
+  有意的权衡。
 - 冲突处理要靠"同步方向规则"这张表守住,不能无脑双向覆盖。
 
 ---
@@ -134,6 +143,9 @@ Blast(Mamba) ⇄ SQLite(本机主库) ⇄ Sync Worker ⇄ Notion(云端镜像/�
 ---
 
 ## 十、相关文档
+- `AGENTS.md` —— Codex 工程与安全规则
+- `docs/ARCHITECTURE.md` —— 当前组件、资料流和目标模块边界
+- `docs/INTEGRATIONS.md` —— 外部系统契约、同步时机和失败规则
 - `README.md` —— 系统总览与工作流
 - `docs/updates/2026-07-17.md` —— SQLite 数据库壳落地记录
 - `docs/MAMBA_DATABASE_KEYS.md` —— Notion 数据库字段

@@ -15,6 +15,7 @@ function runner(runId, status, { running = false, instance = "wa_01" } = {}) {
 
 const ready = runner("run_ready", "READY");
 const stopped = runner("run_stopped", "STOPPED");
+const interrupted = runner("run_interrupted", "INTERRUPTED");
 const campaign = { listRunners: () => [ready] };
 
 assert.equal(conflictingRunner(campaign, ["wa_01"])?.state.runId, "run_ready", "normal Start must still respect an existing READY preview");
@@ -46,6 +47,28 @@ assert.equal(
   conflictingRunner({ listRunners: () => [stopped] }, ["wa_01"], "run_target", { ignoreReadyPreviews: true })?.state.runId,
   "run_stopped",
   "ignoreReadyPreviews must not silently bypass other blocking states",
+);
+
+assert.equal(
+  conflictingRunner(
+    { listRunners: () => [interrupted] },
+    ["wa_01"],
+    "run_target",
+    { ignoreReadyPreviews: true, ignorePausedRuns: true },
+  ),
+  null,
+  "an explicit resume/retry may use a sender held only by an older interrupted run",
+);
+
+assert.equal(
+  conflictingRunner(
+    { listRunners: () => [stopped, activelyRunning] },
+    ["wa_01"],
+    "run_target",
+    { ignoreReadyPreviews: true, ignorePausedRuns: true },
+  )?.state.runId,
+  "run_live",
+  "ignoring paused history must never bypass a genuinely running campaign",
 );
 
 assert.equal(
