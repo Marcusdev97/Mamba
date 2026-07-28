@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-07-27T21:11:00+08:00",
+  "updatedAt": "2026-07-28T12:12:30+08:00",
   "recordingStandard": [
     "为什么要改",
     "改了什么",
@@ -10,6 +10,43 @@
     "对应 Git commit"
   ],
   "changes": [
+    {
+      "id": "campaign-active-customers-sender-template-clarity",
+      "date": "2026-07-28",
+      "title": "发送台：刷新后仍看得见正在跑的客户",
+      "summary": "Flow 2-10 会持续显示本批正在排队、发送或已完成的客户，并可按原发送号码查看该号码负责的客户与模板；Flow 1 配置区也重新整理成清楚的步骤结构。",
+      "types": [
+        "UI",
+        "Structure",
+        "Safety"
+      ],
+      "status": "verified",
+      "area": "Campaign Center",
+      "commit": "fc475d5",
+      "reason": "旧画面的勾选只属于浏览器当下状态，刷新后会消失，操作员很难分辨哪些客户其实仍在背景运行；多电话号码同时 blasting 时，也不容易确认第二个号码负责哪些客户、使用哪个模板。Flow 1 的客户与配置表单同时缺少明确分组，右栏会被拉出大片空白。",
+      "before": {
+        "label": "以前",
+        "text": "刷新 Flow 2-10 后，正在跑的客户不再保持勾选，只能靠记忆判断；同一批使用多个号码时，无法快速按原发送号码核对客户、上次发送日期和模板。Flow 1 的客户来源、时间、模式与号码连续堆在两张等高卡片里。"
+      },
+      "after": {
+        "label": "现在",
+        "text": "当前 run 会从后台状态恢复客户勾选，并用排队中、发送中、已发送标签说明状态；运行中的选择会锁定，避免误操作。名单新增上次发送日期与原发送号码筛选，可直接看到每个号码的客户数量及对应模板。Flow 1 改成工作区摘要、客户群、发送时段、模式、发送号码与可收起名单检查等结构化区块。"
+      },
+      "impact": "只增强显示、筛选与操作保护，不改变实际发送节奏、客户分配或模板选择逻辑。操作员刷新页面后仍能辨认正在运行的客户，也能更容易审查不同 WhatsApp 号码各自负责的 blasting。",
+      "usage": "Flow 2-10 刷新后直接看客户左侧勾选与状态标签；需要核对某个号码时，在原发送号码筛选选择号码尾号，再查看该组客户、上次发送日期和模板。Flow 1 照常选择客户群与配置，名单检查默认收起，需要改名字时再展开。",
+      "verification": [
+        "Campaign schedule 与 Next Flow safety 自动测试通过",
+        "新增 sticky sender 测试，确认同一客户后续模板沿用原发送号码",
+        "Flow 1 与 Flow 2-10 页面内嵌脚本语法检查通过",
+        "Flow 1 已在实际 Campaign Center 以 1280px 桌面宽度检查，无重复 ID、无页面错误",
+        "确认只修改界面状态恢复、筛选与布局，没有触发或改变任何发送任务"
+      ],
+      "files": [
+        "campaign-app/console.html",
+        "campaign-app/next-flow.html",
+        "campaign-app/test_campaign_schedule.mjs"
+      ]
+    },
     {
       "id": "mamba-view-native-ios",
       "date": "2026-07-27",
