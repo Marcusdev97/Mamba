@@ -33,6 +33,16 @@ export function jobMessagePartCount(job = {}) {
     .filter((part) => part && (part.text || part.media)).length;
   return 1 + part2 + extras;
 }
+export function firstUnsentPartNumber(job = {}) {
+  if (!job?.part1?.sentAt) return 1;
+  if ((job.part2Text || job.part2Media) && !job?.part2?.sentAt) return 2;
+  const extras = Array.isArray(job.extraParts) ? job.extraParts : [];
+  for (let index = 0; index < extras.length; index += 1) {
+    const part = extras[index];
+    if (part && (part.text || part.media) && !part?.sentInfo?.sentAt) return index + 3;
+  }
+  return null;
+}
 export function isResumableJobStatus(status) {
   const value = String(status || "");
   return value === "QUEUED" || /^WAITING_PART\d+$/.test(value) || /^SENDING_PART\d+$/.test(value);
@@ -1001,6 +1011,21 @@ export class CampaignRunner {
     job.waitingGapSeconds = null;
   }
 
+  async pauseForManualPartConfirmation(job, nextPartNumber) {
+    if (!job?.manualContinueBetweenParts) return false;
+    const allowedThrough = Number(job.manualPartAllowedThrough || 0);
+    if (nextPartNumber <= allowedThrough) return false;
+    job.status = `WAITING_PART${nextPartNumber}`;
+    job.manualContinuePart = nextPartNumber;
+    job.waitingUntil = null;
+    job.waitingGapSeconds = null;
+    this.stopped = true;
+    this.state.status = "STOPPED";
+    await this.saveState();
+    this.showProgress(`⏸ ${job.lead.name} 的 Part ${nextPartNumber} 等待人工按「继续发送」。`);
+    return true;
+  }
+
   pastFixedEnd() {
     return this.state?.scheduleMode !== AUTO_SCHEDULE
       && Date.now() > new Date(this.state.endAt).getTime();
@@ -1111,6 +1136,7 @@ export class CampaignRunner {
       }
 
       if (hasPart2 && !job.part2?.sentAt) {
+        if (await this.pauseForManualPartConfirmation(job, 2)) return;
         await this.waitBetweenParts(job, 2);
         if (this.stopped) return;
 
@@ -1141,6 +1167,7 @@ export class CampaignRunner {
         const ep = extras[k];
         if (!ep || (!ep.text && !ep.media)) continue;
         if (ep.sentInfo?.sentAt) continue;
+        if (await this.pauseForManualPartConfirmation(job, k + 3)) return;
         await this.waitBetweenParts(job, k + 3);
         if (this.stopped) { await this.saveState(); return; }
         if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
@@ -1160,6 +1187,9 @@ export class CampaignRunner {
       }
 
       job.status = "SENT";
+      job.manualContinueBetweenParts = false;
+      job.manualPartAllowedThrough = null;
+      job.manualContinuePart = null;
       this.consecutiveFailures = 0;
       await this.saveState();
     } catch (error) {
@@ -1482,6 +1512,7 @@ export class CampaignRunner {
               part1At: job.part1?.sentAt ?? null,
               part2At: job.part2?.sentAt ?? null,
               extraPartsAt: Array.isArray(job.extraParts) ? job.extraParts.map((ep) => ep?.sentInfo?.sentAt ?? null) : [],
+              manualContinuePart: job.manualContinuePart ?? null,
               status: job.status,
               error: job.error,
               localCheckpoint: job.localCheckpoint ?? null,

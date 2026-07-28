@@ -1,5 +1,10 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
-import { isCampaignResumeCandidate, isRecipientNotOnWhatsAppError, isResumableJobStatus } from "../campaign_core.mjs";
+import {
+  firstUnsentPartNumber,
+  isCampaignResumeCandidate,
+  isRecipientNotOnWhatsAppError,
+  isResumableJobStatus,
+} from "../campaign_core.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
 import { applyModeDelivery } from "../lib/campaign-mode-service.mjs";
 import {
@@ -549,6 +554,12 @@ export function registerCampaignRoutes(router) {
 
     markNotionSyncWaiting(runner);
     const autoAdvance = markFlowAdvanceWaiting(runner);
+    for (const job of resumeJobs) {
+      const partNumber = Number(job.manualContinuePart || 0);
+      if (!partNumber) continue;
+      job.manualPartAllowedThrough = Math.max(Number(job.manualPartAllowedThrough || 0), partNumber);
+      job.manualContinuePart = null;
+    }
     runner.state.resumeSession = {
       startedAt: new Date().toISOString(),
       total: remaining,
@@ -585,6 +596,11 @@ export function registerCampaignRoutes(router) {
 
     const queued = runner.retryFailedOnly();
     if (!queued) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
+    for (const job of failedJobs) {
+      job.manualContinueBetweenParts = true;
+      job.manualPartAllowedThrough = firstUnsentPartNumber(job) || 1;
+      job.manualContinuePart = null;
+    }
     runner.pushLog(`Retry errors only: ${queued} 个发送异常已重新排队；无 WhatsApp/已触达/已跳过的客户不会重发。`);
     await writeCampaignLog(runtime, "info", "retry_failed_only", "Recipients with retryable send errors queued for retry.", {
       runId: runner.state?.runId ?? null,

@@ -79,6 +79,8 @@ assert.equal(responseStatus, 200, responseBody);
 assert.deepEqual(runner.state.resumeSession?.jobIds, ["failed-1"]);
 assert.equal(runner.state.resumeSession?.total, 1);
 assert.equal(failedJob.status, "QUEUED");
+assert.equal(failedJob.manualContinueBetweenParts, true);
+assert.equal(failedJob.manualPartAllowedThrough, 1, "retry approval must allow only the first unfinished Part");
 assert.equal(sentJob.status, "SENT", "successful customers must stay completed during retry");
 assert.match(runner.logs?.join("\n") || "", /本次进度从 0\/1 开始/);
 

@@ -6,6 +6,7 @@ import {
   campaignOutcomeSummary,
   campaignRestartDecision,
   campaignResumeSummary,
+  firstUnsentPartNumber,
   isCampaignResumeCandidate,
   isRecipientNotOnWhatsAppError,
   isResumableJobStatus,
@@ -221,6 +222,63 @@ function queuedAssignments(count) {
   assert.deepEqual(observedPart, [3], "A Part 3 resume must not wait for Part 2 again");
   assert.deepEqual(sent, ["P3"], "A Part 3 resume must send only the unfinished Part");
   assert.equal(job.status, "SENT");
+}
+
+{
+  const runner = new CampaignRunner({ config, env: {} });
+  const sent = [];
+  const job = {
+    id: "manual-part-retry",
+    status: "QUEUED",
+    scheduledAt: new Date(0).toISOString(),
+    instanceName: "wa_01",
+    lead: { name: "Manual Retry", phone: "60123456789" },
+    part1Text: "P1",
+    part2Text: "P2",
+    extraParts: [{ text: "P3", media: "", sentInfo: null }],
+    manualContinueBetweenParts: true,
+    manualPartAllowedThrough: 1,
+  };
+  runner.state = {
+    mode: "TEST",
+    status: "RUNNING",
+    scheduleMode: "AUTO",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [job],
+  };
+  runner.suppression = new Set();
+  runner.saveState = async () => {};
+  runner.waitBetweenParts = async () => {};
+  runner.sendMediaWithRetry = async (_instance, _phone, text) => {
+    sent.push(text);
+    return { sentAt: new Date().toISOString() };
+  };
+
+  assert.equal(firstUnsentPartNumber(job), 1);
+  await runner.processJob(job);
+  assert.deepEqual(sent, ["P1"], "manual recovery sends only the approved Part");
+  assert.equal(job.status, "WAITING_PART2");
+  assert.equal(job.manualContinuePart, 2);
+  assert.equal(runner.stopped, true);
+
+  runner.stopped = false;
+  job.manualPartAllowedThrough = 2;
+  job.manualContinuePart = null;
+  assert.equal(firstUnsentPartNumber(job), 2);
+  await runner.processJob(job);
+  assert.deepEqual(sent, ["P1", "P2"], "Part 2 waits for its own Continue confirmation");
+  assert.equal(job.status, "WAITING_PART3");
+  assert.equal(job.manualContinuePart, 3);
+
+  runner.stopped = false;
+  job.manualPartAllowedThrough = 3;
+  job.manualContinuePart = null;
+  assert.equal(firstUnsentPartNumber(job), 3);
+  await runner.processJob(job);
+  assert.deepEqual(sent, ["P1", "P2", "P3"]);
+  assert.equal(job.status, "SENT");
+  assert.equal(firstUnsentPartNumber(job), null);
 }
 
 {

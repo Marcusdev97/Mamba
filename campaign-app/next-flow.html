@@ -655,12 +655,17 @@ async function stopSend() {
   } catch (e) { toast("停止失败:" + e.message, true); }
 }
 
-async function resumeNextFlow(count) {
+async function resumeNextFlow(count, partNumber = 0) {
   if (!count) return;
-  if (!confirm(`继续发送剩余 ${count} 位客户？已经成功的客户和已经成功的 Part 不会重发；若客户已回复，后续 Part 会取消。`)) return;
+  const question = partNumber
+    ? `确认发送 Part ${partNumber}？已经成功的 Part 不会重发；若客户已回复，后续 Part 会取消。`
+    : `继续发送剩余 ${count} 位客户？已经成功的客户和已经成功的 Part 不会重发；若客户已回复，后续 Part 会取消。`;
+  if (!confirm(question)) return;
   try {
     await api("/api/resume", { autoAdvance: true, runId: activeNextRunId });
-    toast(`已继续剩余 ${count} 位；本次进度会从 0/${count} 单独计算。`);
+    toast(partNumber
+      ? `已确认继续 Part ${partNumber}；发送前仍会检查客户回复。`
+      : `已继续剩余 ${count} 位；本次进度会从 0/${count} 单独计算。`);
     setTimeout(pollStatus, 1200);
   } catch (e) { toast("继续发送失败:" + e.message, true); }
 }
@@ -741,7 +746,11 @@ async function pollStatus() {
     const pendingNow = Number(outcomes.pending || 0) + checkpointPending;
     const historyLabel = `${outcomes.processed || 0}/${outcomes.total || a.length}`;
     const resumeProgress = s.state.resumeProgress;
-    const resumeLabel = resumeProgress
+    const manualPartJob = a.find((job) => Number(job.manualContinuePart || 0) > 1);
+    const manualPartNumber = Number(manualPartJob?.manualContinuePart || 0);
+    const resumeLabel = manualPartNumber
+      ? `Part ${manualPartNumber} 等待你的确认；已经成功的 Part 不会重发`
+      : resumeProgress
       ? `本次继续 ${resumeProgress.processed || 0}/${resumeProgress.total || 0} · 尚余 ${resumeProgress.remaining || 0}`
       : running && pendingNow
         ? `本轮正在处理 ${pendingNow} 位；不需要重复按继续`
@@ -750,7 +759,8 @@ async function pollStatus() {
           : "当前没有待继续客户";
     const recent = log.slice(-10).reverse()
       .map((e) => `<div class="logline"><span class="muted">${esc(hhmmss(e.time))}</span> ${esc(e.message)}</div>`).join("");
-    const head = running ? (resumeProgress ? "🟢 继续发送中" : "🟢 本轮发送中")
+    const head = manualPartNumber && !running ? `⏸ 等待继续 Part ${manualPartNumber}`
+      : running ? (resumeProgress ? "🟢 继续发送中" : "🟢 本轮发送中")
       : !isFlowRun ? "✅ 完成"
       : advanceProblem && localAdvanceSaved ? `✅ 本机进度已保存 · ⚠️ Notion ${advanceStatus === "PARTIAL" ? "只完成一部分" : "等待重试"}`
       : advanceProblem ? `⚠️ 本机/Notion 推进${advanceStatus === "PARTIAL" ? "只完成一部分" : "失败"}: ${esc(s.state.advanceError || "请查看 System Logs")}`
@@ -764,7 +774,7 @@ async function pollStatus() {
       ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="retryFailedNextFlow(${failed})">检查后继续异常 (${failed})</button>`
       : "";
     const resumeBtn = !running && pendingNow
-      ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="resumeNextFlow(${pendingNow})">▶ 继续发送 (${pendingNow})</button>`
+      ? ` <button class="primary" style="padding:3px 12px; margin-left:10px;" onclick="resumeNextFlow(${pendingNow}, ${manualPartNumber})">${manualPartNumber ? `▶ 继续 Part ${manualPartNumber}` : `▶ 继续发送 (${pendingNow})`}</button>`
       : "";
     box.innerHTML =
       `<div class="statushead">${head} · ${running ? "本轮" : "上一轮"} ${historyLabel} 已处理${failed ? ` · ❌ ${failed} 个发送异常` : ""}${stopBtn}${resumeBtn}${retryBtn}</div>` +
