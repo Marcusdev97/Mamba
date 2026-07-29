@@ -145,4 +145,37 @@ assert.equal(explainNotionReplyError(new Error("fetch failed")).code, "NOTION_NE
   await fs.rm(root, { recursive: true, force: true });
 }
 
+// A number explicitly marked as private must leave the Notion queue immediately.
+// Its conversation is already stored by the tracker; this queue owns only the
+// external mirror and therefore may safely remove its pending sync work.
+{
+  let current = new Date("2026-07-16T10:00:00.000Z");
+  const { root, reliability } = await makeReliability("reply-private", () => current);
+  let ignored = false;
+  let lookups = 0;
+  const notion = {
+    enabled: true,
+    async findLeadForReply() { lookups += 1; return null; },
+    async upsertLeadReply() { throw new Error("private contact must not be upserted"); },
+  };
+  const queue = createNotionReplyQueueService({
+    notion,
+    reliability,
+    clock: () => current,
+    shouldSyncPhone: async () => !ignored,
+    onLog: () => {},
+  });
+  await queue.submit(event("msg-private-1", "60198619311"));
+  assert.equal(reliability.snapshot().pendingCount, 1);
+  assert.equal(lookups, 1);
+  ignored = true;
+  await queue.retryPending();
+  assert.equal(reliability.snapshot().pendingCount, 0, "marking a contact private clears old Notion retry work");
+  assert.equal(lookups, 1, "private contacts must not query Notion again");
+  const result = await queue.submit(event("msg-private-2", "60198619311"));
+  assert.equal(result.reason, "work_inbox_ignore");
+  assert.equal(reliability.snapshot().pendingCount, 0, "new private replies stay out of the queue");
+  await fs.rm(root, { recursive: true, force: true });
+}
+
 console.log("✅ all Notion reply-queue tests passed");

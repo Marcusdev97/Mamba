@@ -44,8 +44,9 @@ import { collectMessages, describeMessage, inboundEvent, resolvePhone, senderFro
 import { makeTelegram, parseUpdate } from "./telegram.mjs";
 import { makeHub } from "./telegram_hub.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
+import { createWorkInboxIgnoreService } from "./lib/work-inbox-ignore-service.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
-import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
+import { selectLocalWebhookInstances } from "./lib/device-sender-policy.mjs";
 import {
   decideAction, logRouteOf, detectLanguage, pickModel, buildPrompt,
   draftCard, draftButtons, parseCallbackData, logActionOf, parseMediaTags,
@@ -80,7 +81,6 @@ const api = makeApi(env);
 // 本盘资料和 VERIFIED FACTS 挤到 prompt 后面，大脑开始拿历史里的旧数字乱报价。
 const HISTORY_LIMIT = Number(env.BRAIN_HISTORY_LIMIT ?? 15);
 const HISTORY_DAYS = Number(env.BRAIN_HISTORY_DAYS ?? 14);
-const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
 // Customer alerts and approval drafts belong in the Telegram Inbox. Keep the
 // legacy chat as a fallback for older single-chat installations only.
 const tg = makeTelegram({
@@ -91,7 +91,10 @@ const tg = makeTelegram({
 const hub = makeHub(env);
 const telegramFilters = createTelegramFilterService({
   rootDir: paths.rootDir,
-  getConnectedPhones: async () => filterInstancesForDevice(await listInstances(api), deviceSenderPolicy).map((item) => item.number),
+  getConnectedPhones: async () => selectLocalWebhookInstances(await listInstances(api)).map((item) => item.number),
+});
+const workInboxIgnore = createWorkInboxIgnoreService({
+  rootDir: paths.rootDir,
 });
 let allowedInstanceNames = new Set();
 
@@ -566,6 +569,18 @@ async function pushDraft(card, pendingId, project = null, phone = null) {
 // ---------- the pipeline ----------
 
 async function handleEvent(event) {
+  const privateContact = await workInboxIgnore.match(event.phone);
+  if (privateContact.ignored) {
+    console.log(`[work-inbox-ignore] brain skipped private contact phone=…${String(event.phone).slice(-4)}`);
+    await appendJsonl(brainLogPath, {
+      at: new Date().toISOString(),
+      phone: event.phone,
+      replyText: event.text,
+      action: "Private Contact — Local Only",
+    });
+    return;
+  }
+
   // 1) global suppression — STOP means stop, everywhere, forever.
   const { set } = loadSuppressionSync();
   if (isSuppressed(event.phone, set) || sessionStops.has(event.phone)) {
@@ -799,8 +814,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/webhook/evolution") {
       const payload = await readBody(req);
       const payloadInstance = senderFromPayload(payload);
-      if (deviceSenderPolicy.configured && (!payloadInstance || !allowedInstanceNames.has(payloadInstance))) {
-        console.log(`[DEVICE_SENDER_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; expected phone ${deviceSenderPolicy.expectedSenderPhone}.`);
+      if (!payloadInstance || !allowedInstanceNames.has(payloadInstance)) {
+        console.log(`[LOCAL_WEBHOOK_SCOPE_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; instance is not OPEN on this Evolution server.`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, blocked: true, reason: "DEVICE_SENDER_BLOCKED" }));
         return;
@@ -851,7 +866,7 @@ server.listen(PORT, HOST, async () => {
   if (!skipWebhookSetup) {
     try {
       const instances = await listInstances(api);
-      const open = filterInstancesForDevice(instances.filter((i) => i.status === "OPEN"), deviceSenderPolicy);
+      const open = selectLocalWebhookInstances(instances);
       allowedInstanceNames = new Set(open.map((item) => item.name));
       for (const item of open) await setInstanceWebhook(item.name);
       console.log(open.length ? `Listening:  ${open.map((i) => i.name).join(", ")}` : "No OPEN WhatsApp instances — start one, then restart.");
@@ -861,7 +876,7 @@ server.listen(PORT, HOST, async () => {
   } else {
     try {
       const instances = await listInstances(api);
-      const open = filterInstancesForDevice(instances.filter((i) => i.status === "OPEN"), deviceSenderPolicy);
+      const open = selectLocalWebhookInstances(instances);
       allowedInstanceNames = new Set(open.map((item) => item.name));
     } catch (error) {
       console.log(`Device sender lock refresh failed: ${error.message}`);

@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { backoffMinutes, createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
+import vm from "node:vm";
+import { backoffMinutes, createNotionOutboxService, summarizeFailedCampaignRun } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker, shouldRunNow, klMinutes } from "./lib/notion-outbox-worker.mjs";
 import { createSqliteCli, findSqliteCli } from "./lib/sqlite-cli.mjs";
 
@@ -36,6 +37,24 @@ CREATE TABLE sync_jobs (
 
 let now = new Date("2026-07-22T10:00:00.000Z");
 const outbox = createNotionOutboxService({ dataDir, clock: () => now, maxAttempts: 3 });
+
+assert.deepEqual(summarizeFailedCampaignRun({
+  flowLabel: "Flow 2 - Layout",
+  project: "Binastra",
+  assignments: [
+    { lead: { phone: "60111111111" } },
+    { lead: { phone: "60122222222" } },
+    { lead: { phone: "60111111111" } },
+  ],
+  advanceSummary: { flowMismatch: 1, skippedSafety: 1, notFound: 0 },
+}), {
+  flowLabel: "Flow 2 - Layout",
+  project: "Binastra",
+  phoneCount: 2,
+  affectedCount: 2,
+  phoneSamples: ["60111111111", "60122222222"],
+  advanceSummary: { flowMismatch: 1, skippedSafety: 1, notFound: 0 },
+});
 
 // --- 排队 + 幂等 ---
 const first = await outbox.enqueue({
@@ -70,6 +89,13 @@ assert.equal((await outbox.snapshot()).pending, 0);
 
 // --- 推失败 -> 退避重试，不是丢掉 ---
 await outbox.enqueue({ entityType: "campaign_run", entityId: "run_B", idempotencyKey: "k_B", payload: { runId: "run_B" } });
+await fs.mkdir(path.join(dataDir, "runs"), { recursive: true });
+await fs.writeFile(path.join(dataDir, "runs", "run_B.json"), JSON.stringify({
+  flowLabel: "Flow 4 - Package",
+  project: "Binastra",
+  assignments: [{ lead: { phone: "60133333333" } }],
+  advanceSummary: { flowMismatch: 1 },
+}));
 report = await outbox.drain(async () => { throw new Error("Notion timeout"); });
 assert.equal(report.retried, 1);
 assert.equal(report.failed, 0);
@@ -93,6 +119,9 @@ assert.equal(snap.failed, 1);
 assert.equal(snap.retry, 0);
 assert.equal((await outbox.due()).length, 0, "FAILED 不该每晚被捞出来洗版");
 assert.equal(snap.failedSamples[0].entityId, "run_B");
+assert.equal(snap.failedSamples[0].jobId > 0, true);
+assert.equal(snap.failedSamples[0].flowLabel, "Flow 4 - Package");
+assert.deepEqual(snap.failedSamples[0].phoneSamples, ["60133333333"]);
 assert.match(snap.failedSamples[0].lastErrorMessage, /still down/);
 
 // --- 人工救回 ---
@@ -118,6 +147,12 @@ assert.equal((await outbox.due()).length, 1, "卡住的要回到队列");
 assert.equal(backoffMinutes(1), 1);
 assert.equal(backoffMinutes(3), 15);
 assert.equal(backoffMinutes(99), 240, "退避有上限，不会无限拉长");
+
+const sendHtml = await fs.readFile(new URL("./send.html", import.meta.url), "utf8");
+const sendScript = sendHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
+assert.doesNotThrow(() => new vm.Script(sendScript), "Send page inline JavaScript must parse");
+assert.match(sendHtml, /function failedOutboxDetail\(queue\)/);
+assert.match(sendHtml, /Task \$\{failure\.jobId\}/);
 
 // --- 排程：每晚一次，错过整点还补得到，同一天不重复 ---
 const kl = (iso) => new Date(iso);

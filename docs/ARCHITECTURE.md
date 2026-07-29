@@ -161,6 +161,8 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 - 名单必须来自明确的 Project 和 Lead Group。
 - 必须确认 opt-in。
 - 发送前必须经过 suppression、resend guard 和 sender ownership。
+- Campaign sender policy 只限制出站发送；Tracker／Brain 必须接收本机 Evolution
+  上所有 OPEN instances 的入站 webhook，避免辅助号码回复遗失。
 - 运行期间不得被维护任务重启、补发或改写状态。
 - 状态不明确的 WhatsApp 请求不得自动重发。
 
@@ -174,15 +176,26 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 | 人工维护的模板／Knowledge | Notion | 拉入本机缓存后供运行读取 |
 | 当前 run state | `campaign-data/runs` + SQLite | 用于恢复和诊断 |
 | TEST 收件人 | `.env` 的 `TEST_LEADS` | Settings 是编辑界面 |
+| 私人联系人名单 | `campaign-data/work_inbox_ignore.json` | 本机工作 Inbox 边界，不等于 suppression |
 | Secret | `evolution-pilot/.env` | 不进入 Git |
 
 不要让同一种资料同时拥有两个可以互相覆盖的真相源。
+
+私人联系人名单与 Telegram Filter、STOP／Suppression 是三个不同规则：
+
+- Telegram Filter 只关闭 Telegram 通知，Tracker 与 Notion 行为不变。
+- 私人联系人仍保留本机消息证据，但不进入 ChatRoom、Sales Brain、STOP 判断或
+  Notion 客户回复同步。
+- STOP／Suppression 才会阻止 Campaign 发送；把朋友加入私人联系人不会改变
+  Campaign eligibility，也不会删除历史对话。
 
 ChatRoom／Customer Desk 的人工 Quick Remark 属于操作员即时决定，不等待
 Campaign 收尾：先写 SQLite，再把相同的 Status、Sequence、Next Action 与
 Follow Up 状态直接镜像到 Notion。`Do Not Contact` 还必须在 Notion 请求前
 写入本机全局 suppression；`Not Interested` 只停止该客户的自动 Flow，不等于
-全局 STOP。
+全局 STOP。若客户只有本机 Project Lead、尚无 Notion page，Quick Remark 仍须
+安全写入 SQLite 并明确回报 `notionSynced: false`；不得因为缺少 Notion page 而
+丢掉操作员的决定，也不得擅自建立 Notion 客户。
 
 ChatRoom 也允许操作员为通话后的号码建立 manual customer。操作员必须先选择
 当前 WhatsApp sender，再选择客户来源：

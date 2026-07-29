@@ -532,9 +532,25 @@ function setSyncDockStage(kind, { state = "", title, count, detail, current = 0,
   document.getElementById(`${kind}Title`).textContent = title;
   document.getElementById(`${kind}Count`).textContent = count;
   document.getElementById(`${kind}Detail`).textContent = detail;
+  stage.title = detail || title || "";
   document.getElementById(`${kind}Icon`).textContent = icon || (state === "done" ? "✓" : state === "failed" ? "!" : kind === "sqlite" ? "1" : "2");
   const percent = total > 0 ? Math.max(0, Math.min(100, Math.round(Number(current || 0) / Number(total) * 100))) : (state === "done" ? 100 : 0);
   document.getElementById(`${kind}Fill`).style.width = `${percent}%`;
+}
+
+function failedOutboxDetail(queue) {
+  const failures = Array.isArray(queue?.failedSamples) ? queue.failedSamples : [];
+  if (!failures.length) return "发送资料仍在 SQLite；失败任务没有号码详情，请到 System Logs 检查。";
+  return failures.slice(0, 2).map((failure) => {
+    const task = failure.jobId ? `Task ${failure.jobId}` : "失败任务";
+    const flow = failure.flowLabel ? ` · ${failure.flowLabel}` : "";
+    const phones = (failure.phoneSamples || []).slice(0, 3).join("、");
+    const total = Number(failure.affectedCount || failure.phoneCount || 0);
+    const phoneText = phones
+      ? ` · ${phones}${total > 3 ? ` 等 ${total} 个号码` : ""}`
+      : " · 暂无号码预览";
+    return `${task}${flow}${phoneText}`;
+  }).join("；");
 }
 
 function renderSyncDock(campaignStatus = latestCampaignStatus, outboxStatus = latestOutboxStatus) {
@@ -603,7 +619,12 @@ function renderSyncDock(campaignStatus = latestCampaignStatus, outboxStatus = la
       current, total, icon: "↻",
     });
   } else if (Number(queue.failed || 0)) {
-    setSyncDockStage("notion", { state: "failed", title: "Notion 有失败项目", count: `${queue.failed} 笔`, detail: "发送资料仍在 SQLite；可重试后按「立即同步」" });
+    setSyncDockStage("notion", {
+      state: "failed",
+      title: "Notion 有失败项目",
+      count: `${queue.failed} 笔`,
+      detail: failedOutboxDetail(queue),
+    });
   } else if (waiting) {
     const first = queue.waitingFlows?.[0];
     setSyncDockStage("notion", {

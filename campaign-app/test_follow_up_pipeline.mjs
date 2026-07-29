@@ -51,6 +51,26 @@ assert.equal(called["Follow Up At"].date.start, "2026-07-14T02:00:00.000Z");
 const customDate = actionPatch(schema, "send_price", { followUpAt: "2026-07-20T15:30:00+08:00" }, "2026-07-13T02:00:00.000Z");
 assert.equal(customDate["Follow Up At"].date.start, "2026-07-20T07:30:00.000Z");
 
+const prioritized = actionPatch(schema, "follow_up", {
+  followUpAt: "2026-07-20T15:30:00+08:00",
+  priority: "HIGH",
+  note: "Call after salary day",
+}, "2026-07-13T02:00:00.000Z");
+assert.equal(prioritized.Priority.select.name, "HIGH");
+assert.equal(prioritized["Sales Notes"].rich_text[0].text.content, "Call after salary day");
+
+const appointmentPlan = actionPatch(schema, "book_appointment", {
+  followUpAt: "2026-07-21T10:00:00+08:00",
+  priority: "MED",
+}, "2026-07-13T02:00:00.000Z");
+assert.equal(appointmentPlan["Follow Up At"].date.start, "2026-07-21T02:00:00.000Z");
+assert.equal(appointmentPlan.Priority.select.name, "MED");
+
+assert.throws(
+  () => actionPatch(schema, "follow_up", { priority: "urgent" }),
+  /Priority/,
+);
+
 const done = actionPatch(schema, "done", {}, "2026-07-13T02:00:00.000Z");
 assert.equal(done["Follow Up At"].date, null);
 

@@ -13,7 +13,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
-import { normalizePhone, describeMessage, resolvePhone, resolvePhoneWithLid, lidPhonePair, collectMessages, senderFromPayload } from "./reply_intake.mjs";
+import { normalizePhone, describeMessage, messageMediaKind, resolvePhone, resolvePhoneWithLid, lidPhonePair, collectMessages, senderFromPayload } from "./reply_intake.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
 import { addLocalStop } from "./suppression.mjs";
@@ -21,10 +21,11 @@ import { makeHub } from "./telegram_hub.mjs";
 import { resolveProjectLocal } from "./knowledge_layer.mjs";
 import { resolveInboundProject } from "./lib/inbound-project-resolver.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
+import { createWorkInboxIgnoreService } from "./lib/work-inbox-ignore-service.mjs";
 import { createTrackerReliabilityService } from "./lib/tracker-reliability-service.mjs";
 import { createNotionReplyQueueService } from "./lib/notion-reply-queue-service.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
-import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
+import { selectLocalWebhookInstances } from "./lib/device-sender-policy.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createLidMapService } from "./lib/lid-map-service.mjs";
@@ -45,11 +46,13 @@ const csvPath = path.join(trackerDir, "replies.csv");
 
 const env = await loadEnv();
 const deviceIdentity = await loadDeviceIdentity(env, { dataDir: paths.dataDir });
-const deviceSenderPolicy = await loadDeviceSenderPolicy({ dataDir: paths.dataDir, env });
 const api = makeApi(env);
 const telegramFilters = createTelegramFilterService({
   rootDir: paths.rootDir,
-  getConnectedPhones: async () => filterInstancesForDevice(await listInstances(api), deviceSenderPolicy).map((item) => item.number),
+  getConnectedPhones: async () => selectLocalWebhookInstances(await listInstances(api)).map((item) => item.number),
+});
+const workInboxIgnore = createWorkInboxIgnoreService({
+  rootDir: paths.rootDir,
 });
 const notion = await createNotionSync({
   env,
@@ -71,6 +74,7 @@ const lidMap = createLidMapService({ dataDir: paths.dataDir });
 const notionReplyQueue = createNotionReplyQueueService({
   notion,
   reliability,
+  shouldSyncPhone: async (phone) => !(await workInboxIgnore.match(phone)).ignored,
   onLog: (message) => console.log(message),
   onIssue: (issue) => trackerSystemLogs.write({
     level: issue.level,
@@ -295,6 +299,20 @@ async function saveEvent(event) {
     }).catch(() => {});
   });
 
+  // Private contacts still keep a local audit trail, but must not enter sales
+  // automation. This check is deliberately before STOP, Telegram and Notion:
+  // a friend's ordinary message must never change campaign suppression state.
+  const privateContact = await workInboxIgnore.match(event.phone);
+  if (privateContact.ignored) {
+    await reliability.heartbeat({
+      startedAt,
+      lastReplyAt: event.receivedAt,
+      webhookMode: skipWebhookSetup ? "forwarded" : "direct",
+    }).catch((error) => console.log(`Tracker heartbeat write failed: ${error.message}`));
+    console.log(`[work-inbox-ignore] tracked locally only phone=…${String(event.phone).slice(-4)}`);
+    return;
+  }
+
   lastEvents.unshift(event);
   lastEvents = lastEvents.slice(0, 80);
   countEvent(event);
@@ -376,6 +394,7 @@ function outboundFromPhone(payload, message) {
   return {
     phone,
     text,
+    mediaKind: messageMediaKind(message),
     instanceName: senderFromPayload(payload),
     messageId: key.id ?? "",
     sentAt: new Date(timestamp < 100000000000 ? timestamp * 1000 : timestamp).toISOString(),
@@ -425,14 +444,15 @@ function eventFromMessage(payload, message) {
     stopFlag: category.stopFlag,
     suggestedReply: category.suggestedReply,
     text,
+    mediaKind: messageMediaKind(message),
     adLead: isAdLead(text),
   };
 }
 
 async function processWebhook(payload) {
   const payloadInstance = senderFromPayload(payload);
-  if (deviceSenderPolicy.configured && (!payloadInstance || !allowedInstanceNames.has(payloadInstance))) {
-    console.log(`[DEVICE_SENDER_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; expected phone ${deviceSenderPolicy.expectedSenderPhone}.`);
+  if (!payloadInstance || !allowedInstanceNames.has(payloadInstance)) {
+    console.log(`[LOCAL_WEBHOOK_SCOPE_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; instance is not OPEN on this Evolution server.`);
     return [];
   }
   await refreshLeadIndex();
@@ -498,7 +518,7 @@ async function setInstanceWebhook(instanceName) {
 
 async function configureWebhookForOpenInstances() {
   const instances = await listInstances(api);
-  const open = filterInstancesForDevice(instances.filter((item) => item.status === "OPEN"), deviceSenderPolicy);
+  const open = selectLocalWebhookInstances(instances);
   allowedInstanceNames = new Set(open.map((item) => item.name));
   for (const item of open) {
     await setInstanceWebhook(item.name);
@@ -509,7 +529,7 @@ async function configureWebhookForOpenInstances() {
 async function refreshWebhookConnection() {
   if (skipWebhookSetup) {
     const instances = await listInstances(api);
-    const open = filterInstancesForDevice(instances.filter((item) => item.status === "OPEN"), deviceSenderPolicy);
+    const open = selectLocalWebhookInstances(instances);
     allowedInstanceNames = new Set(open.map((item) => item.name));
     lastWebhookRefreshAt = new Date().toISOString();
     lastWebhookError = null;
@@ -765,6 +785,7 @@ await reliability.init();
 const retryCutoff = Date.now() - 15 * 60 * 1000;
 for (const event of lastEvents) {
   if (!event.adLead && new Date(event.receivedAt || 0).getTime() >= retryCutoff) {
+    if ((await workInboxIgnore.match(event.phone)).ignored) continue;
     const alreadyQueued = reliability.values().some((item) => String(item.event?.id) === String(event.id));
     if (!alreadyQueued) await reliability.enqueue(event, { attempts: 0 });
   }
@@ -946,10 +967,10 @@ server.listen(PORT, HOST, async () => {
   try {
     if (skipWebhookSetup) {
       const instances = await listInstances(api);
-      const open = filterInstancesForDevice(instances.filter((item) => item.status === "OPEN"), deviceSenderPolicy);
+      const open = selectLocalWebhookInstances(instances);
       allowedInstanceNames = new Set(open.map((item) => item.name));
       console.log("Webhook auto-setup skipped for this run.");
-      if (deviceSenderPolicy.configured) console.log(`Device sender lock: ${deviceSenderPolicy.expectedSenderPhone} (${open.map((item) => item.name).join(", ") || "not OPEN"})`);
+      console.log(`Local inbound scope: ${open.map((item) => item.name).join(", ") || "no OPEN instances"}`);
       console.log("\nWaiting for customer replies. Press Control+C to stop.");
       return;
     }

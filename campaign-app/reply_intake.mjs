@@ -61,6 +61,16 @@ export function extractText(message) {
   ].find((value) => typeof value === "string" && value.trim())?.trim() ?? "";
 }
 
+export function messageMediaKind(message) {
+  const body = message?.message ?? message;
+  if (!body || typeof body !== "object") return "";
+  if (body.imageMessage) return "image";
+  if (body.videoMessage) return "video";
+  if (body.stickerMessage) return "sticker";
+  if (body.documentMessage) return "document";
+  return "";
+}
+
 // Never empty for a real inbound message: media replies get a readable label
 // instead of being dropped (voice notes, images, stickers, reactions, etc.).
 export function describeMessage(message) {
@@ -182,5 +192,6 @@ export function inboundEvent(payload, message) {
     pushName: message.pushName ?? null,
     phone,
     text,
+    mediaKind: messageMediaKind(message),
   };
 }

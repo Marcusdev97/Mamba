@@ -30,6 +30,7 @@ import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterRecordsForDevice } from "./lib/device-scope.mjs";
 import { includeLocalInstancePhones, loadDeviceSenderPolicy, nextDeviceInstanceName } from "./lib/device-sender-policy.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
+import { createWorkInboxIgnoreService } from "./lib/work-inbox-ignore-service.mjs";
 import { createNotionService } from "./lib/notion-service.mjs";
 import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.mjs";
 import { createProjectService } from "./lib/project-service.mjs";
@@ -368,6 +369,9 @@ const telegramFilterService = createTelegramFilterService({
   rootDir: paths.rootDir,
   getConnectedPhones: async () => (await deviceListInstances()).map((item) => item.number),
 });
+const workInboxIgnoreService = createWorkInboxIgnoreService({
+  rootDir: paths.rootDir,
+});
 const dailyCampaignService = createDailyCampaignService({
   rootDir: paths.rootDir,
   flowSequence: FLOW_SEQUENCE,
@@ -427,6 +431,7 @@ const runtime = await loadRuntime({
   device: deviceIdentity,
   telegramHub,
   telegramFilters: telegramFilterService,
+  workInboxIgnore: workInboxIgnoreService,
   replyServices: replyServiceManager,
   dailyCampaign: dailyCampaignService,
   remoteMamba: remoteMambaService,

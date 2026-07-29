@@ -1,5 +1,5 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
-import { loadSuppressionSync } from "../suppression.mjs";
+import { loadSuppressionSync, normalizePhone } from "../suppression.mjs";
 
 // 聊天室（本机对话纪录）。跟 /api/conversations（读 Notion 的 lead 状态板）不同 ——
 // 这里读的是本机 SQLite 里存的实际来回讯息：客户讲的 + 我们发的。
@@ -40,9 +40,28 @@ export function registerInboxRoutes(router) {
     // STOP 有两个来源：contacts.stop_flag（服务层已排）+ 全域抑制名单（这里排）。
     // 抑制名单才是真正会挡发送的那份，聊天室也不该显示。
     const { set: suppressed } = loadSuppressionSync();
-    const threads = (await inbox.inboxThreads({ instance: instances, limit: 500, filter }))
-      .filter((t) => !suppressed.has(String(t.phone)));
-    json(res, 200, { ok: true, instance, instances, filter, count: threads.length, threads });
+    const personalPhones = runtime.workInboxIgnore
+      ? new Set((await runtime.workInboxIgnore.snapshot()).entries.map((item) => item.phone))
+      : new Set();
+    const visibleThreads = [];
+    let hiddenPersonalCount = 0;
+    for (const thread of await inbox.inboxThreads({ instance: instances, limit: 500, filter })) {
+      if (suppressed.has(String(thread.phone))) continue;
+      if (personalPhones.has(normalizePhone(thread.phone))) {
+        hiddenPersonalCount += 1;
+        continue;
+      }
+      visibleThreads.push(thread);
+    }
+    json(res, 200, {
+      ok: true,
+      instance,
+      instances,
+      filter,
+      count: visibleThreads.length,
+      hiddenPersonalCount,
+      threads: visibleThreads,
+    });
   });
 
   // 一个客户的完整对话（来回交错，由旧到新）。
@@ -51,8 +70,24 @@ export function registerInboxRoutes(router) {
     const url = new URL(req.url, "http://mamba.local");
     const phone = url.searchParams.get("phone") || "";
     if (!phone) throw httpError(400, "缺少客户号码。", "INBOX_PHONE_REQUIRED");
+    if (runtime.workInboxIgnore && (await runtime.workInboxIgnore.match(phone)).ignored) {
+      throw httpError(404, "这个号码已经列为私人联系人，不显示在工作 ChatRoom。", "INBOX_PRIVATE_CONTACT");
+    }
     const thread = await inbox.fullThread(phone, { limit: 800 });
-    json(res, 200, { ok: true, ...thread });
+    const normalizedPhone = normalizePhone(phone);
+    const localLeadCache = await runtime.localDatabase?.readLeadCache?.().catch(() => ({ records: [] }));
+    const matches = (localLeadCache?.records || []).filter((record) => normalizePhone(record?.phone) === normalizedPhone);
+    const localLead = matches.length === 1 ? matches[0] : null;
+    json(res, 200, {
+      ok: true,
+      ...thread,
+      contact: {
+        ...thread.contact,
+        dispositionId: localLead?.id || "",
+        projectCode: localLead?.projectCode || "",
+        dispositionStatus: localLead?.status || "",
+      },
+    });
   });
 
   // ---------- 互动：手动回复 / 发图 / 看客户的图 ----------
@@ -157,7 +192,8 @@ export function registerInboxRoutes(router) {
     json(res, 200, { ok: true, ...runtime.historySync.state() });
   });
 
-  // 按需抓客户发来的一张图。找不到就回 available:false，前端显示占位。
+  // 媒体先按需写入本机缓存，再由独立 endpoint 以 binary 方式提供。
+  // 避免把大型 base64 塞进 ChatRoom DOM，影片也不会在未点击时下载。
   router.get("/api/inbox/media", async (req, res, runtime) => {
     const send = requireSend(runtime);
     const url = new URL(req.url, "http://mamba.local");
@@ -165,7 +201,22 @@ export function registerInboxRoutes(router) {
       instance: url.searchParams.get("instance") || "",
       phone: url.searchParams.get("phone") || "",
       messageId: url.searchParams.get("messageId") || "",
+      direction: url.searchParams.get("direction") || "inbound",
     });
     json(res, 200, { ok: true, ...result });
+  });
+
+  router.get("/api/inbox/media/file", async (req, res, runtime) => {
+    const send = requireSend(runtime);
+    const url = new URL(req.url, "http://mamba.local");
+    const media = await send.readStoredMedia(url.searchParams.get("fileName") || "");
+    res.writeHead(200, {
+      "Content-Type": media.mime,
+      "Content-Length": media.buffer.length,
+      "Cache-Control": "private, max-age=86400",
+      "Content-Disposition": `inline; filename="${media.fileName}"`,
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.end(media.buffer);
   });
 }

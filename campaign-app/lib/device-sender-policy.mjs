@@ -66,6 +66,17 @@ export function filterInstancesForDevice(instances, policy) {
   return (instances || []).filter((item) => instanceSenderPhone(item) === policy.expectedSenderPhone);
 }
 
+// Inbound webhook ownership is intentionally broader than Campaign sending.
+// Evolution is running on this computer, so every OPEN local instance must feed
+// the Tracker/Brain. The primary sender policy still controls outbound Campaign
+// selection elsewhere; applying it here would silently lose replies from a
+// secondary local number such as wa_03.
+export function selectLocalWebhookInstances(instances = []) {
+  return (instances || []).filter((item) =>
+    clean(item?.name)
+    && String(item?.status || "").trim().toUpperCase() === "OPEN");
+}
+
 function slug(value) {
   return clean(value).toLowerCase().replace(/\.local$/i, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28);
 }

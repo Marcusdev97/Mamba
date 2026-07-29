@@ -28,6 +28,7 @@
 - QR login 和 connection health
 - 文字／图片发送
 - 入站 webhook 和历史消息读取
+- ChatRoom 图片／影片按需读取与本机媒体缓存
 
 ### 代码入口
 
@@ -46,8 +47,15 @@ WhatsApp → Evolution webhook/history → Mamba
 ### 安全边界
 
 - 只有 OPEN 且属于本机 device policy 的 sender 可以发送。
+- 入站 webhook 必须覆盖这台电脑 Evolution 上所有 OPEN instances；不得使用
+  Campaign 的 primary sender filter 排除 `wa_03` 等本机辅助号码。
+- 入站范围与发送权限分离：接收所有本机 OPEN 号码不代表 Campaign 可以任选号码发送。
 - 发送前必须完成 recipient normalization。
 - Timeout 后状态不明确时，不得自动重发。
+- ChatRoom 不得把整段对话的 base64 媒体一次塞进页面：图片只在接近可视区时
+  读取缩图，影片必须由操作员点击后才读取，且禁止 autoplay。
+- Evolution 媒体先写入 `campaign-data/inbox-media`，浏览器再从受限的本机 binary
+  endpoint 读取；档名必须经过路径验证，不能接受任意 filesystem path。
 - ChatRoom 新号码只可使用当前 Device 上 OPEN 的 sender；第一次发送必须由
   操作员再次确认，且发送结果写入本机 conversation ledger。
 - Evolution 的 PostgreSQL 不存放 Mamba 业务 schema。
@@ -96,6 +104,8 @@ ChatRoom／Customer Desk 的人工 disposition 不是 Campaign 批次收尾：
 3. 再立即 PATCH 对应 Notion page。
 4. Notion 失败时保留本机决定并明确显示“本机已更新、Notion 未同步”，不得
    恢复自动 Flow。
+5. 若客户尚无 Notion page，则只保存本机状态并回报 `notionSynced: false`；
+   Quick Remark 不负责擅自建立 Notion row。
 
 `Not Interested` 是 soft rejection，只停止自动 Flow；只有
 `Do Not Contact` 会设置全局 `Stop Flag`。
@@ -129,6 +139,17 @@ connection。系统先写 SQLite，再按客户来源处理外部镜像：
 - 无法自动解决的资料必须保留错误码和人工处理入口。
 - Notion 失败不得回滚已经完成的 WhatsApp 发送记录。
 
+### 私人联系人
+
+Settings 的「私人联系人 / 不进入工作 Inbox」是本机工作边界，不是 Notion
+客户分类，也不是 Campaign suppression：
+
+1. 入站消息先写入本机 conversation ledger，保留审计证据。
+2. 命中私人名单后，不查询／写入 Notion，也会清除该号码旧的 Notion 回复重试。
+3. 不触发 Sales Brain、Telegram 客户通知或自动 STOP 判断。
+4. ChatRoom 清单与单一 thread API 都不显示该号码。
+5. 历史消息不删除；从私人名单移除后可以重新在工作 ChatRoom 查看。
+
 ## 4. Telegram
 
 ### 责任
@@ -156,6 +177,7 @@ connection。系统先写 SQLite，再按客户来源处理外部镜像：
 
 - 未配置时不得假装通知成功。
 - Filter 号码仍可进入 Tracker／Notion，只是不发 Telegram 通知。
+- 私人联系人名单是另一套设置；不得用 Telegram Filter 代替。
 - Telegram approval 必须绑定稳定 pending ID。
 - 过期 approval 应归档，不能永久留在 active pending。
 

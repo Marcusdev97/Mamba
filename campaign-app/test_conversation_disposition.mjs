@@ -160,4 +160,60 @@ assert.equal(notInterestedProps["Stop Flag"], undefined, "soft rejection must no
   assert.equal(localApplied, 1, "local disposition must survive a Notion outage");
 }
 
+{
+  const localRecord = {
+    ...baseRecord,
+    id: null,
+    project: "Test Project",
+    projectCode: "test-project",
+  };
+  const localWrites = [];
+  const historyEntries = [];
+  const service = createConversationDispositionService({
+    hasBlastDatabase: false,
+    readCache: async () => ({ records: [localRecord] }),
+    normalizePhone: (phone) => String(phone || "").replace(/\D/g, ""),
+    device,
+    history: { append: async (_phone, entry) => historyEntries.push(entry) },
+    updateLocalDisposition: async (options) => {
+      localWrites.push(options);
+      return { updated: 1 };
+    },
+    clock: () => fixedNow,
+  });
+  const result = await service.apply({
+    phone: localRecord.phone,
+    project: localRecord.projectCode,
+    dispositionKey: "NOT_INTERESTED",
+  });
+  assert.equal(result.status, "Not Interested");
+  assert.equal(result.notionSynced, false, "a local-only lead must not pretend Notion was updated");
+  assert.equal(localWrites[0].projectCode, "test-project");
+  assert.equal(localWrites[0].stopFlag, false);
+  assert.equal(historyEntries[0].route, "MANUAL_NOT_INTERESTED");
+}
+
+{
+  const duplicate = {
+    ...baseRecord,
+    id: null,
+    project: "Another Project",
+    projectCode: "another-project",
+  };
+  const service = createConversationDispositionService({
+    hasBlastDatabase: false,
+    readCache: async () => ({ records: [
+      { ...baseRecord, id: null, projectCode: "test-project" },
+      duplicate,
+    ] }),
+    normalizePhone: (phone) => String(phone || "").replace(/\D/g, ""),
+    device,
+    updateLocalDisposition: async () => ({ updated: 1 }),
+  });
+  await assert.rejects(
+    service.apply({ phone: baseRecord.phone, dispositionKey: "NOT_INTERESTED" }),
+    (error) => error.statusCode === 409 && /多个 Project/.test(error.message),
+  );
+}
+
 console.log("conversation disposition tests passed");

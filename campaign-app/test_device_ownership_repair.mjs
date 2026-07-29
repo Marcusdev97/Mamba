@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildSenderKey, loadDeviceIdentity } from "./lib/device-identity.mjs";
-import { filterInstancesForDevice, includeLocalInstancePhones, loadDeviceSenderPolicy, nextDeviceInstanceName, saveDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
+import {
+  filterInstancesForDevice,
+  includeLocalInstancePhones,
+  loadDeviceSenderPolicy,
+  nextDeviceInstanceName,
+  saveDeviceSenderPolicy,
+  selectLocalWebhookInstances,
+} from "./lib/device-sender-policy.mjs";
 
 import {
   analyzeDeviceOwnership,
@@ -207,6 +214,32 @@ test("local Evolution connections extend device scope without replacing the prim
   assert.deepEqual(localDevice.senderPhones, ["60168568756", "60148801997"]);
   assert.deepEqual(localInstances.map((item) => item.allowedOnThisDevice), [true, true, true]);
   assert.deepEqual(localInstances.map((item) => item.name), ["wa_01", "wa_03", "not-ready"]);
+});
+
+test("reply webhooks cover every local OPEN number while Campaign sender filtering stays strict", async () => {
+  const instances = [
+    { name: "wa_01", number: "+601133698121", status: "OPEN" },
+    { name: "wa_03", number: "+60148801997", status: "OPEN" },
+    { name: "wa_04", number: "+60175555555", status: "CLOSE" },
+  ];
+  const policy = { configured: true, expectedSenderPhone: "601133698121" };
+  assert.deepEqual(
+    filterInstancesForDevice(instances, policy).map((item) => item.name),
+    ["wa_01"],
+    "the primary sender policy must remain strict for outbound Campaign selection",
+  );
+  assert.deepEqual(
+    selectLocalWebhookInstances(instances).map((item) => item.name),
+    ["wa_01", "wa_03"],
+    "both local OPEN numbers must receive inbound webhooks",
+  );
+
+  const trackerSource = await fs.readFile(new URL("./blaster_tracker.mjs", import.meta.url), "utf8");
+  const brainSource = await fs.readFile(new URL("./brain_service.mjs", import.meta.url), "utf8");
+  for (const source of [trackerSource, brainSource]) {
+    assert.match(source, /selectLocalWebhookInstances/);
+    assert.doesNotMatch(source, /filterInstancesForDevice/);
+  }
 });
 
 test("authorized current WhatsApp evidence can claim a unique legacy row", () => {

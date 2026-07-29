@@ -259,6 +259,20 @@
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-head"><div>
+        <h2 class="step-title">私人联系人 / 不进入工作 Inbox</h2>
+        <div class="card-kicker">这是独立的工作区过滤，不是 Telegram Filter，也不是 Campaign STOP 名单。</div>
+      </div></div>
+      <div class="provider-sub">朋友、家人或私人号码放这里。消息仍安全保存在本机，但不会出现在 ChatRoom、不会触发 Sales Brain／STOP，也不会进入 Notion 客户回复同步。这个名单不会把号码加入 Campaign suppression。</div>
+      <label class="fld">
+        <span>私人联系人</span>
+        <textarea id="workInboxIgnoreText" placeholder="朋友 A, 0123456789&#10;家人 B, 01123456789"></textarea>
+      </label>
+      <div class="actions"><button class="btn" id="btnSaveWorkInboxIgnore">保存私人联系人</button></div>
+      <div class="status-line" id="workInboxIgnoreStatus">读取中...</div>
+    </div>
+
     <div class="card ai-card">
       <div class="card-head"><div>
         <h2 class="step-title"><span class="step-no">5</span> Sales Brain / 自动回复</h2>
@@ -666,6 +680,22 @@ async function refreshTelegramFilters() {
   }
 }
 
+function renderWorkInboxIgnore(ignoreList) {
+  const list = ignoreList || {};
+  $("workInboxIgnoreText").value = list.text || "";
+  $("workInboxIgnoreStatus").textContent =
+    (list.count || 0) + " 个私人联系人 · 只隐藏工作流程，不会删除本机对话";
+}
+
+async function refreshWorkInboxIgnore() {
+  try {
+    const data = await api("/api/settings/work-inbox-ignore");
+    renderWorkInboxIgnore(data.ignoreList);
+  } catch (error) {
+    $("workInboxIgnoreStatus").textContent = "读取失败: " + error.message;
+  }
+}
+
 function renderIdentity(identity) {
   const n = identity?.notion || {};
   $("notionLinked").textContent = n.ok
@@ -902,6 +932,24 @@ $("btnSaveTelegramFilters").addEventListener("click", async () => {
   }
 });
 
+$("btnSaveWorkInboxIgnore").addEventListener("click", async () => {
+  const btn = $("btnSaveWorkInboxIgnore");
+  btn.disabled = true;
+  btn.textContent = "保存中...";
+  try {
+    const data = await api("/api/settings/work-inbox-ignore", {
+      text: $("workInboxIgnoreText").value,
+    });
+    renderWorkInboxIgnore(data.ignoreList);
+    message("私人联系人已保存。现有对话不会删除；ChatRoom 刷新后会隐藏，之后的新消息只留在本机。", "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存私人联系人";
+  }
+});
+
 $("btnInitDatabase").addEventListener("click", async () => {
   if (!confirm("只建立本机 SQLite 空数据库和安全约束；今天不会导入或修改 Notion。继续吗？")) return;
   const btn = $("btnInitDatabase");
@@ -1068,6 +1116,7 @@ api("/api/settings").then((data) => render(data.settings)).catch((e) => {
 refreshIdentity();
 refreshInstances();
 refreshTelegramFilters();
+refreshWorkInboxIgnore();
 refreshLocalDatabase();
 setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
 </script>

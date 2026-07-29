@@ -1,4 +1,4 @@
-import { requireLocalRecord } from "./device-scope.mjs";
+import { filterRecordsForDevice, requireLocalRecord } from "./device-scope.mjs";
 
 const DEFINITIONS = Object.freeze({
   INTERESTED: Object.freeze({
@@ -168,21 +168,71 @@ export function createConversationDispositionService({
     }).catch(() => {});
   }
 
-  async function apply({ id: rawId, dispositionKey, phone: rawPhone, name = "", project = "" } = {}) {
-    if (!hasBlastDatabase) {
-      throw serviceError(400, "没有 Notion Blast Leads database 配置。请到 Settings 检查 Notion。");
+  async function appendHistory({ phone, disposition, now, name, project, record }) {
+    if (!phone || !history) return;
+    await history.append(phone, {
+      at: now.toISOString(),
+      direction: "operator",
+      source: "quick_remark",
+      text: `[Quick Remark] ${disposition.label}`,
+      route: `MANUAL_${disposition.key}`,
+      signal: disposition.signal,
+      status: disposition.status,
+      sequenceStatus: disposition.sequenceStatus,
+      aiCategory: disposition.aiCategory,
+      nextAction: disposition.nextAction,
+      name: clean(name || record?.name),
+      project: clean(project || record?.project),
+    }).catch(() => {});
+  }
+
+  async function resolvePhoneRecord({ phone, project }) {
+    const cached = await readCache();
+    const localRecords = filterRecordsForDevice(cached?.records || [], { device }).records;
+    const normalizedProject = clean(project).toLowerCase();
+    let matches = localRecords.filter((record) => normalizePhone(record?.phone) === phone);
+    if (normalizedProject) {
+      matches = matches.filter((record) => (
+        clean(record?.projectCode).toLowerCase() === normalizedProject
+        || clean(record?.project).toLowerCase() === normalizedProject
+      ));
     }
-    if (!notion || !queryNotionRows || !readCache || !writeCache || !updateLocalDisposition) {
+    if (!matches.length) {
+      throw serviceError(
+        404,
+        "本机客户资料找不到这个号码。请先在 ChatRoom 用「＋」建立客户，或同步客户资料后重试。",
+      );
+    }
+    if (matches.length > 1) {
+      throw serviceError(
+        409,
+        "这个号码属于多个 Project。请先在 Follow-up 工作台选择明确的客户资料，再保存 Quick Remark。",
+      );
+    }
+    return matches[0];
+  }
+
+  async function apply({ id: rawId, dispositionKey, phone: rawPhone, name = "", project = "" } = {}) {
+    if (!readCache || !updateLocalDisposition) {
       throw serviceError(500, "Conversation Quick Remark service 没有载入。请重启 Mamba server。");
     }
 
-    const id = cleanPageId(rawId);
-    if (!id) throw serviceError(400, "缺少客户 Notion page id。请重新选择客户。");
     const disposition = conversationDisposition(dispositionKey);
     if (!disposition) throw serviceError(400, "这个 Quick Remark 不存在。请刷新 ChatRoom 后重试。");
 
-    const records = await ownershipRows();
-    const record = requireLocalRecord(records, id, { device });
+    const requestedPhone = normalizePhone(rawPhone);
+    const requestedId = cleanPageId(rawId);
+    let records = [];
+    let record;
+    if (requestedId) {
+      if (!queryNotionRows) {
+        throw serviceError(500, "Conversation Quick Remark ownership check 没有载入。请重启 Mamba server。");
+      }
+      records = await ownershipRows();
+      record = requireLocalRecord(records, requestedId, { device });
+    } else if (requestedPhone) {
+      record = await resolvePhoneRecord({ phone: requestedPhone, project });
+    }
     if (!record) {
       throw serviceError(403, "这个客户不属于当前 Device + WhatsApp sender，不能修改。");
     }
@@ -194,6 +244,7 @@ export function createConversationDispositionService({
     }
 
     const now = clock();
+    const id = cleanPageId(requestedId || record.id);
     const phone = normalizePhone(rawPhone || record.phone);
 
     if (!phone) throw serviceError(400, "客户号码无效，无法安全更新 Quick Remark。");
@@ -201,6 +252,7 @@ export function createConversationDispositionService({
       const local = await updateLocalDisposition({
         pageId: id,
         phone,
+        projectCode: clean(record.projectCode),
         status: disposition.status,
         sequenceStatus: disposition.sequenceStatus,
         aiCategory: disposition.aiCategory,
@@ -230,6 +282,38 @@ export function createConversationDispositionService({
           localApplied: true,
         });
       }
+    }
+
+    if (!id) {
+      await appendHistory({ phone, disposition, now, name, project, record });
+      await writeLog("info", "quick_remark_saved_local", "Conversation Quick Remark saved locally.", {
+        disposition: disposition.key,
+        project: clean(project || record.project),
+        stopFlag: disposition.stopFlag === true,
+        notionSynced: false,
+      });
+      return {
+        key: disposition.key,
+        label: disposition.label,
+        status: disposition.status,
+        sequenceStatus: disposition.sequenceStatus,
+        nextAction: disposition.nextAction,
+        aiCategory: disposition.aiCategory,
+        stopFlag: disposition.stopFlag === true,
+        notionSynced: false,
+        updatedAt: now.toISOString(),
+      };
+    }
+
+    if (!hasBlastDatabase) {
+      throw serviceError(502, "本机状态已经更新，但没有 Notion Blast Leads database 配置，暂时无法同步。", {
+        localApplied: true,
+      });
+    }
+    if (!notion || !writeCache) {
+      throw serviceError(502, "本机状态已经更新，但 Notion Quick Remark service 没有载入。请重启 Mamba server。", {
+        localApplied: true,
+      });
     }
 
     let database;
@@ -275,22 +359,7 @@ export function createConversationDispositionService({
       });
     });
 
-    if (phone && history) {
-      await history.append(phone, {
-        at: now.toISOString(),
-        direction: "operator",
-        source: "quick_remark",
-        text: `[Quick Remark] ${disposition.label}`,
-        route: `MANUAL_${disposition.key}`,
-        signal: disposition.signal,
-        status: disposition.status,
-        sequenceStatus: disposition.sequenceStatus,
-        aiCategory: disposition.aiCategory,
-        nextAction: disposition.nextAction,
-        name: clean(name || record.name),
-        project: clean(project || record.project),
-      }).catch(() => {});
-    }
+    await appendHistory({ phone, disposition, now, name, project, record });
 
     await writeLog("info", "quick_remark_saved", "Conversation Quick Remark saved.", {
       disposition: disposition.key,
@@ -306,6 +375,7 @@ export function createConversationDispositionService({
       nextAction: disposition.nextAction,
       aiCategory: disposition.aiCategory,
       stopFlag: disposition.stopFlag === true,
+      notionSynced: true,
       updatedAt: now.toISOString(),
     };
   }

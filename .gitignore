@@ -27,6 +27,9 @@ campaign-data/*
 .DS_Store
 assets/manifest.json
 
+# ─── AI 工具的本机权限：每台电脑不同，不提交 ───────────
+.claude/settings.local.json
+
 # ─── Xcode 每位使用者的本机界面状态:不提交 ─────────────
 **/xcuserdata/
 *.xcuserstate

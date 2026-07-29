@@ -360,6 +360,7 @@ export function actionPatch(schema, action, body, nowValue = new Date()) {
     props["Next Action"] = choiceValue(schema, "Next Action", "Book Appointment");
     props.Status = choiceValue(schema, "Status", "Appointment");
     if (schema?.["Appointment Status"]) props["Appointment Status"] = choiceValue(schema, "Appointment Status", "Viewing Interest");
+    if (schema?.["Follow Up At"]) props["Follow Up At"] = dateValue(nextFollowUpValue(body, nowDate));
     props["AI Summary"] = richText(note || `Follow-up desk: appointment follow-up. Updated ${now}`);
   } else if (action === "save_appointment") {
     const stage = clean(body.appointmentStatus);
@@ -400,6 +401,14 @@ export function actionPatch(schema, action, body, nowValue = new Date()) {
     if (schema?.["Follow Up At"]) props["Follow Up At"] = { date: null };
   } else {
     throw httpError(400, "未知 follow-up action。");
+  }
+  const priority = clean(body.priority).toUpperCase();
+  if (priority && !["HIGH", "MED", "LOW"].includes(priority)) {
+    throw httpError(400, "Priority 必须是 HIGH、MED 或 LOW。");
+  }
+  if (priority && schema?.Priority) props.Priority = choiceValue(schema, "Priority", priority);
+  if (body.note !== undefined && schema?.["Sales Notes"] && action !== "save_appointment") {
+    props["Sales Notes"] = richText(body.note);
   }
   if (schema?.["Reply Checked At"]) props["Reply Checked At"] = { date: { start: now } };
   return props;
@@ -497,7 +506,7 @@ export function registerFollowUpRoutes(router) {
     }
 
     let database = await followUp.notion("GET", `/databases/${followUp.blastDatabaseId}`);
-    if (["book_appointment", "save_appointment", "follow_up"].includes(action)) {
+    if (["call", "send_price", "book_appointment", "save_appointment", "follow_up"].includes(action)) {
       database = await ensureAppointmentSchema(followUp, database);
     }
     const schema = database?.properties || {};

@@ -3,7 +3,7 @@
 
 import {
   normalizePhone, extractText, describeMessage, jidPhone, resolvePhone,
-  collectMessages, senderFromPayload, inboundEvent, extractPollVote,
+  collectMessages, senderFromPayload, inboundEvent, extractPollVote, messageMediaKind,
 } from "./reply_intake.mjs";
 
 let fail = 0;
@@ -24,6 +24,11 @@ check("image caption", extractText({ message: { imageMessage: { caption: "这个
 check("voice note label", describeMessage({ message: { audioMessage: { ptt: true } } }), "[voice note]");
 check("sticker label", describeMessage({ message: { stickerMessage: {} } }), "[sticker]");
 check("unknown body label", describeMessage({ message: {} }), "[reply]");
+check("image media kind survives caption", messageMediaKind({
+  message: { imageMessage: { caption: "这个户型" } },
+}), "image");
+check("video media kind", messageMediaKind({ message: { videoMessage: {} } }), "video");
+check("plain text has no media kind", messageMediaKind({ message: { conversation: "hello" } }), "");
 
 // --- extractPollVote (Evolution/Baileys ship several shapes) ---
 check("poll vote: selectedOptions objects", extractPollVote({

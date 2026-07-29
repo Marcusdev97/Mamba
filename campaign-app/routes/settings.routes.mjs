@@ -14,6 +14,13 @@ function requireTelegramFilters(runtime) {
   return runtime.telegramFilters;
 }
 
+function requireWorkInboxIgnore(runtime) {
+  if (!runtime.workInboxIgnore) {
+    throw httpError(500, "私人联系人名单没有载入。请等 LIVE Campaign 完成后重启 Mamba server。");
+  }
+  return runtime.workInboxIgnore;
+}
+
 function requireLocalDatabase(runtime) {
   if (!runtime.localDatabase) {
     throw httpError(500, "Local Database service 没有载入。请重启 Mamba server。");
@@ -206,6 +213,25 @@ export function registerSettingsRoutes(router) {
       json(res, 200, { ok: true, filters: saved });
     } catch (error) {
       throw httpError(500, `保存 Telegram Filter List 失败: ${error.message}`);
+    }
+  });
+
+  router.get("/api/settings/work-inbox-ignore", async (_req, res, runtime) => {
+    const ignoreList = requireWorkInboxIgnore(runtime);
+    json(res, 200, { ok: true, ignoreList: await ignoreList.snapshot() });
+  });
+
+  router.post("/api/settings/work-inbox-ignore", async (req, res, runtime) => {
+    const ignoreList = requireWorkInboxIgnore(runtime);
+    const body = await readJson(req);
+    try {
+      const saved = await ignoreList.update({
+        text: body.text,
+        entries: body.entries,
+      });
+      json(res, 200, { ok: true, ignoreList: saved });
+    } catch (error) {
+      throw httpError(500, `保存私人联系人名单失败: ${error.message}`);
     }
   });
 

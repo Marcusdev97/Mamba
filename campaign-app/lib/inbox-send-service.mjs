@@ -17,6 +17,57 @@ function digits(value) {
   return String(value ?? "").replace(/\D/g, "");
 }
 
+function safeFileSegment(value) {
+  return clean(value).replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+}
+
+function whatsappMediaKind(body) {
+  if (body?.imageMessage) return "image";
+  if (body?.videoMessage) return "video";
+  if (body?.stickerMessage) return "sticker";
+  if (body?.documentMessage) return "document";
+  return "";
+}
+
+function mediaDefaults(kind, mimetype = "") {
+  const mime = clean(mimetype).toLowerCase() || ({
+    image: "image/jpeg",
+    video: "video/mp4",
+    sticker: "image/webp",
+    document: "application/octet-stream",
+  })[kind] || "application/octet-stream";
+  const ext = mime.includes("png") ? "png"
+    : mime.includes("webp") ? "webp"
+      : mime.includes("gif") ? "gif"
+        : mime.includes("mp4") ? "mp4"
+          : mime.includes("quicktime") ? "mov"
+            : mime.includes("pdf") ? "pdf"
+              : mime.startsWith("image/") ? "jpg"
+                : kind === "video" ? "mp4"
+                  : "bin";
+  return { mime, ext };
+}
+
+function mimeFromFileName(fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  return ({
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".pdf": "application/pdf",
+  })[ext] || "application/octet-stream";
+}
+
+function kindFromMime(mime) {
+  if (String(mime).startsWith("video/")) return "video";
+  if (String(mime).startsWith("image/")) return "image";
+  return "document";
+}
+
 export function normalizeManualRecipientPhone(value) {
   const raw = clean(value);
   let number = digits(raw);
@@ -113,50 +164,128 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     await conversationLog?.recordOutbound({
       phone: number, text: clean(caption) || "[已发送图片]", instanceName, messageId,
       source: "manual", flowTopic: "manual_image",
+      mediaKind: "image", mediaFileName: fileName, mime,
     }, { requireExisting: true }).catch((error) => console.log(`[inbox] 图片纪录写入失败(已发出) ${number}: ${error.message}`));
     return { sent: true, messageId, fileName };
   }
 
-  // 抓客户发来的一张图（按需）。找出这个客户的图讯息，向 Evolution 要 base64。
+  async function cachedMedia(number, messageId) {
+    const safeId = safeFileSegment(messageId);
+    if (!safeId) return null;
+    try {
+      const prefixes = [`in_${number}_${safeId}_`, `in_${number}_${safeId}.`];
+      const fileName = (await fs.readdir(mediaDir)).find((name) => (
+        prefixes.some((prefix) => name.startsWith(prefix))
+      ));
+      if (!fileName) return null;
+      const mime = mimeFromFileName(fileName);
+      const cachedKind = fileName.match(/_(image|video|sticker|document)\.[^.]+$/)?.[1];
+      return {
+        available: true,
+        cached: true,
+        kind: cachedKind || kindFromMime(mime),
+        mime,
+        fileName,
+        messageId: clean(messageId),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // 抓一则 WhatsApp 媒体（按需）。图片靠近可视区才调用；影片必须由操作员点击。
   // 存本机快取，第二次看同一张就不用再抓。
-  async function fetchInboundMedia({ instance, phone, messageId = "" }) {
+  async function fetchInboundMedia({ instance, phone, messageId = "", direction = "inbound" }) {
     const instanceName = clean(instance);
     const number = digits(phone);
     if (!instanceName || !number) throw badRequest("缺少号码或客户电话。");
     if (simulate) return { available: false, reason: "simulate" };
+    const wantedDirection = clean(direction).toLowerCase() === "outbound" ? "outbound" : "inbound";
+    const cached = await cachedMedia(number, messageId);
+    if (cached) return cached;
 
-    const found = await api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
-      method: "POST",
-      body: JSON.stringify({ where: { key: { remoteJid: `${number}@s.whatsapp.net` } }, limit: 200 }),
-    }).catch(() => null);
+    const isWantedMedia = (message) => (
+      hasMedia(message?.message)
+      && (wantedDirection === "outbound" ? message?.key?.fromMe === true : message?.key?.fromMe !== true)
+    );
+    const wantedMessageId = clean(messageId);
+    let target = null;
 
-    const records = collectRecords(found);
-    // 指定了 messageId 就抓那一条；否则抓最新一张图。
-    const candidates = records.filter((m) => !m?.key?.fromMe && hasMedia(m?.message));
-    const target = clean(messageId)
-      ? candidates.find((m) => String(m?.key?.id) === clean(messageId))
-      : candidates[candidates.length - 1];
+    if (wantedMessageId) {
+      // Older media can fall outside Evolution's recent-message window. Querying by
+      // the stable WhatsApp message ID avoids loading a customer's full history.
+      const exact = await api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          where: { key: { id: wantedMessageId, remoteJid: `${number}@s.whatsapp.net` } },
+          limit: 5,
+        }),
+      }).catch(() => null);
+      target = collectRecords(exact).find((message) => (
+        isWantedMedia(message)
+        && clean(message?.key?.id) === wantedMessageId
+      )) ?? null;
+    }
+
+    if (!target) {
+      const recent = await api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({ where: { key: { remoteJid: `${number}@s.whatsapp.net` } }, limit: 200 }),
+      }).catch(() => null);
+      const candidates = collectRecords(recent).filter(isWantedMedia);
+      target = wantedMessageId
+        ? candidates.find((message) => clean(message?.key?.id) === wantedMessageId)
+        : candidates[candidates.length - 1];
+    }
     if (!target) return { available: false, reason: "not_found" };
 
     const key = target.key;
+    const kind = whatsappMediaKind(target.message);
     const media = await api(`/chat/getBase64FromMediaMessage/${encodeURIComponent(instanceName)}`, {
       method: "POST",
-      body: JSON.stringify({ message: { key }, convertToMp4: false }),
+      body: JSON.stringify({ message: { key }, convertToMp4: kind === "video" }),
       timeoutMs: 45000,
     }).catch(() => null);
     if (!media?.base64) return { available: false, reason: "download_failed" };
 
-    // 存快取
+    const { mime, ext } = mediaDefaults(kind, media.mimetype);
+    const bytes = Buffer.from(media.base64, "base64");
+    if (!bytes.length) return { available: false, reason: "download_failed" };
+
     await fs.mkdir(mediaDir, { recursive: true });
-    const ext = (media.mimetype || "").includes("png") ? "png" : (media.mimetype || "").includes("webp") ? "webp" : "jpg";
-    const fileName = `in_${number}_${clean(key.id) || Date.now()}.${ext}`;
-    await fs.writeFile(path.join(mediaDir, fileName), Buffer.from(media.base64, "base64"));
+    const fileName = `in_${number}_${safeFileSegment(key.id) || Date.now()}_${kind || "media"}.${ext}`;
+    await fs.writeFile(path.join(mediaDir, fileName), bytes);
     return {
       available: true,
-      mime: media.mimetype || "image/jpeg",
-      dataUrl: `data:${media.mimetype || "image/jpeg"};base64,${media.base64}`,
+      cached: false,
+      kind: kind || kindFromMime(mime),
+      mime,
+      fileName,
       messageId: clean(key.id),
     };
+  }
+
+  async function readStoredMedia(fileName) {
+    const requested = clean(fileName);
+    const safeName = path.basename(requested);
+    if (
+      !requested
+      || safeName !== requested
+      || !/^(in|out)_[a-zA-Z0-9_.-]+$/.test(safeName)
+    ) {
+      throw badRequest("媒体档案名称无效。");
+    }
+    try {
+      const buffer = await fs.readFile(path.join(mediaDir, safeName));
+      return { buffer, mime: mimeFromFileName(safeName), fileName: safeName };
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        const missing = new Error("这个媒体缓存已经不存在，请重新加载。");
+        missing.statusCode = 404;
+        throw missing;
+      }
+      throw error;
+    }
   }
 
   return {
@@ -165,6 +294,7 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     sendText,
     sendImage,
     fetchInboundMedia,
+    readStoredMedia,
   };
 }
 

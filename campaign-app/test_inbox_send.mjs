@@ -17,12 +17,18 @@ const fakeApi = async (pathname, options = {}) => {
   if (pathname.includes("/message/sendText/")) return { key: { id: "OUT-TXT-1" } };
   if (pathname.includes("/message/sendMedia/")) return { key: { id: "OUT-IMG-1" } };
   if (pathname.includes("/chat/findMessages/")) {
-    return { messages: [
+    const messages = [
+      { key: { id: "VID-2", remoteJid: "60111000001@s.whatsapp.net", fromMe: false }, message: { videoMessage: {} } },
       { key: { id: "IMG-9", remoteJid: "60111000001@s.whatsapp.net", fromMe: false }, message: { imageMessage: {} } },
       { key: { id: "TXT-1", remoteJid: "60111000001@s.whatsapp.net", fromMe: false }, message: { conversation: "hi" } },
-    ] };
+    ];
+    const wantedId = body?.where?.key?.id;
+    return { messages: wantedId ? messages.filter((message) => message.key.id === wantedId) : messages };
   }
   if (pathname.includes("/chat/getBase64FromMediaMessage/")) {
+    if (body?.message?.key?.id === "VID-2") {
+      return { mimetype: "video/mp4", base64: "ZmFrZSBtcDQgdmlkZW8gYnl0ZXMgZm9yIHRlc3Rpbmc" };
+    }
     return { mimetype: "image/png", base64: "aGVsbG8gd29ybGQgaW1hZ2UgYnl0ZXM" };
   }
   return {};
@@ -83,6 +89,9 @@ assert.ok(files.some((f) => f.startsWith("out_60111000001")), "发出的图要�
 // 图也要记进对话纪录
 const imgRec = recorded.find((r) => r.flowTopic === "manual_image");
 assert.equal(imgRec.text, "户型图");
+assert.equal(imgRec.mediaKind, "image");
+assert.equal(imgRec.mime, "image/png");
+assert.ok(imgRec.mediaFileName.endsWith(".png"));
 
 // caption 空时 text 要有占位
 await svc.sendImage({ instance: "wa_01", phone: "60111000001", imageDataUrl: tinyPng });
@@ -92,7 +101,8 @@ assert.equal(recorded.find((r) => r.text === "[已发送图片]")?.source, "manu
 const fetched = await svc.fetchInboundMedia({ instance: "wa_01", phone: "60111000001" });
 assert.equal(fetched.available, true);
 assert.equal(fetched.mime, "image/png");
-assert.match(fetched.dataUrl, /^data:image\/png;base64,/);
+assert.equal(fetched.kind, "image");
+assert.ok(fetched.fileName.endsWith("_image.png"));
 assert.equal(fetched.messageId, "IMG-9", "要抓最新那张图");
 // 抓到的图也存本机快取
 const cached = await fs.readdir(path.join(dataDir, "inbox-media"));
@@ -101,6 +111,36 @@ assert.ok(cached.some((f) => f.startsWith("in_60111000001")), "抓到的客户�
 // 指定 messageId 抓特定那张
 const byId = await svc.fetchInboundMedia({ instance: "wa_01", phone: "60111000001", messageId: "IMG-9" });
 assert.equal(byId.available, true);
+assert.equal(byId.cached, true, "第二次读取同一媒体必须使用本机缓存");
+
+const video = await svc.fetchInboundMedia({
+  instance: "wa_01",
+  phone: "60111000001",
+  messageId: "VID-2",
+});
+assert.equal(video.available, true);
+assert.equal(video.kind, "video");
+assert.equal(video.mime, "video/mp4");
+assert.ok(video.fileName.endsWith("_video.mp4"));
+const exactVideoLookup = calls.find((call) => (
+  call.pathname.includes("/chat/findMessages/")
+  && call.body?.where?.key?.id === "VID-2"
+));
+assert.equal(exactVideoLookup.body.where.key.remoteJid, "60111000001@s.whatsapp.net");
+assert.equal(exactVideoLookup.body.limit, 5, "旧媒体要按 message ID 精确查询，不加载完整聊天记录");
+const videoFetchCall = calls.find((call) => (
+  call.pathname.includes("/chat/getBase64FromMediaMessage/")
+  && call.body?.message?.key?.id === "VID-2"
+));
+assert.equal(videoFetchCall.body.convertToMp4, true, "影片要请求浏览器可播放的 MP4");
+
+const storedVideo = await svc.readStoredMedia(video.fileName);
+assert.equal(storedVideo.mime, "video/mp4");
+assert.ok(storedVideo.buffer.length > 10);
+await assert.rejects(
+  () => svc.readStoredMedia("../mamba.sqlite"),
+  /媒体档案名称无效/,
+);
 
 // 没有图讯息的客户 → available:false，不炸
 const emptyApi = async (p) => p.includes("findMessages") ? { messages: [] } : {};

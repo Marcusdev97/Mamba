@@ -6,7 +6,7 @@
 // 幂等：靠 messageId 去重，随时可以再跑补新的。
 // 续跑：每完成一页就把断点写进 SQLite；中途断线或重启，下次从下一页继续。
 
-import { describeMessage, resolvePhone, resolvePhoneWithLid, lidPhonePair } from "../reply_intake.mjs";
+import { describeMessage, messageMediaKind, resolvePhone, resolvePhoneWithLid, lidPhonePair } from "../reply_intake.mjs";
 
 const DEFAULT_PAGE_SIZE = 200;
 // 扫完一整轮，如果私聊讯息里认得出号码的不到这个比例，就当成「坏掉」而不是
@@ -62,6 +62,7 @@ function decode(instance, message, lookup = null) {
       row: {
         phone,
         text,
+        mediaKind: messageMediaKind(message),
         instanceName: instance,
         messageId,
         sentAt,
@@ -77,6 +78,7 @@ function decode(instance, message, lookup = null) {
       id: messageId,
       phone,
       text,
+      mediaKind: messageMediaKind(message),
       instanceName: instance,
       receivedAt: sentAt,
       name: message.pushName || "",

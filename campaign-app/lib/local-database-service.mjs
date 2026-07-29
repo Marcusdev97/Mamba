@@ -889,7 +889,7 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated
     const rows = await queryJson(binary, `
 SELECT
   l.notion_page_id AS id, l.source_updated_at AS sourceUpdatedAt, l.updated_at AS localUpdatedAt,
-  p.project_name AS project, l.name, l.phone,
+  p.project_name AS project, l.project_code AS projectCode, l.name, l.phone,
   l.first_blast_at AS firstBlastAt, l.last_blast_at AS lastBlastAt,
   l.last_flow_sent AS lastFlowSent, l.next_flow AS nextFlow, l.cohort_day AS cohortDay,
   l.sequence_status AS sequenceStatus, l.status, l.follow_up_at AS followUpAt,
@@ -1223,6 +1223,7 @@ COMMIT;`, 120000);
   async function recordConversationDisposition({
     pageId = "",
     phone = "",
+    projectCode = "",
     status = "",
     sequenceStatus = "",
     aiCategory = "",
@@ -1233,6 +1234,7 @@ COMMIT;`, 120000);
   } = {}) {
     const notionPageId = clean(pageId).replace(/-/g, "");
     const normalizedPhone = normalizePhone(phone);
+    const normalizedProjectCode = clean(projectCode);
     if (!notionPageId && !normalizedPhone) return { updated: 0, reason: "missing_identity" };
     const binary = await requireV3Database();
     const now = Number.isFinite(new Date(updatedAt || "").getTime())
@@ -1240,7 +1242,9 @@ COMMIT;`, 120000);
       : new Date().toISOString();
     const leadWhere = notionPageId
       ? `replace(notion_page_id,'-','')=${sqlText(notionPageId)}`
-      : `phone=${sqlText(normalizedPhone)}`;
+      : normalizedProjectCode
+        ? `project_code=${sqlText(normalizedProjectCode)} AND phone=${sqlText(normalizedPhone)}`
+        : `phone=${sqlText(normalizedPhone)}`;
     const contactWhere = notionPageId
       ? `contact_key IN (SELECT contact_key FROM project_leads WHERE replace(notion_page_id,'-','')=${sqlText(notionPageId)})`
       : `contact_key=${sqlText(normalizedPhone)}`;

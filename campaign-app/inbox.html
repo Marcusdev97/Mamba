@@ -122,7 +122,7 @@
     flex:1;
     min-height:0;
     display:grid;
-    grid-template-columns:minmax(150px,1fr) minmax(480px,8fr) minmax(270px,3fr);
+    grid-template-columns:minmax(235px,1.6fr) minmax(500px,7fr) minmax(330px,3.2fr);
     gap:12px;
     padding:12px;
     background:var(--bg);
@@ -214,9 +214,8 @@
   .new-contact-cancel { background:transparent; color:var(--muted); }
   .new-contact-note { color:var(--dim); font-size:9px; line-height:1.4; }
   .new-contact-error { color:var(--red); font-size:9.5px; }
-  .list-filters { display:flex; gap:5px; margin-top:7px; }
+  .list-filters { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; margin-top:7px; }
   .list-filters button {
-    flex:1;
     min-height:29px;
     border:1px solid var(--line);
     border-radius:6px;
@@ -227,9 +226,11 @@
     font-weight:700;
   }
   .list-filters button.on { color:var(--text); background:var(--panel-3); border-color:var(--line-strong); }
+  .filter-count { margin-left:4px; color:var(--dim); font-size:9px; }
+  .list-filters button.on .filter-count { color:var(--muted); }
   .customer-row {
     width:100%;
-    min-height:58px;
+    min-height:68px;
     display:grid;
     grid-template-columns:30px minmax(0,1fr);
     align-items:center;
@@ -262,6 +263,22 @@
   .customer-phone { display:block; margin-top:3px; color:var(--dim); font-size:9.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .customer-status { display:flex; align-items:center; gap:5px; margin-top:4px; color:var(--dim); font-size:9px; }
   .pending-mark { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--amber); }
+  .followup-chip {
+    display:inline-flex;
+    align-items:center;
+    min-width:0;
+    max-width:100%;
+    padding:2px 5px;
+    border-radius:4px;
+    background:var(--panel-3);
+    color:var(--muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .followup-chip.overdue { color:var(--red); background:#3a2020; }
+  .followup-chip.today { color:var(--amber); background:var(--amber-soft); }
+  .followup-chip.later { color:var(--blue); background:var(--blue-soft); }
   .list-empty, .feed-empty {
     min-height:100px;
     display:flex;
@@ -329,17 +346,79 @@
     font-size:9.5px;
   }
   .entry-source { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .media-btn {
-    width:100%;
-    min-height:36px;
+  .media-card {
+    width:min(270px,100%);
+    min-height:64px;
+    display:grid;
+    grid-template-columns:42px minmax(0,1fr) 26px;
+    align-items:center;
+    gap:9px;
+    padding:8px;
     border:1px solid var(--line-strong);
-    border-radius:6px;
-    background:var(--panel-3);
-    color:var(--blue);
+    border-radius:9px;
+    background:#1b201d;
+    color:var(--text);
     cursor:pointer;
     text-align:left;
   }
-  .message-image { display:block; width:100%; border-radius:6px; cursor:zoom-in; }
+  .media-card:hover { border-color:#416153; background:#1e2722; }
+  .media-card:disabled { cursor:wait; opacity:.75; }
+  .media-card.error { border-color:#704141; }
+  .media-icon {
+    width:42px;
+    height:42px;
+    display:grid;
+    place-items:center;
+    border-radius:7px;
+    background:var(--blue-soft);
+    color:var(--blue);
+    font-size:17px;
+  }
+  .media-card[data-media-kind="video"] .media-icon { background:#28223b; color:#b9a7ff; }
+  .media-card[data-media-kind="document"] .media-icon { background:var(--amber-soft); color:var(--amber); }
+  .media-copy { min-width:0; }
+  .media-copy strong { display:block; font-size:11px; }
+  .media-copy small { display:block; margin-top:3px; color:var(--dim); font-size:9px; line-height:1.35; }
+  .media-open {
+    width:24px;
+    height:24px;
+    display:grid;
+    place-items:center;
+    border-radius:50%;
+    background:var(--panel-3);
+    color:var(--muted);
+    font-size:10px;
+  }
+  .media-caption { margin-top:7px; white-space:pre-wrap; }
+  .media-preview {
+    width:min(290px,100%);
+    overflow:hidden;
+    border:1px solid var(--line);
+    border-radius:9px;
+    background:#0c100e;
+  }
+  .message-image {
+    display:block;
+    width:100%;
+    max-height:340px;
+    object-fit:cover;
+    cursor:zoom-in;
+  }
+  .message-video {
+    display:block;
+    width:100%;
+    max-height:360px;
+    background:#080a09;
+  }
+  .media-document {
+    min-height:58px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:10px;
+    color:var(--blue);
+    text-decoration:none;
+  }
 
   .composer-dock { border-top:1px solid var(--line); background:var(--panel); }
   .image-preview {
@@ -380,8 +459,74 @@
   .composer button:disabled { opacity:.5; cursor:not-allowed; }
   .stopped-note { padding:14px; color:var(--red); text-align:center; font-size:11.5px; }
 
-  .ai-content { flex:1; min-height:0; overflow-y:auto; padding:14px; }
+  .side-scroll { flex:1; min-height:0; overflow-y:auto; }
+  .followup-content { padding:14px; border-bottom:1px solid var(--line); background:#171a17; }
+  .ai-content { min-height:0; padding:14px; }
   .ai-empty { min-height:180px; display:grid; place-items:center; color:var(--dim); text-align:center; font-size:12px; line-height:1.5; }
+  .planner-empty { padding:14px; border:1px dashed var(--line-strong); border-radius:7px; color:var(--muted); font-size:11px; line-height:1.55; }
+  .planner-empty a { color:var(--blue); }
+  .planner-current {
+    padding:11px;
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:var(--panel-2);
+  }
+  .planner-current.overdue { border-color:#754141; background:#281b1b; }
+  .planner-current.today { border-color:#6e5424; background:#2a2418; }
+  .planner-current.later { border-color:#31596a; background:#17242a; }
+  .planner-status-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .planner-status-row strong { font-size:12px; }
+  .planner-badge { padding:3px 7px; border-radius:999px; color:var(--muted); background:var(--panel-3); font-size:9px; font-weight:800; }
+  .planner-badge.overdue { color:var(--red); }
+  .planner-badge.today { color:var(--amber); }
+  .planner-badge.later { color:var(--blue); }
+  .planner-meta { margin-top:7px; color:var(--muted); font-size:10px; line-height:1.45; }
+  .planner-note { margin-top:7px; color:var(--dim); font-size:9.5px; white-space:pre-wrap; }
+  .planner-heading { margin:14px 0 7px; color:var(--muted); font-size:9px; font-weight:850; text-transform:uppercase; letter-spacing:.08em; }
+  .quick-times { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+  .quick-times button {
+    min-height:31px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:var(--panel-2);
+    color:var(--muted);
+    cursor:pointer;
+    font-size:10.5px;
+    font-weight:700;
+  }
+  .quick-times button:hover { color:var(--text); border-color:var(--line-strong); }
+  .planner-form { display:grid; gap:7px; }
+  .planner-row { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+  .planner-field { display:grid; gap:4px; }
+  .planner-field span { color:var(--dim); font-size:9px; font-weight:700; }
+  .planner-field input, .planner-field select, .planner-field textarea {
+    width:100%;
+    min-width:0;
+    min-height:35px;
+    padding:7px 8px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:var(--bg);
+    color:var(--text);
+    outline:none;
+  }
+  .planner-field input:focus, .planner-field select:focus, .planner-field textarea:focus { border-color:var(--blue); }
+  .planner-field textarea { min-height:60px; resize:vertical; line-height:1.4; }
+  .planner-actions { display:grid; grid-template-columns:1fr auto; gap:7px; }
+  .planner-actions button, .planner-link {
+    min-height:36px;
+    border:1px solid var(--line);
+    border-radius:7px;
+    cursor:pointer;
+    font-weight:800;
+    font-size:11px;
+  }
+  .planner-save { background:var(--blue); border-color:var(--blue) !important; color:#07151b; }
+  .planner-done { padding:0 11px; background:var(--panel-3); color:var(--green); }
+  .planner-link { display:grid; place-items:center; margin-top:8px; color:var(--muted); text-decoration:none; background:var(--panel-2); }
+  .planner-feedback { min-height:16px; margin-top:7px; color:var(--green); font-size:9.5px; line-height:1.4; }
+  .planner-feedback.error { color:var(--red); }
+  .side-section-label { padding:9px 14px 0; color:var(--dim); font-size:9px; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
   .signal-line { display:flex; align-items:center; gap:8px; margin-bottom:14px; }
   .signal-dot { width:9px; height:9px; border-radius:50%; background:var(--dim); }
   .signal-dot.green { background:var(--green); }
@@ -392,6 +537,40 @@
   .insight { min-height:65px; padding:10px 14px; background:#181713; }
   .insight span { display:block; color:var(--dim); font-size:9.5px; }
   .insight strong { display:block; margin-top:5px; font-size:11.5px; line-height:1.35; overflow-wrap:anywhere; }
+  .insight.intent-positive { box-shadow:inset 3px 0 0 var(--green); background:#14251a; }
+  .insight.intent-follow-up { box-shadow:inset 3px 0 0 var(--blue); background:#15242a; }
+  .insight.intent-not-interested { box-shadow:inset 3px 0 0 var(--amber); background:#292216; }
+  .insight.intent-stop { box-shadow:inset 3px 0 0 var(--red); background:#2b1919; }
+  .insight.intent-positive strong { color:var(--green); }
+  .insight.intent-follow-up strong { color:var(--blue); }
+  .insight.intent-not-interested strong { color:var(--amber); }
+  .insight.intent-stop strong { color:var(--red); }
+  .intent-action {
+    margin:0 0 14px;
+    padding:11px;
+    border:1px solid #6e5424;
+    border-radius:8px;
+    background:var(--amber-soft);
+  }
+  .intent-action.applied { border-color:#356348; background:var(--green-soft); }
+  .intent-action strong { display:block; color:var(--amber); font-size:11.5px; }
+  .intent-action.applied strong { color:var(--green); }
+  .intent-action p { margin:5px 0 9px; color:#d7c291; font-size:9.5px; line-height:1.45; }
+  .intent-action.applied p { margin-bottom:0; color:#a9d7b7; }
+  .intent-apply {
+    width:100%;
+    min-height:36px;
+    border:1px solid var(--amber);
+    border-radius:7px;
+    background:var(--amber);
+    color:#1b1408;
+    cursor:pointer;
+    font-size:11px;
+    font-weight:850;
+  }
+  .intent-apply:disabled { opacity:.55; cursor:not-allowed; }
+  .intent-feedback { min-height:0; margin-top:7px; color:var(--green); font-size:9.5px; line-height:1.4; }
+  .intent-feedback.error { color:var(--red); }
   .ai-section-title { margin:0 0 8px; color:var(--muted); font-size:10px; font-weight:800; }
   .latest-customer {
     margin-bottom:14px;
@@ -437,7 +616,7 @@
   .lightbox img { max-width:100%; max-height:100%; border-radius:7px; }
 
   @media (max-width:1100px) {
-    .workspace { grid-template-columns:minmax(150px,1fr) minmax(430px,8fr) minmax(250px,3fr); }
+    .workspace { grid-template-columns:minmax(205px,1.5fr) minmax(430px,7fr) minmax(290px,3fr); }
   }
   @media (max-width:960px) {
     body { overflow:hidden; }
@@ -457,7 +636,7 @@
     .number-bar { padding-left:8px; padding-right:8px; }
     .panel-head { min-height:54px; padding:8px 10px; }
     .message-feed { padding:9px; }
-    .ai-content { padding:12px; }
+    .ai-content, .followup-content { padding:12px; }
   }
 </style>
 </head>
@@ -468,7 +647,7 @@
     </button>
     <div class="title-wrap">
       <h1>Customer Chat Room</h1>
-      <p>Customers, conversation and AI suggestions</p>
+      <p>Conversation, follow-up planning and AI suggestions</p>
     </div>
     <div class="live-state"><i></i><span>实时更新</span></div>
   </header>
@@ -478,7 +657,7 @@
   <nav class="mobile-switch" aria-label="Chat room tabs">
     <button type="button" class="on" data-pane="customer">客户</button>
     <button type="button" data-pane="reply">对话</button>
-    <button type="button" data-pane="ai">AI 建议</button>
+    <button type="button" data-pane="ai">跟进 / AI</button>
   </nav>
 
   <main class="workspace">
@@ -500,12 +679,16 @@
       <div class="composer-dock" id="composerDock"></div>
     </section>
 
-    <aside class="panel ai-panel" aria-label="AI 建议">
+    <aside class="panel ai-panel" aria-label="Follow-up 与 AI 建议">
       <header class="panel-head">
-        <div class="panel-title"><h2>AI 建议</h2><p id="aiSubtitle">等待客户对话</p></div>
-        <span class="section-code">AI</span>
+        <div class="panel-title"><h2>Follow-up 工作台</h2><p id="aiSubtitle">选择客户后安排下一步</p></div>
+        <span class="section-code">PLAN</span>
       </header>
-      <div class="ai-content" id="aiContent"><div class="ai-empty">选择客户后查看建议</div></div>
+      <div class="side-scroll">
+        <div class="followup-content" id="followUpContent"><div class="planner-empty">选择客户后安排 Follow-up</div></div>
+        <div class="side-section-label">AI 建议</div>
+        <div class="ai-content" id="aiContent"><div class="ai-empty">选择客户后查看建议</div></div>
+      </div>
     </aside>
   </main>
 
@@ -527,6 +710,12 @@ let newContactOpen = false;
 let newContactAwaitingFirstSend = null;
 let newContactLeadTypes = [];
 let newContactProjects = [];
+let followUpRecords = [];
+let followUpByPhone = new Map();
+let followUpLoadError = "";
+let currentThreadData = null;
+let followUpSelection = new Map();
+let mediaObserver = null;
 
 async function jget(url) {
   const response = await fetch(url, { cache:"no-store" });
@@ -554,6 +743,72 @@ function relTime(iso) {
   if (days === 1) return "昨天";
   if (days < 7) return `${days} 天前`;
   return date.toLocaleDateString([], { month:"2-digit", day:"2-digit" });
+}
+
+function phoneKey(value) {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("0")) digits = `60${digits.slice(1)}`;
+  return digits;
+}
+
+function followUpsForPhone(phone) {
+  return followUpByPhone.get(phoneKey(phone)) || [];
+}
+
+function primaryFollowUp(phone) {
+  return followUpsForPhone(phone)[0] || null;
+}
+
+function followUpTone(record) {
+  if (!record) return "unplanned";
+  if (record.overdue) return "overdue";
+  if (record.dueToday) return "today";
+  if (record.followUpAt) return "later";
+  return "unplanned";
+}
+
+function followUpWhen(record) {
+  if (!record?.followUpAt) return "未安排时间";
+  const date = new Date(record.followUpAt);
+  if (Number.isNaN(date.getTime())) return "未安排时间";
+  const day = date.toLocaleDateString([], { month:"2-digit", day:"2-digit" });
+  const time = date.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", hour12:false });
+  if (record.overdue) return `已逾期 · ${day} ${time}`;
+  if (record.dueToday) return `今天 · ${time}`;
+  return `${day} ${time}`;
+}
+
+async function loadFollowUpRecords() {
+  try {
+    const data = await jget("/api/follow-up");
+    if (!data?.ok) throw new Error(data?.error || "Follow-up 读取失败");
+    followUpRecords = data.records || [];
+    const grouped = new Map();
+    for (const record of followUpRecords) {
+      const key = phoneKey(record.phone);
+      if (!key) continue;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(record);
+    }
+    followUpByPhone = grouped;
+    followUpLoadError = "";
+  } catch (error) {
+    followUpLoadError = error.message;
+  }
+}
+
+function threadMatchesFilter(thread, filter) {
+  const record = primaryFollowUp(thread.phone);
+  if (filter === "pending") return thread.lastDirection === "inbound";
+  if (filter === "overdue") return record?.overdue === true;
+  if (filter === "today") return record?.dueToday === true && record?.overdue !== true;
+  if (filter === "scheduled") return Boolean(record?.followUpAt) && !record.overdue && !record.dueToday;
+  if (filter === "unplanned") return !record?.followUpAt;
+  return true;
+}
+
+function filterCount(filter) {
+  return threads.filter((thread) => threadMatchesFilter(thread, filter)).length;
 }
 
 function payloadOf(message) {
@@ -631,12 +886,18 @@ async function loadThreads({ silent = false } = {}) {
     $("customerNav").innerHTML = '<div class="list-empty">读取客户中</div>';
     threadsSig = "";
   }
-  const data = await jget(`/api/inbox/threads?instance=${encodeURIComponent(currentInstance)}&filter=${listFilter}`)
-    .catch(() => ({ threads:[] }));
+  const [data] = await Promise.all([
+    jget(`/api/inbox/threads?instance=${encodeURIComponent(currentInstance)}&filter=all`)
+      .catch(() => ({ threads:[] })),
+    loadFollowUpRecords(),
+  ]);
   threads = data.threads || [];
   const count = document.querySelector(`[data-cnt="${CSS.escape(currentInstance)}"]`);
   if (count) count.textContent = threads.length || "";
-  const signature = `${listFilter}|${threads.map((thread) => `${thread.phone}:${thread.lastAt}:${thread.replyCount}`).join("|")}::${searchText}`;
+  const followUpSignature = followUpRecords
+    .map((record) => `${record.id}:${record.followUpAt || ""}:${record.nextAction || ""}:${record.priority || ""}`)
+    .join("|");
+  const signature = `${listFilter}|${threads.map((thread) => `${thread.phone}:${thread.lastAt}:${thread.replyCount}`).join("|")}::${searchText}::${followUpSignature}`;
   if (silent && signature === threadsSig) return;
   if (silent && document.activeElement === $("listSearch")) return;
   threadsSig = signature;
@@ -645,9 +906,18 @@ async function loadThreads({ silent = false } = {}) {
 
 function renderList() {
   const query = searchText.trim().toLowerCase();
+  const filtered = threads.filter((thread) => threadMatchesFilter(thread, listFilter));
   const shown = query
-    ? threads.filter((thread) => (thread.name || "").toLowerCase().includes(query) || (thread.phone || "").includes(query))
-    : threads;
+    ? filtered.filter((thread) => (thread.name || "").toLowerCase().includes(query) || (thread.phone || "").includes(query))
+    : filtered;
+  const filters = [
+    ["all", "全部"],
+    ["pending", "待回复"],
+    ["overdue", "已逾期"],
+    ["today", "今天"],
+    ["scheduled", "已安排"],
+    ["unplanned", "未安排"],
+  ];
   const search = `
     <div class="list-search">
       <div class="list-search-row">
@@ -675,16 +945,22 @@ function renderList() {
           </div>
         </form>` : ""}
       <div class="list-filters">
-        <button type="button" class="${listFilter === "all" ? "on" : ""}" data-filter="all">全部回复</button>
-        <button type="button" class="${listFilter === "pending" ? "on" : ""}" data-filter="pending">待跟进</button>
+        ${filters.map(([value, label]) => `
+          <button type="button" class="${listFilter === value ? "on" : ""}" data-filter="${value}">
+            ${label}<span class="filter-count">${filterCount(value)}</span>
+          </button>`).join("")}
       </div>
     </div>`;
 
   if (!shown.length) {
-    $("customerNav").innerHTML = search + `<div class="list-empty">${listFilter === "pending" ? "目前没有待跟进客户" : "没有符合的客户"}</div>`;
+    $("customerNav").innerHTML = search + '<div class="list-empty">这个分类目前没有客户</div>';
   } else {
     $("customerNav").innerHTML = search + shown.map((thread) => {
       const pending = thread.lastDirection === "inbound";
+      const followUp = primaryFollowUp(thread.phone);
+      const followUpLabel = followUp
+        ? `${followUpWhen(followUp)}${followUp.nextAction ? ` · ${followUp.nextAction}` : ""}`
+        : "未建立 Follow-up";
       return `
         <button class="customer-row ${thread.phone === currentPhone ? "active" : ""} ${pending ? "pending" : ""}" type="button" data-phone="${esc(thread.phone)}">
           <span class="avatar">${esc(initials(thread.name || thread.phone))}</span>
@@ -692,11 +968,12 @@ function renderList() {
             <span class="customer-name">${esc(thread.name || thread.phone)}</span>
             <span class="customer-phone">${esc(thread.phone)}</span>
             <span class="customer-status">${pending ? '<i class="pending-mark"></i>待回复' : esc(relTime(thread.lastAt))}</span>
+            <span class="followup-chip ${followUpTone(followUp)}">${esc(followUpLabel)}</span>
           </span>
         </button>`;
     }).join("");
   }
-  $("customerListSubtitle").textContent = `${shown.length} 位客户`;
+  $("customerListSubtitle").textContent = `${shown.length}/${threads.length} 位 · 逾期 ${filterCount("overdue")} · 今天 ${filterCount("today")}`;
 
   const input = $("listSearch");
   if (input) {
@@ -727,7 +1004,7 @@ function renderList() {
       if (listFilter === button.dataset.filter) return;
       listFilter = button.dataset.filter;
       threadsSig = "";
-      loadThreads();
+      renderList();
     });
   });
   document.querySelectorAll(".customer-row").forEach((row) => {
@@ -794,16 +1071,19 @@ async function startNewContact(event) {
 }
 
 function renderThreadEmpty() {
+  currentThreadData = null;
   $("replyTitle").textContent = "Conversation";
   $("replySubtitle").textContent = "选择客户后开始";
   $("conversationMessages").innerHTML = '<div class="feed-empty">这里会显示完整对话</div>';
   $("composerDock").innerHTML = "";
-  $("aiSubtitle").textContent = "等待客户对话";
+  $("aiSubtitle").textContent = "选择客户后安排下一步";
+  $("followUpContent").innerHTML = '<div class="planner-empty">选择客户后安排 Follow-up</div>';
   $("aiContent").innerHTML = '<div class="ai-empty">选择客户后查看建议</div>';
 }
 
 function renderLoadingThread() {
   $("conversationMessages").innerHTML = '<div class="feed-empty">读取完整对话中</div>';
+  $("followUpContent").innerHTML = '<div class="planner-empty">读取 Follow-up 资料中</div>';
   $("aiContent").innerHTML = '<div class="ai-empty">分析对话中</div>';
 }
 
@@ -831,12 +1111,14 @@ async function openThread(phone, { refresh = false } = {}) {
   const messages = data.messages || [];
   const last = messages.at(-1);
   const latestInbound = [...messages].reverse().find((message) => message.direction === "inbound");
-  const signature = `${messages.length}::${last?.sentAt || ""}::${last?.text || ""}::${latestInbound?.payloadJson || ""}`;
+  const followUp = primaryFollowUp(phone);
+  const signature = `${messages.length}::${last?.sentAt || ""}::${last?.text || ""}::${latestInbound?.payloadJson || ""}::${data.contact?.dispositionStatus || ""}::${followUp?.id || ""}:${followUp?.followUpAt || ""}:${followUp?.nextAction || ""}:${followUp?.priority || ""}`;
   if (refresh && signature === currentThreadSig) return;
 
   const draft = $("composerText")?.value || "";
   const hadFocus = document.activeElement === $("composerText");
   currentThreadSig = signature;
+  currentThreadData = { contact:data.contact, messages };
   renderThread(data.contact, messages);
 
   const textarea = $("composerText");
@@ -858,11 +1140,31 @@ function sourceLabel(message) {
 
 function messageContent(message) {
   const raw = (message.text || "").trim();
-  const inboundMedia = message.direction === "inbound" && MEDIA_RE.test(raw);
-  if (!inboundMedia) return esc(message.text || "");
-  const kind = raw.replace(/[\[\]]/g, "");
-  const label = kind === "image" ? "查看客户图片" : `查看客户 ${kind}`;
-  return `<button class="media-btn" type="button" data-media-id="${esc(message.id || "")}">${esc(label)}</button>`;
+  const payload = payloadOf(message);
+  const markerKind = MEDIA_RE.test(raw) ? raw.replace(/[\[\]]/g, "") : "";
+  const kind = String(payload.mediaKind || markerKind || "").toLowerCase();
+  if (!["image", "video", "document", "sticker"].includes(kind)) return esc(message.text || "");
+  const labels = {
+    image: ["照片", "靠近画面时自动加载", "▧"],
+    video: ["影片", "点击后加载播放", "▶"],
+    document: ["文件", "点击后读取", "≡"],
+    sticker: ["贴图", "靠近画面时自动加载", "◇"],
+  };
+  const [label, hint, icon] = labels[kind];
+  const placeholder = MEDIA_RE.test(raw) || raw === "[已发送图片]";
+  const caption = placeholder ? "" : raw;
+  return `
+    <button class="media-card" type="button"
+      data-media-id="${esc(message.id || "")}"
+      data-media-kind="${esc(kind)}"
+      data-media-direction="${esc(message.direction || "inbound")}"
+      data-media-file="${esc(payload.mediaFileName || "")}"
+      aria-label="加载${esc(label)}">
+      <span class="media-icon">${icon}</span>
+      <span class="media-copy"><strong>${esc(label)}</strong><small>${esc(hint)}</small></span>
+      <span class="media-open">${kind === "video" ? "▶" : "↗"}</span>
+    </button>
+    ${caption ? `<div class="media-caption">${esc(caption)}</div>` : ""}`.trim();
 }
 
 function conversationMarkup(messages) {
@@ -899,6 +1201,213 @@ function signalClass(signal) {
   return "";
 }
 
+function intentClass(category, signal) {
+  const value = `${category || ""} ${signal || ""}`.trim().toLowerCase();
+  if (/do not contact|\bstop\b|blocked|red/.test(value)) return "intent-stop";
+  if (/not interested|no interest|reject|不感兴趣|没兴趣/.test(value)) return "intent-not-interested";
+  if (/follow.?up|appointment|blue/.test(value)) return "intent-follow-up";
+  if (/interested|warm|positive|green/.test(value)) return "intent-positive";
+  return "";
+}
+
+function suggestedDisposition(category) {
+  const value = String(category || "").trim().toLowerCase();
+  return /not interested|no interest|reject|不感兴趣|没兴趣/.test(value)
+    ? "NOT_INTERESTED"
+    : "";
+}
+
+function toDateTimeLocal(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function presetFollowUpTime(kind) {
+  const date = new Date();
+  date.setSeconds(0, 0);
+  if (kind === "today") {
+    if (date.getHours() < 18) date.setHours(18, 0, 0, 0);
+    else {
+      date.setHours(date.getHours() + 2, 0, 0, 0);
+    }
+  } else {
+    const days = kind === "tomorrow" ? 1 : kind === "three_days" ? 3 : 7;
+    date.setDate(date.getDate() + days);
+    date.setHours(10, 0, 0, 0);
+  }
+  return toDateTimeLocal(date);
+}
+
+function actionForRecord(record) {
+  const action = String(record?.nextAction || "").toLowerCase();
+  if (action.includes("call")) return "call";
+  if (action.includes("price")) return "send_price";
+  if (action.includes("appointment") || action.includes("viewing") || action.includes("book")) return "book_appointment";
+  return "follow_up";
+}
+
+function selectedFollowUp(contact) {
+  const records = followUpsForPhone(contact?.phone);
+  const selectedId = followUpSelection.get(phoneKey(contact?.phone));
+  return records.find((record) => record.id === selectedId) || records[0] || null;
+}
+
+function renderFollowUpPanel(contact) {
+  const container = $("followUpContent");
+  if (!container) return;
+  if (followUpLoadError) {
+    container.innerHTML = `<div class="planner-empty">Follow-up 资料读取失败：${esc(followUpLoadError)}<br><a href="/follow-up">打开完整 Follow-Up Desk</a></div>`;
+    return;
+  }
+
+  const records = followUpsForPhone(contact.phone);
+  const record = selectedFollowUp(contact);
+  const deskLink = `/follow-up?q=${encodeURIComponent(contact.phone)}`;
+  if (!record) {
+    container.innerHTML = `
+      <div class="planner-empty">
+        目前没有进行中的 Follow-up。这个客户可能已经完成，或还没有建立可编辑的 CRM 跟进资料。
+        <br><br>如需安排，请先把客户设为 Blasting Lead 并选择 Project。
+        <br><a href="${deskLink}">到完整 Follow-Up Desk 检查</a>
+      </div>`;
+    return;
+  }
+
+  const key = phoneKey(contact.phone);
+  followUpSelection.set(key, record.id);
+  const tone = followUpTone(record);
+  const defaultTime = toDateTimeLocal(record.followUpAt) || presetFollowUpTime("tomorrow");
+  const defaultAction = actionForRecord(record);
+  const priority = ["HIGH", "MED", "LOW"].includes(record.priority) ? record.priority : "MED";
+  const notes = record.salesNotes || "";
+  const recordPicker = records.length > 1 ? `
+    <label class="planner-field">
+      <span>Project / 跟进记录</span>
+      <select id="followUpRecordSelect">
+        ${records.map((item) => `<option value="${esc(item.id)}" ${item.id === record.id ? "selected" : ""}>${esc(item.project || "未分类")} · ${esc(item.nextAction || "Follow Up")}</option>`).join("")}
+      </select>
+    </label>` : "";
+
+  container.innerHTML = `
+    <div class="planner-current ${tone}">
+      <div class="planner-status-row">
+        <strong>${esc(record.project || "未分类 Project")}</strong>
+        <span class="planner-badge ${tone}">${esc(followUpWhen(record))}</span>
+      </div>
+      <div class="planner-meta">${esc(record.priority || "MED")} · ${esc(record.nextAction || "Follow Up")} · ${esc(record.reason || "等待安排")}</div>
+      ${notes ? `<div class="planner-note">${esc(notes)}</div>` : ""}
+    </div>
+    <div class="planner-heading">快速安排</div>
+    <div class="quick-times">
+      <button type="button" data-followup-preset="today">今天稍后</button>
+      <button type="button" data-followup-preset="tomorrow">明天 10:00</button>
+      <button type="button" data-followup-preset="three_days">3 天后</button>
+      <button type="button" data-followup-preset="next_week">下周</button>
+    </div>
+    <div class="planner-heading">下一步计划</div>
+    <form class="planner-form" id="followUpForm">
+      ${recordPicker}
+      <div class="planner-row">
+        <label class="planner-field">
+          <span>下一步</span>
+          <select id="followUpAction">
+            <option value="follow_up" ${defaultAction === "follow_up" ? "selected" : ""}>继续跟进</option>
+            <option value="call" ${defaultAction === "call" ? "selected" : ""}>打电话</option>
+            <option value="send_price" ${defaultAction === "send_price" ? "selected" : ""}>发送价格</option>
+            <option value="book_appointment" ${defaultAction === "book_appointment" ? "selected" : ""}>安排 Appointment</option>
+          </select>
+        </label>
+        <label class="planner-field">
+          <span>优先级</span>
+          <select id="followUpPriority">
+            <option value="HIGH" ${priority === "HIGH" ? "selected" : ""}>HIGH</option>
+            <option value="MED" ${priority === "MED" ? "selected" : ""}>MED</option>
+            <option value="LOW" ${priority === "LOW" ? "selected" : ""}>LOW</option>
+          </select>
+        </label>
+      </div>
+      <label class="planner-field">
+        <span>提醒时间</span>
+        <input id="followUpAt" type="datetime-local" value="${esc(defaultTime)}" required>
+      </label>
+      <label class="planner-field">
+        <span>备注 / 下次要做什么</span>
+        <textarea id="followUpNote" placeholder="例如：客户星期五发薪后再联系">${esc(notes)}</textarea>
+      </label>
+      <div class="planner-actions">
+        <button class="planner-save" id="followUpSave" type="submit">保存 Follow-up</button>
+        <button class="planner-done" id="followUpDone" type="button">完成</button>
+      </div>
+    </form>
+    <div class="planner-feedback" id="followUpFeedback"></div>
+    <a class="planner-link" href="${deskLink}">打开完整 Follow-Up Desk</a>`;
+
+  $("followUpRecordSelect")?.addEventListener("change", (event) => {
+    followUpSelection.set(key, event.target.value);
+    renderFollowUpPanel(contact);
+  });
+  document.querySelectorAll("[data-followup-preset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = $("followUpAt");
+      if (input) input.value = presetFollowUpTime(button.dataset.followupPreset);
+    });
+  });
+  $("followUpForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveChatFollowUp();
+  });
+  $("followUpDone")?.addEventListener("click", () => saveChatFollowUp("done"));
+}
+
+async function saveChatFollowUp(actionOverride = "") {
+  const contact = currentThreadData?.contact;
+  const record = contact ? selectedFollowUp(contact) : null;
+  const feedback = $("followUpFeedback");
+  if (!contact || !record?.id || !feedback) return;
+  const action = actionOverride || $("followUpAction")?.value || "follow_up";
+  if (action === "done" && !window.confirm(`确认 ${contact.name || contact.phone} 的 Follow-up 已完成？`)) return;
+
+  const atInput = $("followUpAt");
+  const selectedAt = atInput?.value || "";
+  if (action !== "done" && !selectedAt) {
+    feedback.textContent = "请选择提醒时间。";
+    feedback.classList.add("error");
+    atInput?.focus();
+    return;
+  }
+
+  const buttons = [$("followUpSave"), $("followUpDone")].filter(Boolean);
+  buttons.forEach((button) => { button.disabled = true; });
+  feedback.classList.remove("error");
+  feedback.textContent = action === "done" ? "正在完成…" : "正在保存…";
+  try {
+    const response = await fetch("/api/follow-up/action", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({
+        id:record.id,
+        action,
+        followUpAt:selectedAt ? new Date(selectedAt).toISOString() : "",
+        priority:$("followUpPriority")?.value || "MED",
+        note:$("followUpNote")?.value || "",
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "Follow-up 保存失败");
+    await loadFollowUpRecords();
+    renderList();
+    renderFollowUpPanel(contact);
+    const nextFeedback = $("followUpFeedback");
+    if (nextFeedback) nextFeedback.textContent = action === "done" ? "已完成，不会再出现在待跟进列表。" : "已保存，并同步到 Follow-Up Desk。";
+  } catch (error) {
+    feedback.textContent = error.message;
+    feedback.classList.add("error");
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
 function renderAiPanel(contact, messages) {
   const inbound = [...messages].reverse().filter((message) => message.direction === "inbound");
   const latestCustomer = inbound[0] || null;
@@ -911,6 +1420,24 @@ function renderAiPanel(contact, messages) {
   const signal = String(payload.signal || "").toUpperCase() || "UNCLASSIFIED";
   const category = String(payload.category || payload.aiCategory || "").trim() || "未分类";
   const nextAction = String(payload.nextAction || "").trim() || "人工判断";
+  const intentTone = intentClass(category, signal);
+  const disposition = suggestedDisposition(category);
+  const isNotInterested = String(contact.dispositionStatus || "").trim().toLowerCase() === "not interested";
+  const dispositionAction = disposition === "NOT_INTERESTED"
+    ? isNotInterested
+      ? `
+        <div class="intent-action applied">
+          <strong>✓ 已列为 Not Interested</strong>
+          <p>自动 Flow 已停止；这不是全局 Do Not Contact。</p>
+        </div>`
+      : `
+        <div class="intent-action">
+          <strong>AI 判断：Not Interested</strong>
+          <p>确认后会停止这个客户的自动 Flow，但不会加入全局 STOP 名单。</p>
+          <button class="intent-apply" id="applySuggestedDisposition" type="button">列为 Not Interested</button>
+          <div class="intent-feedback" id="intentFeedback"></div>
+        </div>`
+    : "";
 
   $("aiSubtitle").textContent = contact.name || contact.phone;
   $("aiContent").innerHTML = `
@@ -919,9 +1446,10 @@ function renderAiPanel(contact, messages) {
       <span class="signal-label">${esc(signal)}</span>
     </div>
     <div class="insight-grid">
-      <div class="insight"><span>客户意图</span><strong>${esc(category)}</strong></div>
-      <div class="insight"><span>下一步</span><strong>${esc(nextAction)}</strong></div>
+      <div class="insight ${intentTone}"><span>客户意图</span><strong>${esc(category)}</strong></div>
+      <div class="insight ${intentTone}"><span>下一步</span><strong>${esc(nextAction)}</strong></div>
     </div>
+    ${dispositionAction}
     <h3 class="ai-section-title">最新客户消息</h3>
     <div class="latest-customer">${latestCustomer ? esc(latestCustomer.text || "") : "暂无客户消息"}</div>
     <h3 class="ai-section-title">建议回复</h3>
@@ -932,6 +1460,9 @@ function renderAiPanel(contact, messages) {
     </div>
     <div class="ai-note">建议不会自动发送。发送前请确认价格、单位与客户意图。</div>`;
 
+  $("applySuggestedDisposition")?.addEventListener("click", () => {
+    applyConversationDisposition("NOT_INTERESTED");
+  });
   $("useSuggestion")?.addEventListener("click", () => {
     const textarea = $("composerText");
     if (!textarea) return;
@@ -951,6 +1482,45 @@ function renderAiPanel(contact, messages) {
       alert("无法复制，请手动选择建议文字。");
     }
   });
+}
+
+async function applyConversationDisposition(disposition) {
+  const contact = currentThreadData?.contact;
+  const feedback = $("intentFeedback");
+  const button = $("applySuggestedDisposition");
+  if (!contact || !feedback || !button) return;
+  if (!window.confirm(
+    `确认把 ${contact.name || contact.phone} 列为 Not Interested？\n\n系统会停止自动 Flow，但不会加入全局 Do Not Contact。`
+  )) return;
+
+  button.disabled = true;
+  button.textContent = "保存中";
+  feedback.classList.remove("error");
+  feedback.textContent = "正在先保存到本机…";
+  try {
+    const response = await fetch("/api/conversations/disposition", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({
+        id:contact.dispositionId || "",
+        disposition,
+        phone:contact.phone,
+        name:contact.name || "",
+        project:contact.projectCode || "",
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "Not Interested 保存失败");
+    contact.dispositionStatus = data.disposition?.status || "Not Interested";
+    renderAiPanel(contact, currentThreadData.messages || []);
+    await loadFollowUpRecords();
+    renderList();
+  } catch (error) {
+    feedback.textContent = error.message;
+    feedback.classList.add("error");
+    button.disabled = false;
+    button.textContent = "列为 Not Interested";
+  }
 }
 
 function renderThread(contact, messages) {
@@ -976,6 +1546,7 @@ function renderThread(contact, messages) {
         <button class="send-btn" id="sendButton" type="button">发送</button>
       </div>`;
 
+  renderFollowUpPanel(contact);
   renderAiPanel(contact, messages);
   wireMediaButtons();
   if (!stopped) wireComposer();
@@ -984,26 +1555,90 @@ function renderThread(contact, messages) {
 }
 
 function wireMediaButtons() {
-  document.querySelectorAll("[data-media-id]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      button.textContent = "读取中";
-      button.disabled = true;
-      const messageId = button.dataset.mediaId || "";
-      const data = await jget(`/api/inbox/media?instance=${encodeURIComponent(currentInstance)}&phone=${encodeURIComponent(currentPhone)}&messageId=${encodeURIComponent(messageId)}`)
-        .catch(() => null);
-      if (data?.available) {
-        const image = document.createElement("img");
-        image.className = "message-image";
-        image.src = data.dataUrl;
-        image.alt = "客户图片";
-        image.addEventListener("click", () => openLightbox(data.dataUrl));
-        button.replaceWith(image);
-      } else {
-        button.textContent = "图片无法读取";
-        button.disabled = false;
-      }
-    });
+  mediaObserver?.disconnect();
+  mediaObserver = null;
+  const buttons = [...document.querySelectorAll(".media-card")];
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => loadMediaCard(button));
   });
+  if (!("IntersectionObserver" in window)) return;
+  mediaObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const button = entry.target;
+      if (!["image", "sticker"].includes(button.dataset.mediaKind || "")) continue;
+      mediaObserver.unobserve(button);
+      loadMediaCard(button, { automatic:true });
+    }
+  }, {
+    root:$("conversationMessages"),
+    rootMargin:"160px 0px",
+    threshold:0.01,
+  });
+  buttons
+    .filter((button) => ["image", "sticker"].includes(button.dataset.mediaKind || ""))
+    .forEach((button) => mediaObserver.observe(button));
+}
+
+async function loadMediaCard(button, { automatic = false } = {}) {
+  if (!button || button.dataset.loading === "true") return;
+  button.dataset.loading = "true";
+  button.disabled = true;
+  button.classList.remove("error");
+  const subtitle = button.querySelector(".media-copy small");
+  if (subtitle) subtitle.textContent = automatic ? "正在加载缩图…" : "正在读取…";
+
+  try {
+    const fileName = button.dataset.mediaFile || "";
+    const requestedKind = button.dataset.mediaKind || "";
+    const direction = button.dataset.mediaDirection || "inbound";
+    const messageId = button.dataset.mediaId || "";
+    const data = fileName
+      ? { available:true, kind:requestedKind, fileName }
+      : await jget(
+        `/api/inbox/media?instance=${encodeURIComponent(currentInstance)}`
+        + `&phone=${encodeURIComponent(currentPhone)}`
+        + `&messageId=${encodeURIComponent(messageId)}`
+        + `&direction=${encodeURIComponent(direction)}`
+      ).catch(() => null);
+    if (!data?.available) throw new Error("这个媒体暂时无法读取");
+
+    const kind = data.kind || requestedKind;
+    const src = data.dataUrl || `/api/inbox/media/file?fileName=${encodeURIComponent(data.fileName || "")}`;
+    const preview = document.createElement("div");
+    preview.className = "media-preview";
+    if (kind === "video") {
+      const video = document.createElement("video");
+      video.className = "message-video";
+      video.src = src;
+      video.controls = true;
+      video.preload = "metadata";
+      video.playsInline = true;
+      preview.appendChild(video);
+    } else if (kind === "document") {
+      const link = document.createElement("a");
+      link.className = "media-document";
+      link.href = src;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "打开客户文件";
+      preview.appendChild(link);
+    } else {
+      const image = document.createElement("img");
+      image.className = "message-image";
+      image.src = src;
+      image.alt = kind === "sticker" ? "客户贴图" : "客户图片";
+      image.loading = "lazy";
+      image.addEventListener("click", () => openLightbox(src));
+      preview.appendChild(image);
+    }
+    button.replaceWith(preview);
+  } catch (error) {
+    button.dataset.loading = "false";
+    button.disabled = false;
+    button.classList.add("error");
+    if (subtitle) subtitle.textContent = `${error.message || "无法加载"} · 点击重试`;
+  }
 }
 
 function resizeComposer(textarea) {

@@ -64,6 +64,7 @@ export function explainNotionReplyError(error) {
 export function createNotionReplyQueueService({
   notion,
   reliability,
+  shouldSyncPhone = async () => true,
   clock = () => new Date(),
   onLog = (message) => console.log(message),
   onIssue = null,
@@ -112,6 +113,26 @@ export function createNotionReplyQueueService({
     const lastAttempt = Math.max(...peers.map((item) => dateMs(item.lastAttemptAt || item.updatedAt)));
     if (!lastAttempt || maxAttempts === 0) return 0;
     return lastAttempt + notionReplyRetryDelayMs(maxAttempts, { baseDelayMs, maxDelayMs });
+  }
+
+  async function keepLocalOnly(phone, { reason = "work_inbox_ignore" } = {}) {
+    const normalized = cleanPhone(phone);
+    if (!normalized) return false;
+    let shouldSync = true;
+    try {
+      shouldSync = await shouldSyncPhone(normalized);
+    } catch (error) {
+      onLog(`[reply-tracker] work inbox ignore check failed phone=${normalized}: ${error.message}`);
+      return false;
+    }
+    if (shouldSync !== false) return false;
+    const existing = itemsForPhone(normalized);
+    if (existing.length) {
+      await reliability.removeMany(existing.map((item) => String(item.event.id)));
+    }
+    phoneCooldowns.delete(normalized);
+    onLog(`[reply-tracker] private contact tracked locally only phone=…${normalized.slice(-4)} messages=${existing.length} reason=${reason}`);
+    return true;
   }
 
   async function markGroupFailure(phone, items, failure, { reason = "retry" } = {}) {
@@ -167,6 +188,9 @@ export function createNotionReplyQueueService({
     if (activePhones.has(normalized)) return activePhones.get(normalized);
 
     const run = (async () => {
+      if (await keepLocalOnly(normalized, { reason })) {
+        return { action: "tracked_only", matched: false, reason: "work_inbox_ignore" };
+      }
       const pending = itemsForPhone(normalized, { includeManual: force });
       if (!pending.length) return { action: "idle" };
       const dueAt = nextRetryFor(pending);
@@ -249,6 +273,9 @@ export function createNotionReplyQueueService({
   async function submit(event) {
     const phone = cleanPhone(event?.phone);
     if (!event?.id || !phone) return { action: "skipped", reason: "invalid_event" };
+    if (await keepLocalOnly(phone, { reason: "incoming" })) {
+      return { action: "tracked_only", matched: false, reason: "work_inbox_ignore" };
+    }
     const existing = reliability.values().find((item) => String(item.event?.id) === String(event.id));
     const cooldownAt = phoneCooldowns.get(phone) || 0;
     await reliability.enqueue(event, {

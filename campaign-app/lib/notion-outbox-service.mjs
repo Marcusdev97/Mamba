@@ -10,6 +10,7 @@
 // sync_jobs / sync_worker_state 两张表在 schema v3 就设计好了(idempotency_key
 // UNIQUE、attempt_count、available_at 退避)，只是一直没人实作。这里把它用起来。
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
 
@@ -25,6 +26,28 @@ export function backoffMinutes(attempt) {
   return BACKOFF_MINUTES[Math.min(Math.max(attempt, 1) - 1, BACKOFF_MINUTES.length - 1)];
 }
 
+export function summarizeFailedCampaignRun(state = {}) {
+  const assignments = Array.isArray(state.assignments) ? state.assignments : [];
+  const phones = [...new Set(assignments
+    .map((item) => clean(item?.lead?.phone || item?.phone).replace(/\D/g, ""))
+    .filter(Boolean))];
+  const advance = state.advanceSummary || {};
+  const issueCount = ["flowMismatch", "skippedSafety", "notFound"]
+    .reduce((total, key) => total + Math.max(0, Number(advance[key]) || 0), 0);
+  return {
+    flowLabel: clean(state.flowLabel || state.templateFlow),
+    project: clean(state.project),
+    phoneCount: phones.length,
+    affectedCount: issueCount || phones.length,
+    phoneSamples: phones.slice(0, 8),
+    advanceSummary: {
+      flowMismatch: Math.max(0, Number(advance.flowMismatch) || 0),
+      skippedSafety: Math.max(0, Number(advance.skippedSafety) || 0),
+      notFound: Math.max(0, Number(advance.notFound) || 0),
+    },
+  };
+}
+
 export function createNotionOutboxService({
   dataDir,
   sqliteBinary = "",
@@ -33,6 +56,7 @@ export function createNotionOutboxService({
 } = {}) {
   const databasePath = path.join(dataDir, "mamba.sqlite");
   let cliPromise = null;
+  const failedRunSummaryCache = new Map();
 
   function cli() {
     if (!cliPromise) {
@@ -42,6 +66,15 @@ export function createNotionOutboxService({
       });
     }
     return cliPromise;
+  }
+
+  async function failedRunSummary(entityId) {
+    const safeRunId = path.basename(clean(entityId));
+    if (failedRunSummaryCache.has(safeRunId)) return failedRunSummaryCache.get(safeRunId);
+    const state = JSON.parse(await fs.readFile(path.join(dataDir, "runs", `${safeRunId}.json`), "utf8"));
+    const summary = summarizeFailedCampaignRun(state);
+    failedRunSummaryCache.set(safeRunId, summary);
+    return summary;
   }
 
   // idempotencyKey 撞到仍然只有一笔。若 Campaign 刚完成，则把之前因为「仍在发送」
@@ -210,10 +243,34 @@ ORDER BY available_at LIMIT 20;`);
         project: clean(payload.project) || clean(payload.projectId),
       });
     }
-    const failed = await database.query(`
-SELECT entity_type AS entityType, entity_id AS entityId, attempt_count AS attemptCount,
-       last_error_code AS lastErrorCode, last_error_message AS lastErrorMessage
+    const failedRows = await database.query(`
+SELECT id AS jobId, entity_type AS entityType, entity_id AS entityId, attempt_count AS attemptCount,
+       payload_json AS payloadJson, last_error_code AS lastErrorCode, last_error_message AS lastErrorMessage
 FROM sync_jobs WHERE status='FAILED' ORDER BY updated_at DESC LIMIT 10;`);
+    const failed = await Promise.all(failedRows.map(async (row) => {
+      let payload = {};
+      try { payload = JSON.parse(row.payloadJson || "{}"); } catch { /* 状态页仍可显示 job 本身 */ }
+      let runSummary = {};
+      if (row.entityType === "campaign_run") {
+        try {
+          runSummary = await failedRunSummary(row.entityId);
+        } catch { /* 旧 run 档可能已归档，保留数据库错误即可 */ }
+      }
+      return {
+        jobId: row.jobId,
+        entityType: row.entityType,
+        entityId: row.entityId,
+        attemptCount: row.attemptCount,
+        lastErrorCode: row.lastErrorCode,
+        lastErrorMessage: row.lastErrorMessage,
+        flowLabel: runSummary.flowLabel || clean(payload.flowLabel),
+        project: runSummary.project || clean(payload.project || payload.projectId),
+        phoneCount: runSummary.phoneCount || 0,
+        affectedCount: runSummary.affectedCount || 0,
+        phoneSamples: runSummary.phoneSamples || [],
+        advanceSummary: runSummary.advanceSummary || null,
+      };
+    }));
     return {
       pending: byStatus.PENDING?.count ?? 0,
       retry: byStatus.RETRY?.count ?? 0,
