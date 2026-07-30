@@ -53,7 +53,38 @@ const oldOutbound = findHandledOutbound([candidate], [
 });
 assert.equal(oldOutbound.length, 0, "an old outbound message cannot repeatedly clear today's queue");
 
+const overnightCandidate = {
+  ...candidate,
+  followUpAt: "2026-07-13T02:00:00.000Z",
+  lastReplyAt: "2026-07-13T01:00:00.000Z",
+};
+const overnightRecovery = findHandledOutbound([overnightCandidate], [
+  message("overnight-follow-up", true, new Date("2026-07-13T03:30:00.000Z").getTime()),
+], {
+  normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+  resolvePhone: (item) => item.key.remoteJid.split("@")[0],
+  messageTime: (item) => item.messageTimestamp,
+  instanceName: "wa_01",
+  now: now.getTime(),
+});
+assert.equal(overnightRecovery.length, 1, "an outbound after the due time must survive an overnight reconciliation delay");
+
+const alreadyAdvanced = findHandledOutbound([{
+  ...overnightCandidate,
+  followUpAt: "2026-07-15T02:00:00.000Z",
+}], [
+  message("overnight-follow-up", true, new Date("2026-07-13T03:30:00.000Z").getTime()),
+], {
+  normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+  resolvePhone: (item) => item.key.remoteJid.split("@")[0],
+  messageTime: (item) => item.messageTimestamp,
+  instanceName: "wa_01",
+  now: new Date("2026-07-15T04:00:00.000Z").getTime(),
+});
+assert.equal(alreadyAdvanced.length, 0, "the same outbound cannot satisfy the next reminder after Follow Up At advances");
+
 const notionCalls = [];
+const ledgerCalls = [];
 let cacheWrites = 0;
 const liveNow = Date.now();
 const liveCandidate = {
@@ -78,6 +109,12 @@ const service = createOutboundFollowUpService({
   queryNotionRows: async (filter) => filter ? [liveCandidate] : [],
   writeCache: async () => { cacheWrites += 1; },
   history: { append: async () => ({ added: true }) },
+  conversationLog: {
+    recordOutbound: async (entry, options) => {
+      ledgerCalls.push({ entry, options, notionCallCount: notionCalls.length });
+      return { saved: true };
+    },
+  },
   systemLogs: { write: async () => {} },
   onLog: () => {},
 });
@@ -86,7 +123,73 @@ assert.equal(result.error, "");
 assert.equal(result.handled, 1);
 assert.equal(notionCalls.filter((call) => call.method === "PATCH").length, 1);
 assert.ok(notionCalls.find((call) => call.method === "PATCH").body.properties["Follow Up At"].date.start);
+assert.equal(ledgerCalls.length, 1);
+assert.equal(ledgerCalls[0].entry.messageId, "manual-sales-reply");
+assert.equal(ledgerCalls[0].entry.source, "phone");
+assert.equal(ledgerCalls[0].entry.flowTopic, "follow_up");
+assert.deepEqual(ledgerCalls[0].options, { requireExisting: true });
+assert.equal(ledgerCalls[0].notionCallCount, 1, "SQLite ledger must be written after schema read but before the Notion PATCH");
 assert.equal(cacheWrites, 1);
+
+const localFailureNotionCalls = [];
+const localFailureService = createOutboundFollowUpService({
+  blastDatabaseId: "database123",
+  api: async () => ({ messages: [message("local-write-failure", true, liveNow - 5 * 60 * 1000)] }),
+  notion: async (method, apiPath, body) => {
+    localFailureNotionCalls.push({ method, apiPath, body });
+    return method === "GET"
+      ? { properties: { "Follow Up At": { type: "date" } } }
+      : { ok: true };
+  },
+  openInstances: async () => [{ name: "wa_01" }],
+  normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+  collectMessageObjects: (value) => value.messages || [],
+  describeMessage: (item) => item.message.conversation,
+  resolvePhone: (item) => item.key.remoteJid.split("@")[0],
+  messageTime: (item) => item.messageTimestamp,
+  queryNotionRows: async () => [liveCandidate],
+  writeCache: async () => {},
+  history: { append: async () => ({ added: true }) },
+  conversationLog: { recordOutbound: async () => { throw new Error("sqlite unavailable"); } },
+  systemLogs: { write: async () => {} },
+  onLog: () => {},
+});
+const localFailureResult = await localFailureService.runOnce({ reason: "local-ledger-failure" });
+assert.equal(localFailureResult.handled, 0);
+assert.match(localFailureResult.error, /sqlite unavailable/);
+assert.equal(
+  localFailureNotionCalls.filter((call) => call.method === "PATCH").length,
+  0,
+  "Notion reminder must not advance when the local conversation ledger could not record the message",
+);
+
+const rejectedLedgerNotionCalls = [];
+const rejectedLedgerService = createOutboundFollowUpService({
+  blastDatabaseId: "database123",
+  api: async () => ({ messages: [message("missing-conversation", true, liveNow - 5 * 60 * 1000)] }),
+  notion: async (method, apiPath, body) => {
+    rejectedLedgerNotionCalls.push({ method, apiPath, body });
+    return method === "GET"
+      ? { properties: { "Follow Up At": { type: "date" } } }
+      : { ok: true };
+  },
+  openInstances: async () => [{ name: "wa_01" }],
+  normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+  collectMessageObjects: (value) => value.messages || [],
+  describeMessage: (item) => item.message.conversation,
+  resolvePhone: (item) => item.key.remoteJid.split("@")[0],
+  messageTime: (item) => item.messageTimestamp,
+  queryNotionRows: async () => [liveCandidate],
+  writeCache: async () => {},
+  history: { append: async () => ({ added: true }) },
+  conversationLog: { recordOutbound: async () => ({ saved: false, reason: "no_conversation" }) },
+  systemLogs: { write: async () => {} },
+  onLog: () => {},
+});
+const rejectedLedgerResult = await rejectedLedgerService.runOnce({ reason: "missing-conversation" });
+assert.equal(rejectedLedgerResult.handled, 0);
+assert.match(rejectedLedgerResult.error, /no_conversation/);
+assert.equal(rejectedLedgerNotionCalls.filter((call) => call.method === "PATCH").length, 0);
 
 let blockedApiCalls = 0;
 const blockedService = createOutboundFollowUpService({

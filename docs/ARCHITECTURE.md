@@ -228,6 +228,14 @@ Follow Up 状态直接镜像到 Notion。`Do Not Contact` 还必须在 Notion �
 安全写入 SQLite 并明确回报 `notionSynced: false`；不得因为缺少 Notion page 而
 丢掉操作员的决定，也不得擅自建立 Notion 客户。
 
+业务员从手机 WhatsApp 完成 Follow-up 时，Evolution 的即时 webhook 会先把真实
+出站消息写入 SQLite。若断网导致 webhook 漏失，定时 reconciliation 必须用稳定的
+Evolution message id 补写同一份 conversation ledger，再把 Notion `Follow Up At`
+安排到下一天 10:00（Asia/Kuala_Lumpur）。ChatRoom 的最后联系时间只读取 SQLite，
+不得用计划时间伪造一条已发送消息；SQLite 补写失败时也不得先推进 Notion 提醒。
+Reconciliation 以客户最后回复和本次 Follow-up 到期时间为证据边界，不以午夜为
+边界，因此断线跨日仍能补回，同时已经推进后的提醒不会重复采用同一条旧消息。
+
 ChatRoom 也允许操作员为通话后的号码建立 manual customer。操作员必须先选择
 当前 WhatsApp sender，再选择客户来源：
 

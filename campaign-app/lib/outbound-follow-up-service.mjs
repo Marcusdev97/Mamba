@@ -13,10 +13,6 @@ function klDate(value = new Date()) {
   return new Date(value).toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
 }
 
-function startOfKLDayMs(value = new Date()) {
-  return new Date(`${klDate(value)}T00:00:00+08:00`).getTime();
-}
-
 export function nextFollowUpAt(now = new Date()) {
   const date = new Date(`${klDate(now)}T10:00:00+08:00`);
   date.setUTCDate(date.getUTCDate() + 1);
@@ -52,7 +48,6 @@ export function findHandledOutbound(records, messages, {
   }
 
   const handled = new Map();
-  const todayStart = startOfKLDayMs(now);
   for (const message of messages || []) {
     if (!message?.key?.fromMe) continue;
     const phone = normalizePhone(resolvePhone(message));
@@ -60,7 +55,11 @@ export function findHandledOutbound(records, messages, {
     if (!record) continue;
     if (record.senderInstance && instanceName && record.senderInstance !== instanceName) continue;
     const at = Number(messageTime(message) || 0);
-    if (!at || at < todayStart || at <= dateMs(record.lastReplyAt)) continue;
+    // The due time is the stable boundary, not midnight. This recovers a real outbound
+    // message after an overnight outage, while the newly advanced Follow Up At prevents
+    // that same message from satisfying tomorrow's reminder again.
+    const evidenceAfter = Math.max(dateMs(record.lastReplyAt), dateMs(record.followUpAt));
+    if (!at || at <= evidenceAfter) continue;
     const previous = handled.get(record.id);
     if (!previous || at > previous.at) handled.set(record.id, { record, phone, message, at, instanceName });
   }
@@ -81,6 +80,7 @@ export function createOutboundFollowUpService({
   filterRecords = (records) => records,
   writeCache,
   history,
+  conversationLog,
   systemLogs,
   intervalMs = 30 * 60 * 1000,
   initialDelayMs = 20 * 1000,
@@ -186,9 +186,33 @@ export function createOutboundFollowUpService({
 
         const followUpAt = nextFollowUpAt();
         let handled = 0;
+        let localLedgerSaved = 0;
         const failures = [];
         for (const event of handledByPage.values()) {
           try {
+            // Evolution history proves the salesperson really sent this message. Persist it
+            // before advancing the reminder so a missed webhook cannot leave ChatRoom and
+            // Notion showing two different follow-up states.
+            if (conversationLog?.recordOutbound) {
+              const localResult = await conversationLog.recordOutbound({
+                phone: event.phone,
+                name: event.record.name || "",
+                messageId: event.message?.key?.id || "",
+                sentAt: new Date(event.at).toISOString(),
+                text: describeMessage(event.message) || "[outbound message]",
+                instanceName: event.instanceName,
+                source: "phone",
+                flowTopic: "follow_up",
+                project: event.record.project || "",
+              }, { requireExisting: true });
+              if (!localResult?.saved) {
+                throw new Error(
+                  `本机对话账本未记录已核对的 Follow-up（${localResult?.reason || "unknown"}）。`
+                  + " 请检查客户是否仍存在于 ChatRoom 后重试。",
+                );
+              }
+              localLedgerSaved += 1;
+            }
             await notion("PATCH", `/pages/${String(event.record.id).replace(/[^a-fA-F0-9]/g, "")}`, {
               properties: {
                 "Follow Up At": { date: { start: followUpAt } },
@@ -232,6 +256,7 @@ export function createOutboundFollowUpService({
           reason,
           checkedClients: candidates.length,
           handled,
+          localLedgerSaved,
           connections: instances.map((instance) => instance.name),
           connectionErrors,
           failures,

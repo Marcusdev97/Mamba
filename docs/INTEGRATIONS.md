@@ -52,6 +52,11 @@ WhatsApp → Evolution webhook/history → Mamba
 - Webhook 同时订阅 `MESSAGES_UPSERT` 与 `MESSAGES_UPDATE`。前者写对话，后者按
   Evolution message id 更新原本的 SQLite 出站消息；投递状态与
   `serverAckAt`／`deliveredAt`／`readAt` 保存在 `messages.payload_json`。
+- 手机人工 Follow-up 的即时 webhook 若因断网漏失，定时 history reconciliation
+  会用相同 Evolution message id 幂等补写 SQLite，再将 Notion `Follow Up At`
+  安排到下一天 10:00（Asia/Kuala_Lumpur）。本机写入失败时不得先推进 Notion，
+  防止 ChatRoom 仍显示旧日期但业务面板已经当作完成。补查使用最后回复时间与
+  当前 Follow-up 到期时间作为下界，允许跨午夜恢复，但不会重复采用已经处理的消息。
 - `SERVER_ACK` 只代表 WhatsApp 服务器收到（单勾），`DELIVERY_ACK` 才代表客户
   装置收到（双勾）。长期没有双勾只能列为「疑似未送达」，不得自动判定客户封锁。
 - 入站范围与发送权限分离：接收所有本机 OPEN 号码不代表 Campaign 可以任选号码发送。

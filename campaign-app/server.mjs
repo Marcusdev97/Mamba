@@ -360,6 +360,7 @@ const outboundFollowUpService = createOutboundFollowUpService({
   filterRecords: (records) => filterRecordsForDevice(records, { device: deviceIdentity }).records,
   writeCache: writeLeadStore,
   history: conversationHistoryService,
+  conversationLog: conversationLogService,
   systemLogs: systemLogService,
   intervalMs: followUpSyncMinutes * 60 * 1000,
 });
