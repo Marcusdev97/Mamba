@@ -123,5 +123,44 @@ assert.equal(restoredRunner.mirrorActiveState, true, "a queued runner becomes th
   assert.deepEqual(order, ["runner", "sqlite:COMPLETED"], "terminal SQLite commit must happen after the runner decides its final status");
 }
 
+{
+  let runCalls = 0;
+  let releaseRun;
+  const gate = new Promise((resolve) => { releaseRun = resolve; });
+  const duplicateRunner = {
+    running: false,
+    state: {
+      runId: "run_duplicate_start",
+      mode: "LIVE",
+      status: "READY",
+      assignments: [],
+    },
+    async run() {
+      runCalls += 1;
+      await gate;
+      this.state.status = "COMPLETED";
+    },
+    async saveState() {},
+    pushLog() {},
+  };
+  const duplicateRuntime = {
+    campaign: {
+      setRunner() {},
+      async persistRunners() {},
+      queue: {
+        async snapshot() { return { count: 0, items: [] }; },
+        async clearHold() {},
+      },
+    },
+  };
+  const firstStart = runCampaignInBackground(duplicateRuntime, duplicateRunner, false);
+  const secondStart = runCampaignInBackground(duplicateRuntime, duplicateRunner, false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runCalls, 1, "the same runId must acquire only one execution lease");
+  assert.equal(firstStart, secondStart, "a duplicate start must join the existing task");
+  releaseRun();
+  await Promise.all([firstStart, secondStart]);
+}
+
 await fs.rm(rootDir, { recursive: true, force: true });
 console.log("✅ all campaign-queue tests passed");

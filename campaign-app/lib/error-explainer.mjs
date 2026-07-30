@@ -106,10 +106,11 @@ const RULES = [
     action: "到名单核对这个号码。确认无效的话在 Notion 标成 Invalid，免得每一轮都再试一次。",
   },
   {
-    code: "SEND_TIMEOUT_UNCONFIRMED",
-    test: (text) => /send timeout|发送 timeout/i.test(text),
-    message: "讯息送出去了，但 WhatsApp 没在时限内回覆确认。",
-    why: "Evolution 或 WhatsApp 回应太慢。请注意：这**不代表没送出去** —— 很可能对方已经收到，只是确认回来得太晚。",
+    code: "SEND_OUTCOME_UNCONFIRMED",
+    test: (text, error) => ["SEND_OUTCOME_UNCONFIRMED", "SEND_TIMEOUT_UNCONFIRMED"].includes(error?.code)
+      || /send (?:timeout|outcome.*unconfirmed)|发送 (?:timeout|结果不明确)/i.test(text),
+    message: "WhatsApp 没有回覆可靠的发送结果。",
+    why: "Evolution／网络可能在 WhatsApp 接受讯息后才中断。请注意：这**不代表没送出去** —— 客户可能已经收到，只是确认没有回来。",
     impact: "这个客户的状态不明。系统已经停止自动重试，因为盲目重试会让对方收到两次。",
     action: "去 WhatsApp 看这个客户的对话确认收到没有，再决定要不要补发。",
   },

@@ -60,6 +60,12 @@ WhatsApp → Evolution webhook/history → Mamba
   收件人比较；命中自己的其他号码时必须在最终风险弹窗明确确认。前端确认不能取代
   后端 token 校验，收件人选择改变后必须重新确认。
 - Timeout 后状态不明确时，不得自动重发。
+- `fetch failed`、socket／connection 中断、HTTP 408／425／429／5xx 与 timeout
+  一样视为发送结果不明确。Mamba 必须把该 Part attempt 标成 `UNKNOWN` 并停止；
+  只有操作员检查客户 WhatsApp 后明确确认，才允许建立下一笔 attempt。
+- 同一 `runId` 使用 process-local execution lease；同一 Part 使用 run state 内的
+  稳定 `sendKey` 与 attempt history。两层保护共同防止双击、双 route 或断网恢复
+  造成并发重复发送。
 - ChatRoom 不得把整段对话的 base64 媒体一次塞进页面：图片只在接近可视区时
   读取缩图，影片必须由操作员点击后才读取，且禁止 autoplay。
 - Evolution 媒体先写入 `campaign-data/inbox-media`，浏览器再从受限的本机 binary

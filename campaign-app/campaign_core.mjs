@@ -67,11 +67,27 @@ export function isTimeoutError(error) {
   return name === "TimeoutError" || name === "AbortError" || /timeout|timed out|ETIMEDOUT|aborted/i.test(message);
 }
 
+export function isUnconfirmedSendOutcome(error) {
+  if (isTimeoutError(error)) return true;
+  const name = String(error?.name ?? "");
+  const code = String(error?.code ?? error?.cause?.code ?? "");
+  const message = String(error?.message ?? error ?? "");
+  const status = Number(error?.status)
+    || Number(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1])
+    || 0;
+  return name === "TypeError"
+    || /fetch failed|network|socket|connection (?:closed|reset)|ECONNRESET|EPIPE|UND_ERR/i.test(`${code} ${message}`)
+    || status === 408
+    || status === 425
+    || status === 429
+    || status >= 500;
+}
+
 export class UnconfirmedSendError extends Error {
   constructor(message) {
     super(message);
     this.name = "UnconfirmedSendError";
-    this.code = "SEND_TIMEOUT_UNCONFIRMED";
+    this.code = "SEND_OUTCOME_UNCONFIRMED";
   }
 }
 
@@ -292,7 +308,12 @@ export function makeApi(env) {
       signal: AbortSignal.timeout(timeoutMs),
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(`${pathname}: HTTP ${response.status} ${JSON.stringify(body)}`);
+    if (!response.ok) {
+      const error = new Error(`${pathname}: HTTP ${response.status} ${JSON.stringify(body)}`);
+      error.status = response.status;
+      error.operation = `${String(fetchOptions.method || "GET").toUpperCase()} ${pathname}`;
+      throw error;
+    }
     return body;
   };
 }
@@ -834,19 +855,29 @@ export class CampaignRunner {
         if (isRecipientNotOnWhatsAppError(error)) {
           throw new RecipientNotOnWhatsAppError();
         }
-        // Timeout is dangerous to retry: Evolution/WhatsApp may have received the
-        // send request but failed to answer in time. Retrying can duplicate the
-        // same customer message, so stop and let the user verify before resending.
-        if (isTimeoutError(error)) {
-          await this.systemLog("warn", "send_timeout_unconfirmed", "Send timeout without confirmation; automatic retry stopped to avoid duplicates.", {
+        // Network failures and provider 5xx responses can happen after WhatsApp
+        // accepted the message. Without a provider idempotency key, retrying the
+        // same Part is unsafe even when Evolution reported an error.
+        if (isUnconfirmedSendOutcome(error)) {
+          await this.systemLog("warn", "send_outcome_unconfirmed", "Send outcome is unconfirmed; automatic retry stopped to avoid duplicates.", {
             instanceName,
             phone: number,
             timeoutMs: SEND_API_TIMEOUT_MS,
             error: error.message,
           });
           throw new UnconfirmedSendError(
-            `发送 timeout：Evolution/WhatsApp ${Math.round(SEND_API_TIMEOUT_MS / 1000)} 秒内没有确认。为避免重复发送，系统已停止自动重试；请先检查客户 WhatsApp 是否已收到，再决定是否补发。`,
+            `发送结果不明确：Evolution/WhatsApp 没有给出可靠确认。为避免重复发送，系统已停止自动重试；请先检查客户 WhatsApp 是否已收到，再决定是否补发。`,
           );
+        }
+        // A send is retried only when an adapter can prove that nothing reached
+        // the provider. Current Evolution errors do not provide that guarantee.
+        if (error?.confirmedNotSent !== true) {
+          await this.systemLog("warn", "send_failed_without_retry", "Send failed without a safe retry guarantee; automatic retry stopped.", {
+            instanceName,
+            phone: number,
+            error: error.message,
+          });
+          throw error;
         }
         if (attempt < attempts) {
           this.showProgress(`Send failed (try ${attempt}/${attempts}): ${error.message} — retrying in 4s`);
@@ -862,6 +893,72 @@ export class CampaignRunner {
       }
     }
     throw lastError;
+  }
+
+  partAttemptHistory(job, partNumber) {
+    job.sendAttempts ||= {};
+    const key = `part${partNumber}`;
+    job.sendAttempts[key] ||= [];
+    return job.sendAttempts[key];
+  }
+
+  partSentInfo(job, partNumber) {
+    if (partNumber === 1) return job.part1 || null;
+    if (partNumber === 2) return job.part2 || null;
+    return job.extraParts?.[partNumber - 3]?.sentInfo || null;
+  }
+
+  setPartSentInfo(job, partNumber, sentInfo) {
+    if (partNumber === 1) job.part1 = sentInfo;
+    else if (partNumber === 2) job.part2 = sentInfo;
+    else if (job.extraParts?.[partNumber - 3]) job.extraParts[partNumber - 3].sentInfo = sentInfo;
+  }
+
+  async sendJobPart(job, partNumber, text, media) {
+    const existingSent = this.partSentInfo(job, partNumber);
+    if (existingSent?.sentAt) return existingSent;
+
+    const history = this.partAttemptHistory(job, partNumber);
+    const previous = history.at(-1);
+    const approvedUnknownRetry = Number(job.approvedUnconfirmedPart || 0) === partNumber;
+    if (["DISPATCHING", "UNKNOWN"].includes(previous?.status) && !approvedUnknownRetry) {
+      throw new UnconfirmedSendError(
+        `Part ${partNumber} 已有一笔结果不明确的发送记录。系统不会自动重发；请先检查客户 WhatsApp，再从画面明确确认补发。`,
+      );
+    }
+
+    const sendKey = `${this.state?.runId || "run"}:${job.id}:part:${partNumber}`;
+    const attempt = {
+      attemptId: `${sendKey}:attempt:${history.length + 1}`,
+      sendKey,
+      partNumber,
+      status: "DISPATCHING",
+      startedAt: new Date().toISOString(),
+      operatorApprovedRetry: approvedUnknownRetry,
+    };
+    history.push(attempt);
+    job.approvedUnconfirmedPart = null;
+    await this.saveState();
+
+    try {
+      const sentInfo = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, text, media);
+      this.setPartSentInfo(job, partNumber, sentInfo);
+      attempt.status = "CONFIRMED";
+      attempt.confirmedAt = sentInfo?.sentAt || new Date().toISOString();
+      attempt.messageId = sentInfo?.messageId || null;
+      attempt.apiStatus = sentInfo?.apiStatus || null;
+      await this.saveState();
+      return sentInfo;
+    } catch (error) {
+      attempt.status = error?.code === "SEND_OUTCOME_UNCONFIRMED" || isUnconfirmedSendOutcome(error)
+        ? "UNKNOWN"
+        : isRecipientNotOnWhatsAppError(error) ? "REJECTED" : "FAILED";
+      attempt.failedAt = new Date().toISOString();
+      attempt.errorCode = String(error?.code || "");
+      attempt.error = String(error?.message || error);
+      await this.saveState().catch(() => {});
+      throw error;
+    }
   }
 
   async sendMedia(instanceName, number, text, relativeMediaPath) {
@@ -1135,7 +1232,7 @@ export class CampaignRunner {
         job.status = "SENDING_PART1";
         await this.saveState();
         this.showProgress(`Part 1 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
-        job.part1 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part1Text, job.part1Media);
+        job.part1 = await this.sendJobPart(job, 1, job.part1Text, job.part1Media);
       } else {
         this.showProgress(`Part 1 already sent → ${job.lead.name}; resume from next unfinished part.`);
       }
@@ -1172,7 +1269,7 @@ export class CampaignRunner {
         job.status = "SENDING_PART2";
         await this.saveState();
         this.showProgress(`Part 2 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
-        job.part2 = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, job.part2Text, job.part2Media);
+        job.part2 = await this.sendJobPart(job, 2, job.part2Text, job.part2Media);
         await this.saveState();
       } else if (hasPart2) {
         this.showProgress(`Part 2 already sent → ${job.lead.name}; resume from next unfinished part.`);
@@ -1199,7 +1296,7 @@ export class CampaignRunner {
         // 若程序在 API 确认回来前中断，重启恢复才能识别为不确定状态并停止盲目补发。
         await this.saveState();
         this.showProgress(`Part ${k + 3} → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
-        ep.sentInfo = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, ep.text, ep.media);
+        ep.sentInfo = await this.sendJobPart(job, k + 3, ep.text, ep.media);
         await this.saveState();
       }
 

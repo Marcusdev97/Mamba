@@ -191,6 +191,11 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
   上所有 OPEN instances 的入站 webhook，避免辅助号码回复遗失。
 - 运行期间不得被维护任务重启、补发或改写状态。
 - 状态不明确的 WhatsApp 请求不得自动重发。
+- 同一个 `runId` 在单一 Server process 内只能持有一份 execution lease。即使
+  Suppression refresh 或 transport check 尚未完成，第二次 Start／Resume 也只能
+  等待原任务，不能建立另一条发送执行链。
+- 每个 Part 在 run recovery state 保存稳定 `sendKey` 与 attempt history。
+  `DISPATCHING`／`UNKNOWN` 没有操作员明确确认时不得再次调用 Evolution。
 
 ## 7. 数据所有权
 

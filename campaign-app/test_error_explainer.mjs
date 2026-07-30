@@ -19,6 +19,7 @@ const samples = [
   new Error("connect ECONNREFUSED 127.0.0.1:8080"),
   new Error('{"exists":false}'),
   new Error("发送 timeout：Evolution 45 秒内没有确认。"),
+  Object.assign(new Error("发送结果不明确"), { code: "SEND_OUTCOME_UNCONFIRMED" }),
   Object.assign(new Error("ENOENT: no such file or directory, open 'x.json'"), { code: "ENOENT" }),
   Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
   Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }),
@@ -89,6 +90,10 @@ for (const code of ["NOTION_AUTH_FAILED", "NOTION_DATABASE_ACCESS_FAILED"]) {
 
 // timeout 不代表没送出去 —— 这句一定要在，不然使用者会盲目补发。
 assert.match(explainError(new Error("发送 timeout")).why, /不代表没送出去/);
+assert.equal(
+  explainError(Object.assign(new Error("fetch failed"), { code: "SEND_OUTCOME_UNCONFIRMED" })).code,
+  "SEND_OUTCOME_UNCONFIRMED",
+);
 
 // --- 格式化成 log 那一行 ---
 const formatted = formatExplanation(explainError(new Error("HTTP 401 unauthorized")));

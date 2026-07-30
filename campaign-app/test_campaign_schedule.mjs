@@ -9,6 +9,7 @@ import {
   firstUnsentPartNumber,
   isCampaignResumeCandidate,
   isRecipientNotOnWhatsAppError,
+  isUnconfirmedSendOutcome,
   isResumableJobStatus,
 } from "./campaign_core.mjs";
 import {
@@ -54,6 +55,50 @@ assert.equal(isRecipientNotOnWhatsAppError(new Error('send failed: {"exists":fal
 assert.equal(isRecipientNotOnWhatsAppError({ error: "不是 WhatsApp 号码 (not on WhatsApp)" }), true);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("HTTP 500 provider unavailable")), false);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("Could not send WhatsApp message: HTTP 500")), false);
+assert.equal(isUnconfirmedSendOutcome(new TypeError("fetch failed")), true);
+assert.equal(isUnconfirmedSendOutcome(new Error("sendMedia: HTTP 500 upload failed")), true);
+assert.equal(isUnconfirmedSendOutcome(new Error("validation failed: HTTP 400")), false);
+
+{
+  const runner = new CampaignRunner({ config, env: {} });
+  let apiCalls = 0;
+  runner.state = { runId: "run_unknown_send", mode: "LIVE", assignments: [] };
+  runner.runPath = "/tmp/not-used-run-unknown-send.json";
+  runner.saveState = async () => {};
+  runner.api = async () => {
+    apiCalls += 1;
+    throw new TypeError("fetch failed");
+  };
+  const job = {
+    id: "unknown-part-2",
+    instanceName: "wa_01",
+    lead: { phone: "60123456789" },
+    part2Text: "Part 2",
+  };
+  runner.state.assignments = [job];
+  await assert.rejects(
+    () => runner.sendJobPart(job, 2, "Part 2", ""),
+    (error) => error?.code === "SEND_OUTCOME_UNCONFIRMED",
+  );
+  assert.equal(apiCalls, 1, "an unconfirmed network failure must never auto-retry");
+  assert.equal(job.sendAttempts.part2[0].status, "UNKNOWN");
+  await assert.rejects(
+    () => runner.sendJobPart(job, 2, "Part 2", ""),
+    /不会自动重发|结果不明确/,
+  );
+  assert.equal(apiCalls, 1, "a second call must be blocked by the Part attempt ledger");
+
+  job.approvedUnconfirmedPart = 2;
+  runner.api = async () => {
+    apiCalls += 1;
+    return { key: { id: "confirmed-part-2" }, status: "PENDING" };
+  };
+  const sent = await runner.sendJobPart(job, 2, "Part 2", "");
+  assert.equal(sent.messageId, "confirmed-part-2");
+  assert.equal(job.sendAttempts.part2.length, 2);
+  assert.equal(job.sendAttempts.part2[1].operatorApprovedRetry, true);
+  assert.equal(job.sendAttempts.part2[1].status, "CONFIRMED");
+}
 
 {
   const stickyConfig = {

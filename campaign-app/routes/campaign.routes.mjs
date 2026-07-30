@@ -6,6 +6,7 @@ import {
   isResumableJobStatus,
 } from "../campaign_core.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
+import { campaignExecutionLease } from "../lib/campaign-execution-lease.mjs";
 import { applyModeDelivery } from "../lib/campaign-mode-service.mjs";
 import {
   AUTO_SCHEDULE,
@@ -303,16 +304,16 @@ async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error
 export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error", { lane = false } = {}) {
   const campaign = requireCampaign(runtime);
   const runId = String(runner?.state?.runId || "").trim();
-  if (lane) {
-    // 车道模式：只登记进 registry（监控可见），不抢「当前 runner」、不镜像
-    // active-run.json、不触发 campaign 队列 —— 各条车道完全独立并行。
-    runner.mirrorActiveState = false;
-    campaign.registerLaneRunner?.(runner);
-  } else {
-    campaign.setRunner(runner);
-  }
-  campaign.persistRunners?.().catch(() => {});
-  const task = (async () => {
+  const lease = campaignExecutionLease.start(runId, async () => {
+    if (lane) {
+      // 车道模式：只登记进 registry（监控可见），不抢「当前 runner」、不镜像
+      // active-run.json、不触发 campaign 队列 —— 各条车道完全独立并行。
+      runner.mirrorActiveState = false;
+      campaign.registerLaneRunner?.(runner);
+    } else {
+      campaign.setRunner(runner);
+    }
+    campaign.persistRunners?.().catch(() => {});
     try {
       const awake = runtime.campaignAwake?.acquire?.(runId);
       if (awake?.supported && !awake.active) {
@@ -394,8 +395,13 @@ export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent
         });
       }
     }
-  })();
-  return task;
+  });
+  if (!lease.started) {
+    writeCampaignLog(runtime, "warn", "campaign_duplicate_start_blocked", "Duplicate start for the same Campaign run was blocked.", {
+      runId,
+    }).catch(() => {});
+  }
+  return lease.task;
 }
 
 export async function startNextQueued(runtime, { force = false } = {}) {
@@ -675,6 +681,11 @@ export function registerCampaignRoutes(router) {
     const autoAdvance = markFlowAdvanceWaiting(runner);
     for (const job of resumeJobs) {
       const partNumber = Number(job.manualContinuePart || 0);
+      const unknownPartNumber = firstUnsentPartNumber(job);
+      const previousAttempt = job.sendAttempts?.[`part${unknownPartNumber}`]?.at?.(-1);
+      if (unknownPartNumber && ["DISPATCHING", "UNKNOWN"].includes(previousAttempt?.status)) {
+        job.approvedUnconfirmedPart = unknownPartNumber;
+      }
       if (!partNumber) continue;
       job.manualPartAllowedThrough = Math.max(Number(job.manualPartAllowedThrough || 0), partNumber);
       job.manualContinuePart = null;
@@ -716,6 +727,11 @@ export function registerCampaignRoutes(router) {
     const queued = runner.retryFailedOnly();
     if (!queued) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
     for (const job of failedJobs) {
+      const unknownPartNumber = firstUnsentPartNumber(job);
+      const previousAttempt = job.sendAttempts?.[`part${unknownPartNumber}`]?.at?.(-1);
+      if (unknownPartNumber && ["DISPATCHING", "UNKNOWN"].includes(previousAttempt?.status)) {
+        job.approvedUnconfirmedPart = unknownPartNumber;
+      }
       job.manualContinueBetweenParts = true;
       job.manualPartAllowedThrough = firstUnsentPartNumber(job) || 1;
       job.manualContinuePart = null;
