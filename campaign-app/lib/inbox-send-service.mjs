@@ -117,6 +117,7 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     if (!body) throw badRequest("讯息是空的。");
 
     let messageId = "";
+    let apiStatus = "";
     if (simulate) {
       console.log(`[inbox:simulate] ${instanceName} -> ${number}: ${body}`);
     } else {
@@ -125,10 +126,11 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
         body: JSON.stringify({ number, text: body, delay: 800 }),
       });
       messageId = result?.key?.id ?? "";
+      apiStatus = result?.status ?? "";
     }
     await conversationLog?.recordOutbound({
       phone: number, text: body, instanceName, messageId,
-      source: "manual", flowTopic: "manual_reply",
+      apiStatus, source: "manual", flowTopic: "manual_reply",
     }, { requireExisting: true }).catch((error) => console.log(`[inbox] 对话纪录写入失败(讯息已发出) ${number}: ${error.message}`));
     return { sent: true, messageId };
   }
@@ -148,6 +150,7 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     await fs.writeFile(path.join(mediaDir, fileName), Buffer.from(base64, "base64"));
 
     let messageId = "";
+    let apiStatus = "";
     if (simulate) {
       console.log(`[inbox:simulate] ${instanceName} -> ${number}: [image ${ext}] ${clean(caption)}`);
     } else {
@@ -160,10 +163,11 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
         timeoutMs: 45000,
       });
       messageId = result?.key?.id ?? "";
+      apiStatus = result?.status ?? "";
     }
     await conversationLog?.recordOutbound({
       phone: number, text: clean(caption) || "[已发送图片]", instanceName, messageId,
-      source: "manual", flowTopic: "manual_image",
+      apiStatus, source: "manual", flowTopic: "manual_image",
       mediaKind: "image", mediaFileName: fileName, mime,
     }, { requireExisting: true }).catch((error) => console.log(`[inbox] 图片纪录写入失败(已发出) ${number}: ${error.message}`));
     return { sent: true, messageId, fileName };

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { RUNTIME_REQUIRED_COLUMNS } from "./v3-runtime-schema.mjs";
 
 export const GC_OUTCOMES = ["Viewing Booked", "Active", "Dormant", "Dead"];
 export const GC_FIRST_REPLY_TYPES = ["price", "timing", "specific_question", "perfunctory", "no_reply"];
@@ -378,54 +379,6 @@ export function normalizeGoldenConversation(input = {}) {
   };
 }
 
-function ledgerSchemaSql() {
-  return `
-CREATE TABLE IF NOT EXISTS golden_conversations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  lead_code TEXT NOT NULL UNIQUE,
-  project_code TEXT NOT NULL,
-  origin_project_code TEXT,
-  source_channel TEXT,
-  blast_version TEXT,
-  language TEXT,
-  customer_role TEXT,
-  primary_purpose TEXT,
-  first_reply_type TEXT,
-  outcome TEXT NOT NULL CHECK (outcome IN ('Viewing Booked','Active','Dormant','Dead')),
-  outcome_updated_at TEXT NOT NULL,
-  death_turn INTEGER,
-  death_message_type TEXT,
-  death_note TEXT,
-  trigger_message TEXT,
-  customer_next_move TEXT,
-  friction_removers TEXT NOT NULL DEFAULT '[]',
-  reconfirmed INTEGER NOT NULL DEFAULT 0 CHECK (reconfirmed IN (0,1)),
-  decision_trace TEXT NOT NULL DEFAULT '[]',
-  conversation_text TEXT NOT NULL,
-  do_not_copy TEXT NOT NULL DEFAULT '[]',
-  pk_conflicts TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  source_hash TEXT NOT NULL UNIQUE,
-  last_customer_reply_at TEXT
-);
-CREATE TABLE IF NOT EXISTS followup_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  lead_code TEXT NOT NULL REFERENCES golden_conversations(lead_code) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,
-  sent_at TEXT NOT NULL,
-  silence_gap_days INTEGER NOT NULL,
-  followup_type TEXT NOT NULL CHECK (followup_type IN ('ab_slot_template','festival_greeting','new_info','price_update','personalized_question')),
-  content_summary TEXT,
-  revival INTEGER NOT NULL CHECK (revival IN (0,1)),
-  revival_gap_hours INTEGER,
-  UNIQUE(lead_code, seq)
-);
-CREATE INDEX IF NOT EXISTS idx_gc_outcome ON golden_conversations(outcome);
-CREATE INDEX IF NOT EXISTS idx_gc_project ON golden_conversations(project_code);
-CREATE INDEX IF NOT EXISTS idx_fl_type ON followup_log(followup_type, revival);
-`;
-}
-
 export function createGoldenConversationLedgerService({
   localDatabase,
   dataDir,
@@ -460,59 +413,20 @@ export function createGoldenConversationLedgerService({
     return runSqlite(await ensureDriver(), databasePath, `.timeout 5000\n${sql}`, { timeoutMs: 60000 });
   }
 
-  async function migrateLegacyIfNeeded() {
-    const columns = await query("PRAGMA table_info(golden_conversations);");
-    if (!columns.length) {
-      await execute(`PRAGMA foreign_keys=ON; BEGIN IMMEDIATE; ${ledgerSchemaSql()} COMMIT;`);
-      return { migrated: false, legacyRows: 0 };
-    }
-    const names = new Set(columns.map((column) => column.name));
-    if (names.has("lead_code") && names.has("source_hash")) {
-      if (!names.has("last_customer_reply_at")) {
-        await execute("ALTER TABLE golden_conversations ADD COLUMN last_customer_reply_at TEXT;");
+  async function assertSchemaReady() {
+    for (const [table, requiredColumns] of Object.entries({
+      golden_conversations: RUNTIME_REQUIRED_COLUMNS.golden_conversations,
+      followup_log: RUNTIME_REQUIRED_COLUMNS.followup_log,
+    })) {
+      const columns = new Set((await query(`PRAGMA table_info(${table});`)).map((column) => column.name));
+      const missing = requiredColumns.filter((name) => !columns.has(name));
+      if (missing.length) {
+        const error = new Error(`${table} 尚未完成正式 Migration（缺少：${missing.join(", ")}）。`);
+        error.code = "SCHEMA_MIGRATION_REQUIRED";
+        throw error;
       }
-      await execute(ledgerSchemaSql());
-      return { migrated: false, legacyRows: 0 };
     }
-    if (!names.has("golden_key")) {
-      const error = new Error("golden_conversations 结构未知，已停止升级以保护资料。");
-      error.code = "GC_UNKNOWN_SCHEMA";
-      throw error;
-    }
-    const [backup] = await query("SELECT name FROM sqlite_master WHERE type='table' AND name='golden_conversations_legacy_v3';");
-    if (backup) {
-      const error = new Error("发现 legacy 备份但目前仍是旧表，无法判断上次升级状态；请先人工检查。");
-      error.code = "GC_PARTIAL_MIGRATION";
-      throw error;
-    }
-    const [countRow] = await query("SELECT count(*) AS count FROM golden_conversations;");
-    const legacyRows = Number(countRow?.count || 0);
-    await execute(`
-PRAGMA foreign_keys=OFF;
-BEGIN IMMEDIATE;
-DROP TABLE IF EXISTS followup_log;
-ALTER TABLE golden_conversations RENAME TO golden_conversations_legacy_v3;
-${ledgerSchemaSql()}
-INSERT INTO golden_conversations(
-  lead_code, project_code, source_channel, language, customer_role, primary_purpose,
-  first_reply_type, outcome, outcome_updated_at, friction_removers, reconfirmed,
-  decision_trace, conversation_text, do_not_copy, pk_conflicts, created_at, source_hash
-)
-SELECT
-  printf('LEGACY%04d', rowid), project_code, 'legacy_notion', '', '', 'unknown',
-  'perfunctory', 'Active', COALESCE(updated_at, created_at), '[]', 0,
-  '[]', conversation_text, '[]', '[]', created_at,
-  CASE WHEN trim(COALESCE(conversation_hash,'')) <> ''
-    THEN 'legacy:' || conversation_hash
-    ELSE 'legacy:' || lower(hex(randomblob(32))) END
-FROM golden_conversations_legacy_v3;
-INSERT INTO metadata(key, value, updated_at)
-VALUES ('gc_legacy_backup_table', 'golden_conversations_legacy_v3', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;
-COMMIT;
-PRAGMA foreign_keys=ON;
-`);
-    return { migrated: true, legacyRows };
+    return { migrated: false, legacyRows: 0, schemaReady: true };
   }
 
   async function nextLeadCode() {
@@ -810,7 +724,7 @@ Confirmed.
 
   async function initialize() {
     await localDatabase.initialize();
-    const migration = await migrateLegacyIfNeeded();
+    const migration = await assertSchemaReady();
     const now = iso();
     await execute(`
 INSERT INTO metadata(key, value, updated_at) VALUES ('gc_schema_version', '${LEDGER_SCHEMA_VERSION}', ${sqlText(now)})

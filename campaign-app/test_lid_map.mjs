@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createLidMapService } from "./lib/lid-map-service.mjs";
+import { createSqliteCli } from "./lib/sqlite-cli.mjs";
+import { LID_MAP_SCHEMA_SQL } from "./lib/v3-runtime-schema.mjs";
 import { jidLid, resolveLid, lidPhonePair, resolvePhoneWithLid, normalizePhone } from "./reply_intake.mjs";
 
 // ---- 纯函式 ----
@@ -43,6 +45,8 @@ assert.equal(normalizePhone("60168568756"), "60168568756");
 // ---- service ----
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-lid-"));
+const database = await createSqliteCli({ databasePath: path.join(dataDir, "mamba.sqlite") });
+await database.exec(LID_MAP_SCHEMA_SQL);
 const lidMap = createLidMapService({ dataDir });
 
 assert.equal(await lidMap.resolve("999"), null, "空表查无");

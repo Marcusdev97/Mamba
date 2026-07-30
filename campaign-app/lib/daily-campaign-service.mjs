@@ -10,6 +10,7 @@ const WORK_END_MINUTES = 21 * 60;
 const SEND_FLOOR_SECONDS = 60;
 const SAFE_DAILY_PER_SENDER = 150;
 const MISSED_GRACE_DAYS = 3;
+const LIVE_RETRY_DELAY_MS = 5 * 60 * 1000;
 const DEFAULT_CONFIG = Object.freeze({
   enabled: false,
   mode: "TEST",
@@ -17,6 +18,7 @@ const DEFAULT_CONFIG = Object.freeze({
   projects: ALLOWED_PROJECTS,
   maxLeads: 5,
   requireDeepCheck: true,
+  liveArmed: false,
   cadence: "24-day",
 });
 
@@ -44,6 +46,7 @@ function cleanConfig(value = {}) {
     projects: projects.length ? projects : [...ALLOWED_PROJECTS],
     maxLeads: Math.min(5, Math.max(2, Number(value.maxLeads) || DEFAULT_CONFIG.maxLeads)),
     requireDeepCheck: value.requireDeepCheck !== false,
+    liveArmed: schedulerMode === "LIVE" && value.liveArmed === true,
     cadence: "24-day",
   };
 }
@@ -287,9 +290,13 @@ export function buildAutomationPlan({
   random = Math.random,
 } = {}) {
   const today = shift?.today || klParts().date;
+  const firstAutomaticFlow = firstFlow(flowSequence).label;
   const eligible = (Array.isArray(leads) ? leads : [])
     .filter((lead) => config.projects.includes(lead.project))
     .filter((lead) => isScheduledFlow(lead.nextFlow, flowSequence))
+    // Flow 1 is the first contact and remains a human launch decision. LIVE
+    // automation only continues customers who are already inside the sequence.
+    .filter((lead) => mode !== "LIVE" || lead.nextFlow !== firstAutomaticFlow)
     .filter((lead) => !hasReply(lead) && !isStopped(lead))
     .map((lead) => ({ ...lead, dueAgeDays: dueAgeDays(lead, today) }))
     .filter((lead) => lead.dueAgeDays >= 0 && lead.dueAgeDays <= MISSED_GRACE_DAYS)
@@ -297,6 +304,7 @@ export function buildAutomationPlan({
   const expired = (Array.isArray(leads) ? leads : [])
     .filter((lead) => config.projects.includes(lead.project))
     .filter((lead) => isScheduledFlow(lead.nextFlow, flowSequence))
+    .filter((lead) => mode !== "LIVE" || lead.nextFlow !== firstAutomaticFlow)
     .map((lead) => ({ ...lead, dueAgeDays: dueAgeDays(lead, today) }))
     .filter((lead) => lead.dueAgeDays > MISSED_GRACE_DAYS).length;
   const capacity = capacityFor({ mode, shift, instances, testRecipients });
@@ -347,6 +355,7 @@ export function createDailyCampaignService({
   queue,
   fetchDuePlan,
   executeTest,
+  executeLive,
   getTestLeads,
   systemLogs,
   postOps,
@@ -357,7 +366,13 @@ export function createDailyCampaignService({
   const testCohortPath = path.join(rootDir, "campaign-data", "daily-test-cohort.json");
   const trackerPath = path.join(rootDir, "campaign-data", "tracker", "heartbeat.json");
   let config = { ...DEFAULT_CONFIG, projects: [...ALLOWED_PROJECTS] };
-  let state = { lastAttemptDate: null, stoppedDate: null, lastRun: null, lastCheck: null };
+  let state = {
+    lastAttemptDate: null,
+    nextAttemptAt: null,
+    stoppedDate: null,
+    lastRun: null,
+    lastCheck: null,
+  };
   let timer = null;
   let running = false;
 
@@ -580,7 +595,7 @@ export function createDailyCampaignService({
   function progressSummary({ automationPlan, batch, today } = {}) {
     const lastRunToday = state.lastRun?.at && klParts(new Date(state.lastRun.at)).date === today;
     const lastBatch = lastRunToday ? state.lastRun?.batch : null;
-    const sent = lastRunToday && state.lastRun?.status === "STARTED_TEST"
+    const sent = lastRunToday && ["STARTED_TEST", "STARTED_LIVE"].includes(state.lastRun?.status)
       ? Number(lastBatch?.leads?.length || 0)
       : 0;
     const failed = lastRunToday && state.lastRun?.status === "ERROR" ? 1 : 0;
@@ -647,10 +662,16 @@ export function createDailyCampaignService({
       testRecipients: recipients,
     });
     const batch = automationPlan.batch;
-    gates.push(gate("mode", mode === "TEST", mode === "OFF" ? "总开关关闭" : mode === "LIVE" ? "LIVE 安全锁" : "TEST 模式", mode === "OFF"
+    const modeReady = mode === "TEST"
+      || (mode === "LIVE" && config.liveArmed === true && typeof executeLive === "function");
+    gates.push(gate("mode", modeReady, mode === "OFF" ? "总开关关闭" : `${mode} 模式`, mode === "OFF"
       ? "Campaign Automations 已关闭，不会发送。"
       : mode === "LIVE"
-        ? "LIVE 入口先保留，但真实客户自动发送还未接上；目前不会发送。"
+        ? (modeReady
+          ? "LIVE 值班已开启；每批完成后会重新检查名单与回复，再自动启动下一批。"
+          : config.liveArmed !== true
+            ? "LIVE 尚未确认开启；不会发送真实客户。"
+            : "LIVE 执行器尚未载入；不会发送真实客户。")
         : `只会发给 TEST 名单：${recipients.map((lead) => lead.name).join(" / ") || "尚未设置"}。`));
     gates.push(gate("shift", shift.status === "on-shift", "10:00–21:00 值班窗口", shift.stoppedToday
       ? "今天已提前放工；明天 10:00 再继续。"
@@ -679,7 +700,7 @@ export function createDailyCampaignService({
     if (deep) {
       gates.push(gate("reply_scan", safety.safeToSend === true, "深度回复检查", safety.safeToSend
         ? `深度检查通过，来源 ${safety.scanSource || "Evolution"}。`
-        : "深度检查未通过；不会启动自动 TEST。"));
+        : `深度检查未通过；不会启动自动 ${mode}。`));
     }
     gates.push(gate("notion", Boolean(plan) && !planError, "Notion 名单可读", planError || `找到 ${plan?.leads?.length || 0} 位到期客户。`));
     gates.push(gate("batch", Boolean(batch), "当天批次", batch
@@ -720,59 +741,137 @@ export function createDailyCampaignService({
     await postOps(text).catch(() => {});
   }
 
-  async function runTest({ scheduled = false } = {}) {
+  function scheduleLiveRetry() {
+    state.nextAttemptAt = new Date(clock().getTime() + LIVE_RETRY_DELAY_MS).toISOString();
+  }
+
+  async function runMode(mode, { scheduled = false } = {}) {
     await ready;
-    if (running) throw new Error("Next Campaign TEST 已在准备中。请不要重复点击。");
+    if (currentMode() !== mode) {
+      throw new Error(`Campaign Automations 当前不是 ${mode} 模式。`);
+    }
+    const executor = mode === "LIVE" ? executeLive : executeTest;
+    if (typeof executor !== "function") {
+      throw new Error(`${mode} 执行器尚未载入；不会启动 Campaign。`);
+    }
+    if (running) throw new Error(`Next Campaign ${mode} 已在准备中。请不要重复点击。`);
     running = true;
     const today = klParts(clock()).date;
     try {
       const readiness = await check({ deep: config.requireDeepCheck });
       if (!readiness.ready) {
         const reasons = readiness.gates.filter((item) => !item.ok).map((item) => item.detail || item.label);
-        state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+        if (mode === "TEST") state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+        else scheduleLiveRetry();
         state.lastRun = { at: clock().toISOString(), status: "HOLD", scheduled, reasons };
         await persist();
-        await systemLogs?.write({ level: "warn", area: "daily-campaign", event: "launch_held", message: "Daily TEST launch was held by safety gates.", context: { reasons } }).catch(() => {});
-        await notify(`⏸ <b>Next Campaign TEST HOLD</b>\n${reasons.join("\n")}`);
+        await systemLogs?.write({
+          level: "warn",
+          area: "daily-campaign",
+          event: "launch_held",
+          message: `Daily ${mode} launch was held by safety gates.`,
+          context: { mode, reasons, nextAttemptAt: state.nextAttemptAt },
+        }).catch(() => {});
+        await notify(`⏸ <b>Next Campaign ${mode} HOLD</b>\n${reasons.join("\n")}`);
         return { ok: false, status: "HOLD", readiness, reasons };
       }
-      const result = await executeTest({ batch: readiness.batch, plan: readiness.automationPlan, instances: readiness.instances, maxLeads: config.maxLeads });
+      const result = await executor({
+        batch: readiness.batch,
+        plan: readiness.automationPlan,
+        instances: readiness.instances,
+        maxLeads: config.maxLeads,
+      });
+      state.nextAttemptAt = null;
       if (result?.queued === true) {
-        state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
-        state.lastRun = { at: clock().toISOString(), status: "QUEUED_TEST", scheduled, batch: readiness.batch, result };
+        if (mode === "TEST") state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+        const status = `QUEUED_${mode}`;
+        state.lastRun = { at: clock().toISOString(), status, scheduled, batch: readiness.batch, result };
         await persist();
-        await systemLogs?.write({ level: "info", area: "daily-campaign", event: "test_queued", message: "Daily Next Campaign TEST was queued and has not advanced the TEST cohort.", context: { project: readiness.batch.project, flow: readiness.batch.flow, due: readiness.batch.totalDue, runId: result.runId || null } }).catch(() => {});
-        await notify(`⏳ <b>Campaign Automations TEST 已加入队列</b>\n项目: ${readiness.batch.project}\nFlow: ${readiness.batch.flow}\n名单还不会推进，等真正发送后才算完成。`);
-        return { ok: true, status: "QUEUED_TEST", readiness, result };
+        await systemLogs?.write({
+          level: "info",
+          area: "daily-campaign",
+          event: `${mode.toLowerCase()}_queued`,
+          message: `Daily Next Campaign ${mode} was queued.`,
+          context: {
+            project: readiness.batch.project,
+            flow: readiness.batch.flow,
+            due: readiness.batch.totalDue,
+            runId: result.runId || null,
+          },
+        }).catch(() => {});
+        await notify(`⏳ <b>Campaign Automations ${mode} 已加入队列</b>\n项目: ${readiness.batch.project}\nFlow: ${readiness.batch.flow}\n名单还不会推进，等真正发送后才算完成。`);
+        return { ok: true, status, readiness, result };
       }
-      await advanceTestCohort(readiness.batch?.leads || [], today);
-      state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
-      state.lastRun = { at: clock().toISOString(), status: "STARTED_TEST", scheduled, batch: readiness.batch, result };
+      if (mode === "TEST") {
+        await advanceTestCohort(readiness.batch?.leads || [], today);
+        state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+      }
+      const status = `STARTED_${mode}`;
+      state.lastRun = { at: clock().toISOString(), status, scheduled, batch: readiness.batch, result };
       await persist();
-      await systemLogs?.write({ level: "info", area: "daily-campaign", event: "test_started", message: "Daily Next Campaign TEST started.", context: { project: readiness.batch.project, flow: readiness.batch.flow, due: readiness.batch.totalDue } }).catch(() => {});
-      await notify(`🧪 <b>Campaign Automations TEST 已启动</b>\n项目: ${readiness.batch.project}\nFlow: ${readiness.batch.flow}\n计划: ${readiness.automationPlan?.plannedCount || readiness.batch.leads.length}\n顺延: ${readiness.automationPlan?.deferredCount || 0}`);
-      return { ok: true, status: "STARTED_TEST", readiness, result };
+      await systemLogs?.write({
+        level: "info",
+        area: "daily-campaign",
+        event: `${mode.toLowerCase()}_started`,
+        message: `Daily Next Campaign ${mode} started.`,
+        context: {
+          project: readiness.batch.project,
+          flow: readiness.batch.flow,
+          due: readiness.batch.totalDue,
+          runId: result?.runId || null,
+        },
+      }).catch(() => {});
+      await notify(`${mode === "TEST" ? "🧪" : "🚀"} <b>Campaign Automations ${mode} 已启动</b>\n项目: ${readiness.batch.project}\nFlow: ${readiness.batch.flow}\n计划: ${readiness.automationPlan?.plannedCount || readiness.batch.leads.length}\n顺延: ${readiness.automationPlan?.deferredCount || 0}`);
+      return { ok: true, status, readiness, result };
     } catch (error) {
-      state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+      if (mode === "TEST") state.lastAttemptDate = scheduled ? today : state.lastAttemptDate;
+      else scheduleLiveRetry();
       state.lastRun = { at: clock().toISOString(), status: "ERROR", scheduled, error: error.message || String(error) };
       await persist().catch(() => {});
-      await systemLogs?.write({ level: "error", area: "daily-campaign", event: "test_failed", message: "Daily Next Campaign TEST failed.", context: { error: error.message || String(error) } }).catch(() => {});
-      await notify(`❌ <b>Next Campaign TEST 失败</b>\n${error.message || String(error)}`);
+      await systemLogs?.write({
+        level: "error",
+        area: "daily-campaign",
+        event: `${mode.toLowerCase()}_failed`,
+        message: `Daily Next Campaign ${mode} failed.`,
+        context: { error: error.message || String(error), nextAttemptAt: state.nextAttemptAt },
+      }).catch(() => {});
+      await notify(`❌ <b>Next Campaign ${mode} 失败</b>\n${error.message || String(error)}`);
       throw error;
     } finally {
       running = false;
     }
   }
 
+  async function runTest(options = {}) {
+    return runMode("TEST", options);
+  }
+
+  async function runLive(options = {}) {
+    return runMode("LIVE", options);
+  }
+
   async function tick() {
     await ready;
-    if (!config.enabled || config.mode !== "TEST" || running) return;
+    if (!config.enabled || running) return;
     const now = klParts(clock());
     if (state.stoppedDate === now.date) return;
     const scheduledMinutes = Number(config.time.slice(0, 2)) * 60 + Number(config.time.slice(3));
-    if (now.minutes < scheduledMinutes || now.minutes > scheduledMinutes + 15) return;
-    if (state.lastAttemptDate === now.date) return;
-    await runTest({ scheduled: true }).catch(() => {});
+    if (config.mode === "TEST") {
+      if (now.minutes < scheduledMinutes || now.minutes > scheduledMinutes + 15) return;
+      if (state.lastAttemptDate === now.date) return;
+      await runTest({ scheduled: true }).catch(() => {});
+      return;
+    }
+
+    if (!config.liveArmed || now.minutes < scheduledMinutes || now.minutes > WORK_END_MINUTES) return;
+    if (state.nextAttemptAt && new Date(state.nextAttemptAt).getTime() > clock().getTime()) return;
+
+    // A running batch may not have advanced SQLite yet. Waiting until it fully
+    // finishes prevents the scheduler from selecting the same due customers twice.
+    if (getRunner?.()?.running) return;
+    const queueState = await queue?.snapshot?.().catch(() => ({ count: 0, hold: null })) || { count: 0, hold: null };
+    if (Number(queueState.count || 0) > 0 || queueState.hold) return;
+    await runLive({ scheduled: true }).catch(() => {});
   }
 
   function start(intervalMs = 30000) {
@@ -827,5 +926,5 @@ export function createDailyCampaignService({
     return { ok: true, config, schedulerMode: mode, shift, state, running, allowedProjects: ALLOWED_PROJECTS, cadence: cadenceSummary(), testRecipients: testRecipients(), testCohort };
   }
 
-  return { ready, start, stop, tick, check, runTest, update, stopForToday, snapshot, configPath };
+  return { ready, start, stop, tick, check, runTest, runLive, update, stopForToday, snapshot, configPath };
 }

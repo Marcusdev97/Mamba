@@ -93,6 +93,7 @@
   .rep.red { color: #f87171; } .rep.green { color: #4ade80; } .rep.grey { color: #94a3b8; }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
+<script src="/assets/live-recipient-confirmation.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -192,7 +193,11 @@ async function api(path, body, method) {
   const res = await fetch(path, body ? { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
                                      : { method: method || "GET", cache: "no-store" });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+  if (!res.ok || data.ok === false) {
+    const error = new Error(data.error || ("HTTP " + res.status));
+    error.status = res.status;
+    throw error;
+  }
   return data;
 }
 
@@ -637,10 +642,37 @@ async function doSend(mode, proj, rows, flow, limitCount) {
       ? `自动排程 · 预计约 ${prepared.schedule.end} 完成`
       : `指定时间窗 ${prepared.schedule?.start || "-"}–${prepared.schedule?.end || "-"}`;
     toast(`套用模板 ${flow} · ${ap.languages.join("/")} · ${ap.overridden} 人 · ${timing}`);
-    await api("/api/start", { optIn: true, overrides: {}, autoAdvance: mode === "LIVE", project: proj.id, runId: activeNextRunId });
+    let recipientRiskToken = "";
+    if (mode === "LIVE") {
+      const response = await api("/api/campaign/recipient-risk", {
+        project: proj.id,
+        runId: activeNextRunId,
+        skipIds: [],
+      });
+      const confirmed = await window.MambaLiveRecipientConfirm.open(response.risk, {
+        actionLabel: `确认发送 ${flow}`,
+      });
+      if (!confirmed) {
+        toast("已取消 LIVE 发送；预览仍保留，没有发出 WhatsApp。");
+        return;
+      }
+      recipientRiskToken = response.risk.confirmationToken;
+    }
+    await api("/api/start", {
+      optIn: true,
+      overrides: {},
+      autoAdvance: mode === "LIVE",
+      project: proj.id,
+      runId: activeNextRunId,
+      recipientRiskToken: mode === "LIVE" ? recipientRiskToken : undefined,
+    });
     setTimeout(() => toast(mode === "LIVE" ? `已开始发送 ${flow} 🚀 发完自动推进到下一轮` : "已发测试给自己 🧪"), 800);
     setTimeout(pollStatus, 1800);
-  } catch (e) { toast("发送失败:" + e.message, true); }
+  } catch (e) {
+    toast(window.MambaLiveRecipientConfirm.formatRequestError(e, {
+      action: mode === "LIVE" ? `开始 ${flow} LIVE 发送` : "开始测试发送",
+    }), true);
+  }
 }
 
 function hhmmss(iso) {

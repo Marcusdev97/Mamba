@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import { json, text } from "../lib/http.mjs";
 
@@ -27,12 +28,34 @@ const HTML_ROUTES = {
   "/ai-changes": "ai-changes.html",
 };
 
-async function serveHtml(res, appDir, filename) {
-  const html = await fs.readFile(path.join(appDir, filename), "utf8");
+function walkFiles(dir, prefix = "") {
+  let entries = [];
+  try { entries = fsSync.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap((entry) => {
+    const relative = path.posix.join(prefix, entry.name);
+    const absolute = path.join(dir, entry.name);
+    return entry.isDirectory() ? walkFiles(absolute, relative) : [{ relative, absolute }];
+  });
+}
+
+export function createStaticSnapshot(appDir) {
+  const html = new Map();
+  for (const filename of new Set(Object.values(HTML_ROUTES))) {
+    try { html.set(filename, fsSync.readFileSync(path.join(appDir, filename), "utf8")); } catch { /* route returns its normal read error */ }
+  }
+  const assets = new Map();
+  for (const file of walkFiles(path.join(appDir, "assets"))) {
+    try { assets.set(file.relative, fsSync.readFileSync(file.absolute)); } catch { /* missing asset stays a normal 404 */ }
+  }
+  return { html, assets };
+}
+
+async function serveHtml(res, appDir, filename, snapshot) {
+  const html = snapshot?.html?.get(filename) ?? await fs.readFile(path.join(appDir, filename), "utf8");
   text(res, 200, html, "text/html; charset=utf-8");
 }
 
-async function serveAsset(res, runtime, url) {
+async function serveAsset(res, runtime, url, snapshot) {
   const rel = decodeURIComponent(url.pathname.slice("/assets/".length));
   if (rel.includes("..")) {
     json(res, 400, { ok: false, error: "Bad asset path." });
@@ -47,7 +70,7 @@ async function serveAsset(res, runtime, url) {
     ".svg": "image/svg+xml",
   };
   try {
-    const body = await fs.readFile(filePath);
+    const body = snapshot?.assets?.get(rel) ?? await fs.readFile(filePath);
     res.writeHead(200, { "Content-Type": types[path.extname(filePath)] || "application/octet-stream", "Cache-Control": "no-cache" });
     res.end(body);
   } catch {
@@ -73,7 +96,11 @@ async function serveCampaignImage(res, runtime, url) {
   }
 }
 
-export function registerStaticRoutes(router) {
+export function registerStaticRoutes(router, bootRuntime = null) {
+  // HTML and bundled JS must come from the same server boot. Reading them from
+  // disk on every refresh can pair a newly edited UI with an old in-memory API
+  // router, which makes safe LIVE checks appear as 404 until restart.
+  const snapshot = bootRuntime?.appDir ? createStaticSnapshot(bootRuntime.appDir) : null;
   router.use(async (req, res, runtime) => {
     const url = new URL(req.url, `http://${runtime.host}:${runtime.port}`);
     if (req.method !== "GET") return false;
@@ -91,12 +118,12 @@ export function registerStaticRoutes(router) {
     }
 
     if (HTML_ROUTES[url.pathname]) {
-      await serveHtml(res, runtime.appDir, HTML_ROUTES[url.pathname]);
+      await serveHtml(res, runtime.appDir, HTML_ROUTES[url.pathname], snapshot);
       return true;
     }
 
     if (url.pathname.startsWith("/assets/")) {
-      await serveAsset(res, runtime, url);
+      await serveAsset(res, runtime, url, snapshot);
       return true;
     }
 

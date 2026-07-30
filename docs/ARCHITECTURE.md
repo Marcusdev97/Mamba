@@ -4,7 +4,8 @@
 >
 > 本文件说明 Mamba 现在如何运行，以及新增代码应该往哪里放。
 > 数据架构的正式决策见
-> [`MAMBA_ARCHITECTURE_ADR.md`](MAMBA_ARCHITECTURE_ADR.md)。
+> [`MAMBA_ARCHITECTURE_ADR.md`](MAMBA_ARCHITECTURE_ADR.md)，每种资料的唯一来源见
+> [`DATA_OWNERSHIP.md`](DATA_OWNERSHIP.md)。
 
 ## 1. 系统目标
 
@@ -45,6 +46,10 @@ campaign-app/server.mjs
              └── Cloudflare R2
 ```
 
+本机 UI 的 HTML 与 `/assets` bundle 在 Server 启动时建立同一份静态快照。
+运行中修改磁盘代码不会让旧 API router 配上新版 UI；新版本必须在没有 LIVE
+Campaign 运行时重启后一起生效。Campaign 图片等业务资料仍按请求读取。
+
 ### 主要本机进程
 
 | 组件 | 默认位置／端口 | 责任 |
@@ -79,7 +84,8 @@ campaign-data/
 ├── mamba.sqlite           # 不进入 Git
 ├── runs/                  # Campaign run state
 ├── brain/                 # Brain pending、archive、cache
-└── logs/                  # 本机运行日志
+├── logs/                  # 本机运行日志
+└── maintenance-archive/   # 可恢复的维护归档；不进入 Git
 
 evolution-pilot/
 ├── .env                   # Secret 与本机配置，不进入 Git
@@ -132,6 +138,8 @@ TEST or LIVE confirmation
         ↓
 Send through Evolution
         ↓
+Campaign acquires macOS idle-sleep guard
+        ↓
 Commit each recipient result to SQLite
         ↓
 Campaign reaches terminal state
@@ -144,6 +152,13 @@ Final Notion Sync
 Campaign 的 terminal state 包括正常完成，以及经过明确处理的停止／中断状态。
 当 Campaign 仍在发送时，Notion outbox job 必须保持 `PENDING`／deferred，
 不能将部分状态当成最终同步。
+
+macOS 上，Campaign 从真正进入 `RUNNING` 到 terminal state 期间会持有
+`caffeinate` idle-sleep lease；多条 sender lane 共用一个进程并按 runId
+reference count。这个 lease 只能避免闲置睡眠，不能绕过 MacBook 合盖睡眠。
+Transport Guard 每 15 秒分别检查 Docker daemon、Evolution API 和本批实际 sender
+instance；连续两次异常会把 run 标为 `INTERRUPTED`。恢复连接后仍必须由操作员
+人工继续，系统不得自动重连号码或恢复发送。
 
 ## 6. TEST 与 LIVE
 
@@ -161,6 +176,17 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 - 名单必须来自明确的 Project 和 Lead Group。
 - 必须确认 opt-in。
 - 发送前必须经过 suppression、resend guard 和 sender ownership。
+- Campaign Automations 的 LIVE 必须由操作员明确 arm；旧版仅展示的 LIVE
+  配置不得在升级后自动取得真实发送权限。
+- Scheduler 只接手已经进入 Sequence 的 Flow 2–10；Flow 1 新客户首次接触
+  仍必须由操作员选择 Project／Lead Group 并亲自启动。
+- Scheduler 不在当前批运行时预建下一批。当前批完整落地 SQLite 后，值班 tick
+  才重新读取到期名单、执行深度回复检查并自动启动下一批，避免同一批客户被重复选中。
+- LIVE 值班窗口为 10:00–21:00；安全闸门未通过时保持 HOLD，五分钟后再检查，
+  不绕过 Tracker、Queue、sender ownership 或回复安全规则。
+- 人工 LIVE 发送在最终启动前必须显示收件人风险确认：本批人数、本机已连接号码、
+  Settings 私人联系人，以及 SQLite 中任何历史 Blast 记录。确认 token 绑定当前
+  run 与实际未跳过的 recipient IDs；名单或风险资料改变后旧 token 立即失效。
 - Campaign sender policy 只限制出站发送；Tracker／Brain 必须接收本机 Evolution
   上所有 OPEN instances 的入站 webhook，避免辅助号码回复遗失。
 - 运行期间不得被维护任务重启、补发或改写状态。
@@ -203,13 +229,17 @@ ChatRoom 也允许操作员为通话后的号码建立 manual customer。操作�
 - `Blasting Leads`：先写 SQLite，再即时镜像到 Blast Leads；必须选择 Project。
 - `Recycle Leads`：先写 SQLite，再即时镜像到 Recycle Leads。
 - `Ads Leads`：先写 SQLite，再即时镜像到 Ads Leads。
-- `Own Leads`：只写 SQLite，不进入 Notion。
+- `Others`（底层兼容 key 为 `OWN`）：只写 SQLite，保留在 ChatRoom，不进入
+  Notion、自动 Flow 或 Campaign；作为人工新增号码的默认类型。
 
 四种来源都会记录稳定的 contact key、所选 sender connection key、来源和备注，
 但建立动作本身不发送消息，也不会自动加入当前或未来 Campaign。第一次人工发送
 成功后才写入消息账本并显示为正常 conversation。新号码仍必须经过号码格式、
 OPEN sender 与全局 suppression 检查；Notion 失败不得回滚已经建立的本机客户，
 而应把 `lead_origins.notion_sync_status` 标成 `FAILED` 并显示可补同步的警告。
+
+现有未分类联系人不得在 LIVE 运行时直接批量改写。Maintenance 必须先 dry-run，并排除
+活动 Campaign、STOP、私人联系人、无效号码和已有 Lead 来源，确认后才可归入 Others。
 
 ## 8. 状态与失败原则
 
@@ -219,6 +249,10 @@ OPEN sender 与全局 suppression 检查；Notion 失败不得回滚已经建立
 - 字段语义冲突进入 `RETRY`／`CONFLICT`／人工处理，不可静默覆盖。
 - Maintenance script 默认只报告；修改资料必须显式 `--apply`。
 - 清理历史资料应先归档，再从活动集合移除。
+- Runtime Folder 的保留与整理边界见
+  [`RUNTIME_DATA_RETENTION.md`](RUNTIME_DATA_RETENTION.md)。
+- Project Assets 的重复内容、缺失引用与 legacy config 先使用
+  `scripts/maintenance/audit-campaign-assets.mjs` 审计，不在运行中自动合并。
 
 ## 9. 新功能放置决策
 

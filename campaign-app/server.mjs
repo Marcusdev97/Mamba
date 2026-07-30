@@ -19,6 +19,10 @@ import { createInboxSendService } from "./lib/inbox-send-service.mjs";
 import { createManualLeadSetupService } from "./lib/manual-lead-setup-service.mjs";
 import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
+import { createCampaignRecipientRiskService } from "./lib/campaign-recipient-risk-service.mjs";
+import { createCampaignAwakeService } from "./lib/campaign-awake-service.mjs";
+import { createCampaignTransportGuard, transportFailure } from "./lib/campaign-transport-guard.mjs";
+import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
@@ -64,7 +68,13 @@ import {
   campaignRestartDecision,
 } from "./campaign_core.mjs";
 import { runCampaignInBackground, startNextQueued } from "./routes/campaign.routes.mjs";
-import { FLOW_SEQUENCE, flowByLabel, flowStateAfter, classifyReplyText } from "./flow_sequence.mjs";
+import {
+  FLOW_SEQUENCE,
+  classifyFlowAdvanceState,
+  flowByLabel,
+  flowStateAfter,
+  classifyReplyText,
+} from "./flow_sequence.mjs";
 import { collectMessageObjects, extractText, phoneFromJid, messageTime } from "./morning_followup.mjs";
 import { describeMessage, resolvePhone } from "./reply_intake.mjs";
 import { addLocalStop } from "./suppression.mjs";
@@ -310,6 +320,7 @@ const campaignRunService = createCampaignRunService({
   klDateTime,
   flowByLabel,
   flowStateAfter,
+  classifyFlowAdvanceState,
   deviceIdentity,
 });
 const {
@@ -365,12 +376,39 @@ async function localJson(pathname, options = {}) {
 }
 
 const telegramHub = makeHub(env);
+const evolutionHealthService = createEvolutionHealthService({
+  listInstances: deviceListInstances,
+});
+async function assertCampaignTransport({ instanceName }) {
+  const health = await evolutionHealthService.check({ requiredInstances: [instanceName] });
+  const failure = transportFailure(health, [instanceName]);
+  if (!failure) return health;
+  const error = new Error(failure.message);
+  error.code = "CAMPAIGN_TRANSPORT_UNHEALTHY";
+  error.transportCode = failure.code;
+  error.transportLayer = failure.layer;
+  error.checkedAt = health.checkedAt;
+  throw error;
+}
+const campaignAwakeService = createCampaignAwakeService({
+  systemLogs: systemLogService,
+});
+const campaignTransportGuard = createCampaignTransportGuard({
+  healthService: evolutionHealthService,
+  listRunners: () => campaignRunnerRegistry.list(),
+  systemLogs: systemLogService,
+  postOps: telegramHub.hasOps ? (text) => telegramHub.postOps(text) : null,
+});
 const telegramFilterService = createTelegramFilterService({
   rootDir: paths.rootDir,
   getConnectedPhones: async () => (await deviceListInstances()).map((item) => item.number),
 });
 const workInboxIgnoreService = createWorkInboxIgnoreService({
   rootDir: paths.rootDir,
+});
+const campaignRecipientRiskService = createCampaignRecipientRiskService({
+  conversationLog,
+  workInboxIgnore: workInboxIgnoreService,
 });
 const dailyCampaignService = createDailyCampaignService({
   rootDir: paths.rootDir,
@@ -411,6 +449,64 @@ const dailyCampaignService = createDailyCampaignService({
     });
     return { runId: prepared?.snapshot?.state?.runId || prepared?.snapshot?.runId || null, queued: started.queued === true };
   },
+  executeLive: async ({ batch, instances }) => {
+    const projects = await loadProjects();
+    const project = projects.find((item) => item.name === batch.project);
+    if (!project) throw new Error(`找不到 Project 配置: ${batch.project}`);
+    if (batch.flow === FLOW_SEQUENCE[0]?.label) {
+      throw new Error("Flow 1 必须由人工选择新客户群并确认；Scheduler 只自动接手 Flow 2–10。");
+    }
+
+    const selectedLeads = (batch.leads || []).map((lead) => ({
+      pageId: lead.pageId,
+      name: lead.name,
+      phone: lead.phone,
+      senderInstance: lead.senderInstance || "",
+    }));
+    if (!selectedLeads.length) throw new Error("Scheduler 没有可安全发送的 LIVE 客户。");
+
+    // Reuse the same picker route as the manual Next Flow screen. It re-reads
+    // Notion and applies device ownership, STOP and reply gates immediately
+    // before the local lead group is created.
+    const loaded = await localJson("/api/next-flow/load", {
+      method: "POST",
+      body: JSON.stringify({ project: project.id, leads: selectedLeads }),
+    });
+    const leadGroupId = String(loaded?.group?.id || "");
+    if (!leadGroupId) throw new Error("Scheduler 无法建立经过安全检查的本机客户群。");
+
+    const selectedInstances = [...new Set((instances || []).map((item) => item.name).filter(Boolean))];
+    const prepared = await localJson("/api/prepare", {
+      method: "POST",
+      body: JSON.stringify({
+        project: project.id,
+        mode: "LIVE",
+        instances: selectedInstances,
+        leadGroupId,
+      }),
+    });
+    const runId = prepared?.snapshot?.state?.runId || prepared?.snapshot?.runId || null;
+    await localJson("/api/next-flow/apply-templates", {
+      method: "POST",
+      body: JSON.stringify({ projectName: batch.project, flow: batch.flow, runId }),
+    });
+    const started = await localJson("/api/start", {
+      method: "POST",
+      body: JSON.stringify({
+        optIn: true,
+        overrides: [],
+        autoAdvance: true,
+        project: project.id,
+        runId,
+      }),
+    });
+    return {
+      runId,
+      queued: started.queued === true,
+      loaded: Number(loaded.loaded || 0),
+      blocked: Array.isArray(loaded.blocked) ? loaded.blocked.length : 0,
+    };
+  },
 });
 
 const handlers = {};
@@ -434,6 +530,9 @@ const runtime = await loadRuntime({
   workInboxIgnore: workInboxIgnoreService,
   replyServices: replyServiceManager,
   dailyCampaign: dailyCampaignService,
+  evolutionHealth: evolutionHealthService,
+  campaignAwake: campaignAwakeService,
+  campaignTransportGuard,
   remoteMamba: remoteMambaService,
   projects: {
     alias: notionConfig?.projectAlias || {},
@@ -587,6 +686,7 @@ const runtime = await loadRuntime({
     createRunner: (config) => new CampaignRunner({
       config, env, systemLogs: systemLogService, conversationLog,
       customerCheckpoint: checkpointCompletedCustomer,
+      transportPreflight: assertCampaignTransport,
     }),
     restoreRunner: async ({ runId, projectId }) => {
       if (!/^run_[A-Za-z0-9_.-]+$/.test(String(runId || ""))) throw new Error("Queue runId 不合法。");
@@ -594,12 +694,14 @@ const runtime = await loadRuntime({
       const restored = new CampaignRunner({
         config, env, systemLogs: systemLogService, conversationLog,
         customerCheckpoint: checkpointCompletedCustomer,
+        transportPreflight: assertCampaignTransport,
       });
       const expectedPath = path.join(paths.runsDir, `${runId}.json`);
       await restored.restore(expectedPath);
       return restored;
     },
     queue: campaignQueueService,
+    recipientRisk: campaignRecipientRiskService,
     applyNotionFlowTemplatesToState,
     firstFlowLabel: FIRST_FLOW_LABEL,
     applyTemplateOverrides,
@@ -912,6 +1014,7 @@ server.listen(PORT, HOST, () => {
   replyServiceManager.startMonitoring();
   outboundFollowUpService.start();
   dailyCampaignService.start();
+  campaignTransportGuard.start();
   goldenLedgerService.start();
   restoreActiveCampaign().catch((error) => console.log(`Campaign recovery failed: ${error.message}`));
   replyServiceManager.ensureStarted()
@@ -929,6 +1032,8 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     replyServiceManager.stopManaged();
     outboundFollowUpService.stop();
     dailyCampaignService.stop();
+    campaignTransportGuard.stop();
+    campaignAwakeService.stopAll();
     goldenLedgerService.stop();
     remoteMambaService.stop();
     server.close(() => process.exit(0));

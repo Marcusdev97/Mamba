@@ -160,6 +160,7 @@ async function logOutbound(instanceName, number, text, result) {
       text,
       instanceName,
       messageId: result?.key?.id ?? "",
+      apiStatus: result?.status ?? "",
       source: "brain",
       flowTopic: "ai_reply",
     });
@@ -757,7 +758,7 @@ function forwardToTracker(payload) {
 }
 
 async function setInstanceWebhook(instanceName) {
-  const events = ["MESSAGES_UPSERT"];
+  const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE"];
   const v2 = { webhook: { enabled: true, url: PUBLIC_URL, byEvents: false, base64: false, events } };
   const v1 = { enabled: true, url: PUBLIC_URL, webhookByEvents: false, webhookBase64: false, events };
   const endpoint = `/webhook/set/${encodeURIComponent(instanceName)}`;

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { CampaignRunner } from "./campaign_core.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
-import { campaignQueueBlockReason } from "./routes/campaign.routes.mjs";
+import { campaignQueueBlockReason, runCampaignInBackground } from "./routes/campaign.routes.mjs";
 
 const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-campaign-queue-"));
 
@@ -82,6 +82,46 @@ restoredRunner.mirrorActiveState = false;
 await restoredRunner.restore(restorePath);
 assert.equal(restoredRunner.state.runId, "run_restore");
 assert.equal(restoredRunner.mirrorActiveState, true, "a queued runner becomes the active mirror when restored for launch");
+
+{
+  const order = [];
+  const terminalRunner = {
+    running: false,
+    state: {
+      runId: "run_terminal_commit",
+      mode: "LIVE",
+      status: "RUNNING",
+      flowLabel: "Flow 2 - Layout",
+      assignments: [{
+        status: "SENT",
+        localCheckpoint: { status: "SUCCEEDED" },
+      }],
+    },
+    async run() {
+      order.push("runner");
+      this.state.status = "COMPLETED";
+    },
+    async saveState() {},
+    pushLog() {},
+  };
+  const backgroundRuntime = {
+    notionOutbox: { async enqueue() {} },
+    campaign: {
+      setRunner() {},
+      async persistRunners() {},
+      async recordLocalFlowProgress(runner) {
+        order.push(`sqlite:${runner.state.status}`);
+        return { recorded: 1 };
+      },
+      queue: {
+        async snapshot() { return { count: 0, items: [] }; },
+        async clearHold() {},
+      },
+    },
+  };
+  await runCampaignInBackground(backgroundRuntime, terminalRunner, true);
+  assert.deepEqual(order, ["runner", "sqlite:COMPLETED"], "terminal SQLite commit must happen after the runner decides its final status");
+}
 
 await fs.rm(rootDir, { recursive: true, force: true });
 console.log("✅ all campaign-queue tests passed");

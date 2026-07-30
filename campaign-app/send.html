@@ -544,6 +544,9 @@ function failedOutboxDetail(queue) {
   return failures.slice(0, 2).map((failure) => {
     const task = failure.jobId ? `Task ${failure.jobId}` : "失败任务";
     const flow = failure.flowLabel ? ` · ${failure.flowLabel}` : "";
+    const entity = !failure.jobId && failure.entityId ? ` · ${failure.entityId}` : "";
+    const error = String(failure.lastErrorMessage || "").trim();
+    if (error) return `${task}${flow}${entity}：${error}`;
     const phones = (failure.phoneSamples || []).slice(0, 3).join("、");
     const total = Number(failure.affectedCount || failure.phoneCount || 0);
     const phoneText = phones
@@ -1008,29 +1011,38 @@ function updateSyncOverlayProgress(progress, prefix = "正在逐笔上传") {
   if (item) document.getElementById("syncDetail").textContent = `当前：${item}。资料已经先保存在 SQLite，请保持 Mamba 开启直到 Notion 完成。`;
 }
 
-function finishOutboxSyncOverlay(result) {
+function finishOutboxSyncOverlay(result, queue = null) {
   if (!outboxSyncBusy) return;
   outboxSyncBusy = false;
   const overlay = document.getElementById("syncOverlay");
-  const failed = Number(result?.failed || 0);
+  const failedThisRun = Number(result?.failed || 0);
+  const remainingFailed = queue ? Number(queue.failed || 0) : failedThisRun;
+  const processed = Number(result?.processed || 0);
+  const completed = Number(result?.completed || 0);
   const retried = Number(result?.retried || 0);
   const deferred = Number(result?.deferred || 0);
-  overlay.classList.add(failed ? "failed" : "succeeded");
-  document.getElementById("syncIcon").textContent = failed ? "!" : deferred ? "…" : "✓";
-  document.getElementById("syncTitle").textContent = failed ? "部分没同步成功" : deferred ? "等待 Campaign 完成" : "已同步到 Notion";
-  document.getElementById("syncMessage").textContent = failed
-    ? `${failed} 笔试到上限仍然失败，${retried} 笔会自动再试。`
+  overlay.classList.add(remainingFailed ? "failed" : "succeeded");
+  document.getElementById("syncIcon").textContent = remainingFailed ? "!" : deferred ? "…" : "✓";
+  document.getElementById("syncTitle").textContent = remainingFailed ? "仍有 Notion 失败项目" : deferred ? "等待 Campaign 完成" : "已同步到 Notion";
+  document.getElementById("syncMessage").textContent = remainingFailed
+    ? failedThisRun
+      ? `${failedThisRun} 笔本次达到重试上限；目前共 ${remainingFailed} 笔失败。`
+      : processed === 0
+        ? `本次没有可同步任务；仍有 ${remainingFailed} 笔历史失败未解决。`
+        : `本次成功 ${completed} 笔；仍有 ${remainingFailed} 笔历史失败未解决。`
     : deferred
       ? `${deferred} 批仍在发送，Notion 待办保留在 SQLite，完成后可手动同步或等晚上 22:00。`
     : retried
-      ? `成功 ${result.completed} 笔，${retried} 笔稍后自动重试。`
-      : `成功 ${result?.completed ?? 0} 笔，队列已清空。`;
-  document.getElementById("syncDetail").textContent = failed
-    ? "⚠️ 没同步到的客户在名单上仍然看起来没发过，下一批可能重复发送。到 System Logs 搜 outbox 看原因。"
+      ? `成功 ${completed} 笔，${retried} 笔稍后自动重试。`
+      : processed === 0
+        ? "目前没有等待同步的任务。"
+        : `成功 ${completed} 笔，待处理队列已清空。`;
+  document.getElementById("syncDetail").textContent = remainingFailed
+    ? `⚠️ ${failedOutboxDetail(queue)}`
     : "";
   document.getElementById("syncTrack").classList.add("hidden");
   // 成功就自己收起来，失败留着让人看见。
-  if (!failed) setTimeout(() => { if (!syncBusy && !outboxSyncBusy) hideSyncOverlay(); }, 2200);
+  if (!remainingFailed) setTimeout(() => { if (!syncBusy && !outboxSyncBusy) hideSyncOverlay(); }, 2200);
 }
 
 // 每晚 22:00 那轮是背景自己跑的，没有人按按钮，所以要用轮询发现它开始了。
@@ -1049,7 +1061,7 @@ async function pollOutboxSync() {
     }
     if (running && outboxSyncBusy) updateSyncOverlayProgress(data?.worker?.progress, "正在逐笔上传到 Notion");
     if (!running && lastOutboxRunning && outboxSyncBusy) {
-      finishOutboxSyncOverlay(data?.worker?.lastResult ?? {});
+      finishOutboxSyncOverlay(data?.worker?.lastResult ?? {}, data?.queue ?? {});
     }
     lastOutboxRunning = running;
     renderSyncDock(latestCampaignStatus, latestOutboxStatus);
@@ -1229,7 +1241,7 @@ document.getElementById("syncDockNow").addEventListener("click", async (event) =
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || "Notion 同步失败");
-    finishOutboxSyncOverlay(data.result || {});
+    finishOutboxSyncOverlay(data.result || {}, data.queue || {});
     await pollOutboxSync();
   } catch (error) {
     finishOutboxSyncOverlay({ failed: 1, completed: 0, retried: 0 });

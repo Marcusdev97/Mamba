@@ -42,6 +42,11 @@ assert.equal(explainError(new Error("HTTP 401 unauthorized")).code, "NOTION_AUTH
 assert.equal(explainError(new Error("HTTP 429 slow down")).code, "NOTION_RATE_LIMITED");
 assert.equal(explainError(Object.assign(new Error("x"), { code: "ENOSPC" })).code, "DISK_FULL");
 assert.equal(explainError(new Error("connect ECONNREFUSED 127.0.0.1:8080")).code, "WHATSAPP_NOT_CONNECTED");
+assert.equal(
+  explainError(Object.assign(new Error("fetch failed"), { code: "WHATSAPP_NOT_CONNECTED" })).code,
+  "WHATSAPP_NOT_CONNECTED",
+  "Evolution 的 generic fetch failed 必须靠 operation code 正确分类，不能误报成 Notion",
+);
 assert.equal(explainError(Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" })).code, "SQLITE_BUSY");
 assert.equal(
   explainError(new Error('创建 wa_02失败: /instance/create: HTTP 403 {"message":["This name \\"wa_02\\" is already in use."]}')).code,

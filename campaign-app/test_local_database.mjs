@@ -161,6 +161,9 @@ const localAdvance = await service.recordCampaignFlowProgress({
   runStatus: "STOPPED",
   deviceId: device.id,
   startedAt: "2026-07-22T08:00:00.000Z",
+  finishedAt: "2026-07-22T08:05:00.000Z",
+  requestedCount: 4,
+  failedCount: 1,
   assignments: [{
     phone: "60123456789",
     name: "Alice",
@@ -181,9 +184,30 @@ assert.equal(advancedAlice.campaignRunId, "run_local_first_flow_2");
 assert.equal(advancedAlice.lastBlastAt, "2026-07-22T08:02:00.000Z");
 const localRunRows = JSON.parse(execFileSync(detected.binary, [
   "-batch", "-json", service.databasePath,
-  "SELECT (SELECT COUNT(*) FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS runs, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_2') AS jobs;",
+  "SELECT (SELECT COUNT(*) FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS runs, (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_local_first_flow_2') AS jobs, (SELECT requested_count FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS requested, (SELECT sent_count FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS sent, (SELECT failed_count FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS failed, (SELECT status FROM campaign_runs WHERE run_id='run_local_first_flow_2') AS status;",
 ], { encoding: "utf8" }));
-assert.deepEqual(localRunRows, [{ runs: 1, jobs: 2 }]);
+assert.deepEqual(localRunRows, [{ runs: 1, jobs: 2, requested: 4, sent: 1, failed: 1, status: "STOPPED" }]);
+
+const emptyTerminal = await service.recordCampaignFlowProgress({
+  runId: "run_no_sent_terminal",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  flowLabel: "Flow 2 - Layout",
+  nextFlow: "Flow 3 - Location",
+  mode: "LIVE",
+  runStatus: "STOPPED",
+  deviceId: device.id,
+  requestedCount: 3,
+  failedCount: 3,
+  finishedAt: "2026-07-22T08:10:00.000Z",
+  assignments: [],
+});
+assert.equal(emptyTerminal.recorded, 0, "a terminal run with no sent recipients still needs a SQLite run row");
+const emptyTerminalRows = JSON.parse(execFileSync(detected.binary, [
+  "-batch", "-json", service.databasePath,
+  "SELECT status, requested_count AS requested, sent_count AS sent, failed_count AS failed FROM campaign_runs WHERE run_id='run_no_sent_terminal';",
+], { encoding: "utf8" }));
+assert.deepEqual(emptyTerminalRows, [{ status: "STOPPED", requested: 3, sent: 0, failed: 3 }]);
 
 // Flow 1 often starts from a fresh listing rather than an existing Notion row.
 // The customer, Flow advance, Part evidence and Notion outbox must still commit together.
@@ -393,4 +417,22 @@ assert.equal(oldSnapshot.health, "migration_required");
 assert.equal(oldSnapshot.errorCode, "SQLITE_V3_MIGRATION_REQUIRED");
 await assert.rejects(oldService.initialize(), (error) => error.code === "SQLITE_V3_MIGRATION_REQUIRED");
 
+const incompleteDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-local-db-incomplete-v3-"));
+const incompleteService = createLocalDatabaseService({ dataDir: incompleteDir, device, senderPolicy });
+execFileSync(detected.binary, [path.join(incompleteDir, "mamba.sqlite"), `
+PRAGMA user_version=3;
+CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+INSERT INTO metadata VALUES ('schema_version','3','2026-07-30T00:00:00.000Z');
+INSERT INTO schema_migrations VALUES (3,'systematic-business-schema','2026-07-30T00:00:00.000Z');
+`]);
+await assert.rejects(
+  incompleteService.initialize(),
+  (error) => error.code === "SQLITE_V3_RUNTIME_MIGRATION_REQUIRED",
+  "startup must report a missing migration instead of silently creating production tables",
+);
+
+await fs.rm(oldDir, { recursive: true, force: true });
+await fs.rm(incompleteDir, { recursive: true, force: true });
+await fs.rm(dataDir, { recursive: true, force: true });
 console.log("✅ all SQLite v3 import and Primary cutover tests passed");

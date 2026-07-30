@@ -31,6 +31,7 @@ const plan = buildAutomationPlan({
     { project: "Binastra", nextFlow: "Flow 2 - Layout", phone: "6010", nextDueDate: "2026-07-10" },
     { project: "Binastra", nextFlow: "Flow 5 - Furnished List", phone: "6013", nextDueDate: "2026-07-15" },
     { project: "Binastra", nextFlow: "Flow 2 - Layout", phone: "6014", lastReply: "ok", nextDueDate: "2026-07-15" },
+    { project: "Binastra", nextFlow: "Flow 1 - Project Template", phone: "6015", nextDueDate: "2026-07-15" },
   ],
   config: { projects: ["Binastra"], maxLeads: 5 },
   flowSequence,
@@ -39,7 +40,7 @@ const plan = buildAutomationPlan({
   instances: [{ name: "wa_01" }],
   random: () => 0.5,
 });
-assert.equal(plan.eligibleCount, 2, "automation plan excludes conditional Flow 5/9 and skips replied plus too-old missed leads");
+assert.equal(plan.eligibleCount, 2, "LIVE excludes Flow 1, conditional Flow 5/9, replied and too-old missed leads");
 assert.equal(plan.expiredCount, 1, "too-old missed leads are not auto-backfilled");
 assert.equal(plan.capacity.safeCapacityPerSender, 150);
 assert.equal(plan.batch.flow, "Flow 2 - Layout", "older eligible due leads are planned first");
@@ -55,6 +56,7 @@ await fs.writeFile(path.join(rootDir, "campaign-data", "tracker", "heartbeat.jso
 }));
 
 let executions = 0;
+let liveExecutions = 0;
 let deep = false;
 const service = createDailyCampaignService({
   rootDir,
@@ -78,6 +80,7 @@ const service = createDailyCampaignService({
     };
   },
   executeTest: async () => { executions += 1; return { runId: "run_test" }; },
+  executeLive: async () => { liveExecutions += 1; return { runId: `run_live_${liveExecutions}` }; },
 });
 await service.ready;
 
@@ -107,11 +110,20 @@ assert.equal(readiness.repliesToHandle.total, 0);
 
 await service.update({ schedulerMode: "LIVE", maxLeads: 99, time: "10:00" });
 const saved = await service.snapshot();
-assert.equal(saved.schedulerMode, "LIVE", "LIVE can be displayed as a locked mode");
+assert.equal(saved.schedulerMode, "LIVE", "LIVE selection is persisted");
+assert.equal(saved.config.liveArmed, false, "an old or unconfirmed LIVE selection must remain fail-closed");
 assert.equal(saved.config.maxLeads, 5, "daily limit is clamped to five");
 const liveReadiness = await service.check();
-assert.equal(liveReadiness.ready, false, "LIVE must stay held until the real live engine is connected");
+assert.equal(liveReadiness.ready, false, "LIVE must stay held until the operator explicitly arms it");
 assert.equal(liveReadiness.gates.find((item) => item.key === "mode").ok, false);
+
+await service.update({ schedulerMode: "LIVE", liveArmed: true, maxLeads: 5 });
+const armedLiveReadiness = await service.check();
+assert.equal(armedLiveReadiness.ready, true, "armed LIVE can use the connected live executor");
+assert.equal(armedLiveReadiness.batch.flow, "Flow 2 - Layout");
+await service.tick();
+assert.equal(liveExecutions, 1, "LIVE shift automatically starts a due batch without a daily button");
+assert.equal((await service.snapshot()).state.lastRun.status, "STARTED_LIVE");
 
 await service.update({ schedulerMode: "TEST", maxLeads: 5 });
 await service.tick();
@@ -160,6 +172,48 @@ const queuedReadiness = await queuedService.check();
 assert.equal(queuedReadiness.progress.sent, 0, "queued TEST runs are not counted as sent");
 queuedService.stop();
 
+const relayRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-daily-campaign-relay-"));
+await fs.mkdir(path.join(relayRootDir, "campaign-data", "tracker"), { recursive: true });
+await fs.writeFile(path.join(relayRootDir, "campaign-data", "tracker", "heartbeat.json"), JSON.stringify({ heartbeatAt: now.toISOString() }));
+let relayRunner = null;
+let relayExecutions = 0;
+const relayService = createDailyCampaignService({
+  rootDir: relayRootDir,
+  flowSequence,
+  clock: () => now,
+  replyServices: { status: async () => ({ tracker: true, brain: true }) },
+  openInstances: async () => [{ name: "wa_03", number: "60110000003" }],
+  getTestLeads: () => [],
+  getRunner: () => relayRunner,
+  queue: { snapshot: async () => ({ count: 0, hold: null }) },
+  fetchDuePlan: async () => ({
+    leads: [{
+      pageId: `page_${relayExecutions + 1}`,
+      project: "Binastra",
+      nextFlow: "Flow 2 - Layout",
+      phone: `6012000000${relayExecutions + 1}`,
+      senderInstance: "wa_03",
+    }],
+    whatsappCheck: { safeToSend: true, scanSource: "evolution-deep" },
+  }),
+  executeTest: async () => ({ runId: "unused" }),
+  executeLive: async () => {
+    relayExecutions += 1;
+    relayRunner = { running: true };
+    return { runId: `run_relay_${relayExecutions}` };
+  },
+});
+await relayService.ready;
+await relayService.update({ schedulerMode: "LIVE", liveArmed: true, maxLeads: 5 });
+await relayService.tick();
+assert.equal(relayExecutions, 1, "armed LIVE starts its first due batch");
+await relayService.tick();
+assert.equal(relayExecutions, 1, "LIVE never selects another batch while SQLite progress may still be changing");
+relayRunner.running = false;
+await relayService.tick();
+assert.equal(relayExecutions, 2, "after completion LIVE automatically starts the next due batch on the same day");
+relayService.stop();
+
 const lateRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-daily-campaign-late-"));
 const lateNow = new Date("2026-07-15T13:13:00.000Z"); // 21:13 Kuala Lumpur
 await fs.mkdir(path.join(lateRootDir, "campaign-data", "tracker"), { recursive: true });
@@ -191,5 +245,6 @@ lateService.stop();
 
 await fs.rm(rootDir, { recursive: true, force: true });
 await fs.rm(queuedRootDir, { recursive: true, force: true });
+await fs.rm(relayRootDir, { recursive: true, force: true });
 await fs.rm(lateRootDir, { recursive: true, force: true });
 console.log("✅ all daily-campaign tests passed");

@@ -26,6 +26,7 @@
 
 import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
+import { RUNTIME_REQUIRED_COLUMNS } from "./v3-runtime-schema.mjs";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -45,21 +46,6 @@ function digits(value) {
 
 function clean(value) {
   return String(value ?? "").trim();
-}
-
-export function schemaSql() {
-  return `
-CREATE TABLE IF NOT EXISTS lid_map (
-  lid TEXT PRIMARY KEY,
-  phone TEXT NOT NULL,
-  source TEXT NOT NULL,
-  confidence INTEGER NOT NULL DEFAULT 0,
-  evidence TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_lid_map_phone ON lid_map(phone);
-`;
 }
 
 export function createLidMapService({
@@ -86,7 +72,15 @@ export function createLidMapService({
     if (!schemaReady) {
       schemaReady = (async () => {
         const database = await cli();
-        await database.exec(schemaSql());
+        const columns = new Set(
+          (await database.query("PRAGMA table_info(lid_map);")).map((row) => row.name),
+        );
+        const missing = RUNTIME_REQUIRED_COLUMNS.lid_map.filter((name) => !columns.has(name));
+        if (missing.length) {
+          const error = new Error(`lid_map 尚未完成正式 Migration（缺少：${missing.join(", ")}）。`);
+          error.code = "SCHEMA_MIGRATION_REQUIRED";
+          throw error;
+        }
       })().catch((error) => {
         schemaReady = null;
         throw error;

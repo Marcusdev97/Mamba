@@ -5,6 +5,8 @@ assert.deepEqual(
   listManualLeadTypes().map((item) => item.key),
   ["BLAST", "RECYCLE", "ADS", "OWN"],
 );
+assert.equal(listManualLeadTypes().find((item) => item.key === "OWN")?.label, "Others");
+assert.equal(listManualLeadTypes().find((item) => item.key === "OWN")?.default, true);
 
 function fixture({ notionEnabled = true, notionError = null } = {}) {
   const calls = [];
@@ -66,11 +68,13 @@ function fixture({ notionEnabled = true, notionError = null } = {}) {
   const { service, calls } = fixture();
   const result = await service.setup({
     phone: "0123456789",
-    name: "Own Customer",
+    name: "Other Contact",
     leadType: "OWN",
     instanceName: "wa_01",
   });
   assert.equal(result.notionSyncStatus, "LOCAL_ONLY");
+  assert.equal(result.typeLabel, "Others");
+  assert.match(result.notice, /ChatRoom/);
   assert.deepEqual(calls.map(([name]) => name), ["local", "conversation"]);
 }
 

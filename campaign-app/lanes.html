@@ -88,6 +88,7 @@
   .banner.warn { background: #2a1517; color: #fca5a5; }
   .banner.info { background: #0c2233; color: #9fd8f5; }
 </style>
+<script src="/assets/live-recipient-confirmation.js" defer></script>
 </head>
 <body>
   <div class="head">
@@ -254,14 +255,36 @@ async function launchLane(lane) {
   const sendMode = laneSendMode(lane);
   const groupSel = lane.querySelector('[data-act="group"]');
   const leadGroupId = groupSel.value;
-  const groupLabel = groupSel.options[groupSel.selectedIndex]?.textContent || "";
+  let recipientRiskToken = "";
 
   if (sendMode === "LIVE") {
     if (!leadGroupId) { alert("先选一个客户群。"); return; }
-    // startAll 已经统一确认过就带 confirmed 旗标，避免每条 LIVE 都弹一次。
-    if (lane.dataset.confirmed !== "1") {
-      const ok = confirm(`确认用【${instance}】发送？\n\n客户群：${groupLabel}\n节奏：${paceOf(pace).label} ${paceOf(pace).pace}\n\n这是 LIVE，会真的发给客户。`);
-      if (!ok) return;
+    try {
+      const riskResponse = await fetch("/api/campaign/recipient-risk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: currentProject,
+          instance,
+          leadGroupId,
+        }),
+      });
+      const riskData = await riskResponse.json().catch(() => ({}));
+      if (!riskResponse.ok || !riskData.ok) {
+        const error = new Error(riskData.error || "无法检查收件人");
+        error.status = riskResponse.status;
+        throw error;
+      }
+      const confirmed = await window.MambaLiveRecipientConfirm.open(riskData.risk, {
+        actionLabel: `确认 ${instance} LIVE`,
+      });
+      if (!confirmed) return;
+      recipientRiskToken = riskData.risk.confirmationToken;
+    } catch (error) {
+      alert(window.MambaLiveRecipientConfirm.formatRequestError(error, {
+        action: `${instance} LIVE 发送`,
+      }));
+      return;
     }
   }
 
@@ -276,6 +299,7 @@ async function launchLane(lane) {
         project: currentProject, instance, pace, mode: sendMode,
         leadGroupId: sendMode === "LIVE" ? leadGroupId : undefined,
         optIn: sendMode === "LIVE" ? true : undefined,
+        recipientRiskToken: sendMode === "LIVE" ? recipientRiskToken : undefined,
       }),
     });
     const data = await r.json();
@@ -356,12 +380,8 @@ async function startAll() {
   const test = lanes.filter((l) => laneSendMode(l) === "TEST");
   const runnable = [...live, ...test];
   if (!runnable.length) { alert("没有可开跑的车道（LIVE 要先选客户群）。"); return; }
-  if (live.length && !confirm(`确认一次开跑 ${live.length} 条 LIVE 车道？会真的发给客户。`)) return;
   for (const lane of runnable) {
-    // LIVE 已在上面确认过，这里逐条启动时跳过单条确认。
-    if (laneSendMode(lane) === "LIVE") lane.dataset.confirmed = "1";
     await launchLane(lane);
-    delete lane.dataset.confirmed;
   }
 }
 

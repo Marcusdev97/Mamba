@@ -19,8 +19,9 @@
   .notion-card { order: 3; grid-column: span 6; }
   .database-card { order: 4; grid-column: span 6; }
   .telegram-card { order: 5; grid-column: 1 / -1; }
-  .ai-card { order: 6; grid-column: 1 / -1; }
-  .save-card { order: 7; grid-column: 1 / -1; display: flex; flex-direction: column; }
+  .private-contacts-card { order: 6; grid-column: 1 / -1; }
+  .ai-card { order: 7; grid-column: 1 / -1; }
+  .save-card { order: 8; grid-column: 1 / -1; display: flex; flex-direction: column; }
   .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
   .card-head h2 { margin: 0; }
   .card-kicker { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.5; }
@@ -135,7 +136,7 @@
   .model-grid, .model-grid.three { display: grid; grid-template-columns: 1fr; gap: 0; }
   .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
   @media (max-width: 1050px) {
-    .notion-card, .database-card, .telegram-card, .ai-card, .save-card, .test-card { grid-column: 1 / -1; }
+    .notion-card, .database-card, .telegram-card, .private-contacts-card, .ai-card, .save-card, .test-card { grid-column: 1 / -1; }
     .phone-overview { grid-template-columns: 1fr; }
     .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
     .ai-provider + .ai-provider { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; }
@@ -259,7 +260,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card private-contacts-card">
       <div class="card-head"><div>
         <h2 class="step-title">私人联系人 / 不进入工作 Inbox</h2>
         <div class="card-kicker">这是独立的工作区过滤，不是 Telegram Filter，也不是 Campaign STOP 名单。</div>
@@ -267,8 +268,9 @@
       <div class="provider-sub">朋友、家人或私人号码放这里。消息仍安全保存在本机，但不会出现在 ChatRoom、不会触发 Sales Brain／STOP，也不会进入 Notion 客户回复同步。这个名单不会把号码加入 Campaign suppression。</div>
       <label class="fld">
         <span>私人联系人</span>
-        <textarea id="workInboxIgnoreText" placeholder="朋友 A, 0123456789&#10;家人 B, 01123456789"></textarea>
+        <textarea id="workInboxIgnoreText" placeholder="在这里输入真实名单，每行一位"></textarea>
       </label>
+      <div class="test-note">格式示例：<code>朋友 A, 0123456789</code>。示例不会自动加入名单；输入后请点击保存。</div>
       <div class="actions"><button class="btn" id="btnSaveWorkInboxIgnore">保存私人联系人</button></div>
       <div class="status-line" id="workInboxIgnoreStatus">读取中...</div>
     </div>
@@ -474,6 +476,7 @@ const $ = (id) => document.getElementById(id);
 let qrName = null;
 let qrTimer = null;
 let qrTicks = 0;
+let savedWorkInboxIgnoreCount = 0;
 async function api(url, body) {
   const res = await fetch(url, body === undefined ? undefined : {
     method: "POST",
@@ -682,9 +685,10 @@ async function refreshTelegramFilters() {
 
 function renderWorkInboxIgnore(ignoreList) {
   const list = ignoreList || {};
+  savedWorkInboxIgnoreCount = Number(list.count || 0);
   $("workInboxIgnoreText").value = list.text || "";
   $("workInboxIgnoreStatus").textContent =
-    (list.count || 0) + " 个私人联系人 · 只隐藏工作流程，不会删除本机对话";
+    savedWorkInboxIgnoreCount + " 个私人联系人 · 只隐藏工作流程，不会删除本机对话";
 }
 
 async function refreshWorkInboxIgnore() {
@@ -731,14 +735,22 @@ function badge(status) {
 function renderPhoneHealth(data, instances) {
   const open = instances.filter((i) => i.status === "OPEN").length;
   const closed = Math.max(0, instances.length - open);
+  const docker = data.health?.docker;
+  const evolution = data.health?.evolution;
   let state = "HEALTHY";
   let cls = "ok";
   let text = open + " 个号码 OPEN，可以发送 campaign。";
 
-  if (!data.online) {
+  if (docker && !docker.ok && docker.state !== "warning") {
+    state = "DOCKER OFF";
+    cls = "bad";
+    text = "Docker Engine 已停止；不是号码被封。启动 Docker 后再检查 Evolution。";
+  } else if (!data.online || (evolution && !evolution.ok)) {
     state = "OFFLINE";
     cls = "bad";
-    text = "Evolution API 离线，Mamba 暂时不能检查或发送 WhatsApp。";
+    text = docker?.ok
+      ? "Docker 正常，但 Evolution API 离线；Mamba 暂时不能检查或发送 WhatsApp。"
+      : "Evolution API 离线，Mamba 暂时不能检查或发送 WhatsApp。";
   } else if (!instances.length) {
     state = "NO PHONE";
     cls = "warn";
@@ -768,8 +780,11 @@ async function refreshInstances() {
   const blocked = instances.length - allowedInstances.length;
   const open = allowedInstances.filter((i) => i.status === "OPEN").length;
   const closed = Math.max(0, allowedInstances.length - open);
+  const docker = data.health?.docker;
+  const evolution = data.health?.evolution;
   $("phoneHealth").innerHTML =
-    '<div class="chip">API <b>' + (data.online ? "ONLINE" : "OFFLINE") + "</b></div>" +
+    '<div class="chip">Docker <b>' + (docker ? docker.state.toUpperCase() : "UNKNOWN") + "</b></div>" +
+    '<div class="chip">Evolution <b>' + (evolution ? evolution.state.toUpperCase() : (data.online ? "ONLINE" : "OFFLINE")) + "</b></div>" +
     '<div class="chip">OPEN <b>' + open + "</b></div>" +
     '<div class="chip">Closed <b>' + closed + "</b></div>" +
     (blocked ? '<div class="chip">Blocked on this Device <b>' + blocked + "</b></div>" : "") +
@@ -934,11 +949,19 @@ $("btnSaveTelegramFilters").addEventListener("click", async () => {
 
 $("btnSaveWorkInboxIgnore").addEventListener("click", async () => {
   const btn = $("btnSaveWorkInboxIgnore");
+  const text = $("workInboxIgnoreText").value.trim();
+  if (!text && savedWorkInboxIgnoreCount === 0) {
+    message("", "私人联系人名单仍是空的。上方格式只是示例；请先输入真实姓名和号码。");
+    return;
+  }
+  if (!text && savedWorkInboxIgnoreCount > 0 && !confirm(`确定清空 ${savedWorkInboxIgnoreCount} 个私人联系人吗？历史对话不会删除，但会重新出现在工作 ChatRoom。`)) {
+    return;
+  }
   btn.disabled = true;
   btn.textContent = "保存中...";
   try {
     const data = await api("/api/settings/work-inbox-ignore", {
-      text: $("workInboxIgnoreText").value,
+      text,
     });
     renderWorkInboxIgnore(data.ignoreList);
     message("私人联系人已保存。现有对话不会删除；ChatRoom 刷新后会隐藏，之后的新消息只留在本机。", "");

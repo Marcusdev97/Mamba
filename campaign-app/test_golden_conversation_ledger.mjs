@@ -12,6 +12,7 @@ import {
   parseConversationText,
   sanitizeGoldenPii,
 } from "./lib/golden-conversation-ledger-service.mjs";
+import { migrateRuntimeSchema } from "../scripts/maintenance/migrate-v3-runtime-schema.mjs";
 
 function sqlite(databasePath, sql, json = false) {
   const args = ["-batch", ...(json ? ["-json"] : []), databasePath];
@@ -133,21 +134,31 @@ assert.equal(cache.records[0].decision_trace.length, 6);
 // Legacy v3 migration: retain every old row and keep an untouched backup table.
 const legacyDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-gc-legacy-"));
 const legacyPath = path.join(legacyDir, "mamba.sqlite");
+const legacyLocal = createLocalDatabaseService({ dataDir: legacyDir, device: {}, senderPolicy: { configured: false } });
+await legacyLocal.initialize();
 sqlite(legacyPath, `
-PRAGMA user_version=3;
-CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
+PRAGMA foreign_keys=OFF;
+DROP TABLE followup_log;
+DROP TABLE golden_conversations;
 CREATE TABLE golden_conversations(
   golden_key TEXT PRIMARY KEY, notion_page_id TEXT UNIQUE, project_code TEXT NOT NULL,
   scenario TEXT NOT NULL DEFAULT '', conversation_text TEXT NOT NULL DEFAULT '',
   conversation_hash TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 INSERT INTO golden_conversations VALUES('old:1',NULL,'BINASTRA','Viewing Push','legacy text','abc123','2026-01-01','2026-01-02');
+DELETE FROM schema_migrations WHERE version=301;
+PRAGMA foreign_keys=ON;
 `);
-const legacyLocal = createLocalDatabaseService({ dataDir: legacyDir, device: {}, senderPolicy: { configured: false } });
+const legacyMigration = migrateRuntimeSchema({
+  rootDir: legacyDir,
+  databasePath: legacyPath,
+  apply: true,
+  requireIdle: false,
+});
+assert.equal(legacyMigration.verification.quickCheck, "ok");
 const legacyLedger = createGoldenConversationLedgerService({ localDatabase: legacyLocal, dataDir: legacyDir });
 const legacyStatus = await legacyLedger.initialize();
-assert.equal(legacyStatus.migration.migrated, true);
-assert.equal(legacyStatus.migration.legacyRows, 1);
+assert.equal(legacyStatus.migration.schemaReady, true);
 assert.equal(sqlite(legacyPath, "SELECT COUNT(*) FROM golden_conversations_legacy_v3;"), "1");
 assert.equal(sqlite(legacyPath, "SELECT COUNT(*) FROM golden_conversations WHERE lead_code LIKE 'LEGACY%';"), "1");
 assert.equal(sqlite(legacyPath, "PRAGMA user_version;"), "3");

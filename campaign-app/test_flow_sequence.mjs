@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { FLOW_SEQUENCE, flowStateAfter, classifyReplyText } from "./flow_sequence.mjs";
+import {
+  FLOW_SEQUENCE,
+  classifyFlowAdvanceState,
+  flowStateAfter,
+  classifyReplyText,
+} from "./flow_sequence.mjs";
 import { effectiveAutomaticFlow, nextFlowBlockReason } from "./routes/next-flow.routes.mjs";
 
 function choice(name) {
@@ -45,6 +50,31 @@ assert.deepEqual(transitions.map((item) => item.nextFlowLabel), [
 ]);
 assert.equal(transitions.at(-1).nextFlowLabel, "Completed");
 assert.equal(transitions.at(-1).dueDays, null);
+assert.equal(classifyFlowAdvanceState({
+  sentFlowLabel: "Flow 2 - Layout",
+  currentLastFlowLabel: "Flow 2 - Layout",
+  currentNextFlowLabel: "Flow 3 - Location",
+}), "ALREADY_SYNCED");
+assert.equal(classifyFlowAdvanceState({
+  sentFlowLabel: "Flow 2 - Layout",
+  currentLastFlowLabel: "Flow 3 - Location",
+  currentNextFlowLabel: "Flow 4 - Package",
+}), "SUPERSEDED");
+assert.equal(classifyFlowAdvanceState({
+  sentFlowLabel: "Flow 2 - Layout",
+  currentLastFlowLabel: "Flow 4 - Package",
+  currentNextFlowLabel: "Flow 6 - Price",
+}), "SUPERSEDED");
+assert.equal(classifyFlowAdvanceState({
+  sentFlowLabel: "Flow 2 - Layout",
+  currentLastFlowLabel: "Flow 1 - Project Template",
+  currentNextFlowLabel: "Flow 2 - Layout",
+}), "READY");
+assert.equal(classifyFlowAdvanceState({
+  sentFlowLabel: "Flow 2 - Layout",
+  currentLastFlowLabel: "Flow 4 - Package",
+  currentNextFlowLabel: "Flow 3 - Location",
+}), "MISMATCH", "an incoherent later pair must not be silently accepted");
 assert.deepEqual(effectiveAutomaticFlow("Flow 6 - Price", "Day 6"), {
   nextFlow: "Flow 6 - Price",
   originalNextFlow: "",

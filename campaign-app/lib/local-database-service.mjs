@@ -4,6 +4,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildSenderKey } from "./device-identity.mjs";
+import {
+  RUNTIME_REQUIRED_COLUMNS,
+  RUNTIME_SCHEMA_PATCH_VERSION,
+} from "./v3-runtime-schema.mjs";
 
 const SCHEMA_VERSION = 3;
 const DEFAULT_SCHEMA_PATH = fileURLToPath(new URL("../../docs/mamba-schema.sql", import.meta.url));
@@ -949,6 +953,8 @@ SELECT COALESCE(
     deviceId = "",
     startedAt = null,
     finishedAt = null,
+    requestedCount = null,
+    failedCount = 0,
     assignments = [],
     notionSyncJob = null,
   } = {}) {
@@ -975,14 +981,18 @@ SELECT COALESCE(
         part2SentAt: item?.part2SentAt || null,
       };
     }).filter(Boolean);
-    if (!rows.length) return { recorded: 0, skipped: Array.isArray(assignments) ? assignments.length : 0, reason: "no_sent_assignments" };
-
     const binary = await requireV3Database();
     const now = new Date().toISOString();
     const allowedRunStatus = ["QUEUED", "RUNNING", "PARTIAL", "COMPLETED", "FAILED", "STOPPED"].includes(clean(runStatus).toUpperCase())
       ? clean(runStatus).toUpperCase()
       : "PARTIAL";
     const senderSet = [...new Set(rows.map((row) => row.instanceName).filter(Boolean))].join(",");
+    const totalRequested = Number.isFinite(Number(requestedCount))
+      ? Math.max(rows.length, Math.trunc(Number(requestedCount)))
+      : Math.max(rows.length, Array.isArray(assignments) ? assignments.length : 0);
+    const totalFailed = Number.isFinite(Number(failedCount))
+      ? Math.max(0, Math.trunc(Number(failedCount)))
+      : 0;
     const runPayload = JSON.stringify({ source: "run-json", localFirst: true, flowLabel: sentFlow });
     const statements = ["PRAGMA foreign_keys = ON;", "BEGIN IMMEDIATE;", `
 ${checkpointDeviceKey ? `INSERT INTO devices(
@@ -1010,12 +1020,15 @@ INSERT INTO campaign_runs(
 ) VALUES (
   ${sqlText(id)}, NULL, ${sqlText(`${projectName || code} · ${sentFlow}`)}, ${sqlText(code)},
   ${sqlText(sentFlow)}, NULL, ${sqlText(senderSet)}, 'LIVE', ${sqlText(allowedRunStatus)},
-  ${sqlNumber(Array.isArray(assignments) ? assignments.length : rows.length)}, ${sqlNumber(rows.length)}, 0,
-  ${sqlNullable(checkpointDeviceKey)}, ${sqlText(startedAt || rows[0].sentAt || now)},
+  ${sqlNumber(totalRequested)}, ${sqlNumber(rows.length)}, ${sqlNumber(totalFailed)},
+  ${sqlNullable(checkpointDeviceKey)}, ${sqlText(startedAt || rows[0]?.sentAt || now)},
   ${sqlNullable(finishedAt)}, ${sqlText(runPayload)}
 )
 ON CONFLICT(run_id) DO UPDATE SET
-  status=excluded.status, sent_count=MAX(campaign_runs.sent_count, excluded.sent_count),
+  status=excluded.status,
+  requested_count=MAX(campaign_runs.requested_count, excluded.requested_count),
+  sent_count=MAX(campaign_runs.sent_count, excluded.sent_count),
+  failed_count=MAX(campaign_runs.failed_count, excluded.failed_count),
   finished_at=COALESCE(excluded.finished_at, campaign_runs.finished_at),
   payload_json=excluded.payload_json;`];
 
@@ -1116,7 +1129,7 @@ FROM project_leads WHERE project_lead_key=${sqlText(leadKey)}
 ON CONFLICT(id) DO UPDATE SET status='SENT', sent_at=excluded.sent_at, updated_at=excluded.updated_at;`);
       }
     }
-    if (notionSyncJob?.idempotencyKey && notionSyncJob?.entityType && notionSyncJob?.entityId) {
+    if (rows.length && notionSyncJob?.idempotencyKey && notionSyncJob?.entityType && notionSyncJob?.entityId) {
       const availableAt = notionSyncJob.availableAt || now;
       const payloadJson = JSON.stringify(notionSyncJob.payload || {});
       statements.push(`
@@ -1139,6 +1152,16 @@ ON CONFLICT(idempotency_key) DO UPDATE SET
     }
     statements.push("COMMIT;");
     await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 120000);
+    if (!rows.length) {
+      return {
+        recorded: 0,
+        advanced: 0,
+        skipped: Array.isArray(assignments) ? assignments.length : 0,
+        runId: id,
+        flowLabel: sentFlow,
+        nextFlow,
+      };
+    }
     const phoneList = rows.map((row) => sqlText(row.phone)).join(",");
     const [result] = await queryJson(binary, `
 SELECT COUNT(*) AS accounted,
@@ -1292,7 +1315,7 @@ COMMIT;`, 120000);
       throw error;
     }
     if (!["BLAST", "RECYCLE", "ADS", "OWN"].includes(type)) {
-      const error = new Error("客户类型只支持 Blasting、Recycle、Ads 或 Own Leads。");
+      const error = new Error("客户类型只支持 Blasting、Recycle、Ads 或 Others。");
       error.code = "MANUAL_LEAD_TYPE_INVALID";
       throw error;
     }
@@ -1624,17 +1647,47 @@ ORDER BY started_at DESC LIMIT 1;
         error.code = "SQLITE_V3_MIGRATION_REQUIRED";
         throw error;
       }
+      const [patch] = await queryJson(detected.binary, `
+SELECT version FROM schema_migrations WHERE version=${sqlNumber(RUNTIME_SCHEMA_PATCH_VERSION)} LIMIT 1;`);
+      const runtimeTables = Object.keys(RUNTIME_REQUIRED_COLUMNS);
+      const existingTables = new Set((await queryJson(detected.binary, `
+SELECT name FROM sqlite_master
+WHERE type='table' AND name IN (${runtimeTables.map(sqlText).join(",")});`)).map((row) => row.name));
+      if (!patch || runtimeTables.some((table) => !existingTables.has(table))) {
+        const error = new Error(
+          "SQLite v3 尚未完成 Runtime Schema Migration。请在没有 LIVE Campaign 时先运行："
+          + "node scripts/maintenance/migrate-v3-runtime-schema.mjs --dry-run",
+        );
+        error.code = "SQLITE_V3_RUNTIME_MIGRATION_REQUIRED";
+        throw error;
+      }
+      for (const [table, requiredColumns] of Object.entries(RUNTIME_REQUIRED_COLUMNS)) {
+        const columns = new Set(
+          (await queryJson(detected.binary, `PRAGMA table_info(${table});`)).map((row) => row.name),
+        );
+        const missing = requiredColumns.filter((column) => !columns.has(column));
+        if (missing.length) {
+          const error = new Error(
+            `SQLite v3 Runtime Schema 不完整：${table} 缺少 ${missing.join(", ")}。`
+            + " 请先运行 maintenance migration dry-run。",
+          );
+          error.code = "SQLITE_V3_RUNTIME_SCHEMA_INCOMPLETE";
+          throw error;
+        }
+      }
+    } else {
+      let schema;
+      try {
+        schema = await fs.readFile(schemaPath, "utf8");
+      } catch (error) {
+        const wrapped = new Error(`找不到或无法读取 SQLite v3 schema：${schemaPath} (${error.message})`);
+        wrapped.code = "SQLITE_V3_SCHEMA_MISSING";
+        throw wrapped;
+      }
+      // Only a brand-new database may execute the full CREATE schema. Existing
+      // production databases must pass an explicit, backed-up migration first.
+      await runProcess(detected.binary, ["-batch", databasePath], schema, 60000);
     }
-
-    let schema;
-    try {
-      schema = await fs.readFile(schemaPath, "utf8");
-    } catch (error) {
-      const wrapped = new Error(`找不到或无法读取 SQLite v3 schema：${schemaPath} (${error.message})`);
-      wrapped.code = "SQLITE_V3_SCHEMA_MISSING";
-      throw wrapped;
-    }
-    await runProcess(detected.binary, ["-batch", databasePath], schema, 60000);
 
     const now = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
     const deviceKey = clean(device?.id);

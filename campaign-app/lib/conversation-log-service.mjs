@@ -18,6 +18,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
+import { deliveryStatusRank, normalizeMessageDeliveryStatus } from "../reply_intake.mjs";
 
 const DIGITS_RE = /\D/g;
 // 名单快取 30 秒重读一次。blast 中途新增名单不用等重启，也不会每条讯息都读档。
@@ -192,6 +193,29 @@ export function createConversationLogService({
     const text = clean(message?.text);
     if (!contactKey || !text) return null;
     const sentAt = isoOrNull(message.sentAt) ?? clock().toISOString();
+    const initialDeliveryStatus = normalizeMessageDeliveryStatus(
+      message.deliveryStatus ?? message.apiStatus,
+    );
+    const initialDeliveryRank = deliveryStatusRank(initialDeliveryStatus);
+    const payload = {
+      instanceName: clean(message.instanceName),
+      templateKey: clean(message.templateKey),
+      runId: clean(message.runId),
+      mediaKind: clean(message.mediaKind),
+      mediaFileName: clean(message.mediaFileName),
+      mime: clean(message.mime),
+    };
+    if (initialDeliveryStatus) {
+      payload.deliveryStatus = initialDeliveryStatus;
+      payload.deliveryStatusRank = initialDeliveryRank;
+      payload.deliveryUpdatedAt = sentAt;
+      payload.deliveryObservedVia = "SEND_RESPONSE";
+      if (initialDeliveryRank >= deliveryStatusRank("SERVER_ACK")) payload.serverAckAt = sentAt;
+      if (initialDeliveryRank >= deliveryStatusRank("DELIVERY_ACK")) payload.deliveredAt = sentAt;
+      if (initialDeliveryRank >= deliveryStatusRank("READ")) payload.readAt = sentAt;
+      if (initialDeliveryRank >= deliveryStatusRank("PLAYED")) payload.playedAt = sentAt;
+      if (initialDeliveryStatus === "ERROR") payload.deliveryFailedAt = sentAt;
+    }
     return {
       id: clean(message.messageId) || `out_${contactKey}_${sentAt}`,
       contactKey,
@@ -204,14 +228,7 @@ export function createConversationLogService({
       senderNumber: digits(message.senderNumber),
       instanceName: clean(message.instanceName),
       sentAt,
-      payload: JSON.stringify({
-        instanceName: clean(message.instanceName),
-        templateKey: clean(message.templateKey),
-        runId: clean(message.runId),
-        mediaKind: clean(message.mediaKind),
-        mediaFileName: clean(message.mediaFileName),
-        mime: clean(message.mime),
-      }),
+      payload: JSON.stringify(payload),
       leadId: clean(message.leadId),
     };
   }
@@ -445,6 +462,110 @@ COMMIT;`);
     return { saved: true, reason: "" };
   }
 
+  // Evolution 的投递回执没有客户号码，只有原发送 message id。Campaign 发送时已经
+  // 用同一个 id 写进 messages，因此直接更新原行即可，不另建一套会漂移的状态表。
+  // 资料留在 payload_json，避免 LIVE Campaign 运行中做 schema migration。
+  async function recordDeliveryUpdates(records = []) {
+    const normalized = new Map();
+    for (const record of records) {
+      const messageId = clean(record?.messageId);
+      const status = normalizeMessageDeliveryStatus(record?.status);
+      if (!messageId || !status) continue;
+      const candidate = {
+        messageId,
+        status,
+        observedAt: isoOrNull(record?.observedAt) ?? clock().toISOString(),
+        instanceName: clean(record?.instanceName),
+      };
+      const current = normalized.get(messageId);
+      if (!current || deliveryStatusRank(candidate.status) >= deliveryStatusRank(current.status)) {
+        normalized.set(messageId, candidate);
+      }
+    }
+
+    const report = {
+      received: records.length,
+      valid: normalized.size,
+      matched: 0,
+      updated: 0,
+      stale: 0,
+      unmatched: 0,
+    };
+    if (!normalized.size) return report;
+
+    const database = await cli();
+    const ids = [...normalized.keys()];
+    const existing = new Map();
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const slice = ids.slice(offset, offset + 400);
+      const rows = await database.query(`
+SELECT id, payload_json AS payloadJson
+FROM messages
+WHERE direction = 'outbound' AND id IN (${slice.map(sqlValue).join(", ")});`);
+      for (const row of rows) existing.set(String(row.id), row);
+    }
+    report.matched = existing.size;
+    report.unmatched = normalized.size - existing.size;
+
+    const statements = [];
+    for (const update of normalized.values()) {
+      const row = existing.get(update.messageId);
+      if (!row) continue;
+      let payload = {};
+      try {
+        const parsed = JSON.parse(row.payloadJson || "{}");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed;
+      } catch {
+        // A malformed legacy payload must not prevent a real delivery receipt
+        // from being attached to the outbound message.
+      }
+
+      const currentStatus = normalizeMessageDeliveryStatus(payload.deliveryStatus);
+      const currentRank = deliveryStatusRank(currentStatus);
+      const incomingRank = deliveryStatusRank(update.status);
+      if (
+        currentRank > incomingRank
+        || (currentStatus === update.status && clean(payload.deliveryUpdatedAt) >= update.observedAt)
+      ) {
+        report.stale += 1;
+        continue;
+      }
+
+      payload.deliveryStatus = update.status;
+      payload.deliveryStatusRank = incomingRank;
+      payload.deliveryUpdatedAt = update.observedAt;
+      payload.deliveryObservedVia = "MESSAGES_UPDATE";
+      if (update.instanceName) payload.deliveryInstanceName = update.instanceName;
+      if (incomingRank >= deliveryStatusRank("SERVER_ACK")) {
+        payload.serverAckAt ||= update.observedAt;
+      }
+      if (incomingRank >= deliveryStatusRank("DELIVERY_ACK")) {
+        payload.deliveredAt ||= update.observedAt;
+      }
+      if (incomingRank >= deliveryStatusRank("READ")) {
+        payload.readAt ||= update.observedAt;
+      }
+      if (incomingRank >= deliveryStatusRank("PLAYED")) {
+        payload.playedAt ||= update.observedAt;
+      }
+      if (update.status === "ERROR") {
+        payload.deliveryFailedAt ||= update.observedAt;
+      }
+
+      statements.push(`UPDATE messages
+SET payload_json = ${sqlValue(JSON.stringify(payload))}
+WHERE id = ${sqlValue(update.messageId)} AND direction = 'outbound';`);
+      report.updated += 1;
+    }
+
+    if (statements.length) {
+      await database.exec(`BEGIN IMMEDIATE;
+${statements.join("\n")}
+COMMIT;`);
+    }
+    return report;
+  }
+
   // ---------- 批次(补写历史) ----------
 
   const recordReplies = (events, options) => recordMany(events, normalizeInbound, options);
@@ -504,6 +625,31 @@ JOIN conversations v ON v.id = m.conversation_id
 WHERE ${conditions.join(" AND ")}
 GROUP BY v.contact_key;`);
     return new Map(rows.map((row) => [row.contactKey, { sentAt: row.sentAt, times: row.times }]));
+  }
+
+  // LIVE 确认弹窗需要回答「这个号码过去是否曾经被 Campaign blast」。
+  // 这里查整个本机账本，不限制 flow 或天数；manual ChatRoom 发送不算 blast。
+  async function sentBlastHistory(phones) {
+    const keys = [...new Set((phones ?? []).map(digits).filter(Boolean))];
+    if (!keys.length) return new Map();
+    const database = await cli();
+    const rows = await database.query(`
+SELECT
+  v.contact_key AS contactKey,
+  MAX(m.sent_at) AS lastSentAt,
+  COUNT(*) AS times,
+  GROUP_CONCAT(DISTINCT NULLIF(m.flow_topic, '')) AS flows
+FROM messages m
+JOIN conversations v ON v.id = m.conversation_id
+WHERE v.contact_key IN (${keys.map(sqlValue).join(", ")})
+  AND m.direction = 'outbound'
+  AND m.source = 'blast'
+GROUP BY v.contact_key;`);
+    return new Map(rows.map((row) => [row.contactKey, {
+      lastSentAt: row.lastSentAt,
+      times: Number(row.times || 0),
+      flows: clean(row.flows).split(",").map(clean).filter(Boolean),
+    }]));
   }
 
   // 聊天室的客户列表：某个号码底下、有回复过，或由人工在 Chat Room
@@ -642,9 +788,11 @@ ON CONFLICT(key) DO UPDATE SET
     recordReplies,
     recordOutbound,
     recordOutbounds,
+    recordDeliveryUpdates,
     prepareManualContact,
     recentThread,
     sentFlowSince,
+    sentBlastHistory,
     inboxThreads,
     fullThread,
     isKnownLead,

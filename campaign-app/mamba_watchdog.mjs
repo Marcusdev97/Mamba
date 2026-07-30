@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { loadEnv } from "./campaign_core.mjs";
+import { listInstances, loadEnv, makeApi } from "./campaign_core.mjs";
+import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs";
 import { makeHub } from "./telegram_hub.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
 import {
@@ -25,13 +26,16 @@ const env = await loadEnv().catch(() => ({}));
 const serverUrl = String(env.MAMBA_WATCHDOG_SERVER_URL || process.env.MAMBA_WATCHDOG_SERVER_URL || "http://127.0.0.1:8787").replace(/\/$/, "");
 const deviceName = String(env.MAMBA_DEVICE_NAME || process.env.MAMBA_DEVICE_NAME || os.hostname()).trim();
 const checkIntervalMs = Math.max(15_000, Number(env.MAMBA_WATCHDOG_INTERVAL_SECONDS || process.env.MAMBA_WATCHDOG_INTERVAL_SECONDS || 30) * 1000);
-const heartbeatIntervalMs = Math.max(15 * 60_000, Number(env.MAMBA_WATCHDOG_TELEGRAM_MINUTES || process.env.MAMBA_WATCHDOG_TELEGRAM_MINUTES || 60) * 60_000);
 const externalHeartbeatUrl = String(env.MAMBA_HEALTHCHECK_URL || process.env.MAMBA_HEALTHCHECK_URL || "").trim();
-const autoRestart = String(env.MAMBA_WATCHDOG_AUTO_RESTART || process.env.MAMBA_WATCHDOG_AUTO_RESTART || "1") !== "0";
+const autoRestart = String(process.env.MAMBA_WATCHDOG_AUTO_RESTART ?? env.MAMBA_WATCHDOG_AUTO_RESTART ?? "0") === "1";
 const once = process.argv.includes("--once");
 const dryRun = process.argv.includes("--dry-run");
 const hub = makeHub(env);
 const telegram = makeTelegram(env);
+const watchdogApi = makeApi(env);
+const transportHealth = createEvolutionHealthService({
+  listInstances: () => listInstances(watchdogApi),
+});
 
 let state = await readJson(statusPath, {});
 let restartAttemptAt = 0;
@@ -74,7 +78,17 @@ async function fetchHealth() {
     }
     return summarizeWatchdogHealth(payload, { serverUrl });
   } catch (error) {
-    return unreachableWatchdogHealth(error, { serverUrl });
+    const unavailable = unreachableWatchdogHealth(error, { serverUrl });
+    const transport = await transportHealth.check().catch(() => null);
+    if (!transport) return unavailable;
+    const replacements = new Map([
+      ["docker", { ...transport.docker, label: "Docker Engine" }],
+      ["evolution", { ...transport.evolution, label: "Evolution API" }],
+      ["whatsapp", { ...transport.whatsapp, label: "WhatsApp Instances" }],
+    ]);
+    unavailable.components = unavailable.components.map((item) => replacements.get(item.id) || item);
+    unavailable.failed = unavailable.components.filter((item) => !item.ok);
+    return unavailable;
   }
 }
 
@@ -105,7 +119,7 @@ async function pingExternal(snapshot) {
     .catch((error) => console.log(`[watchdog] External heartbeat failed: ${error.message}`));
 }
 
-async function checkOnce({ startup = false } = {}) {
+async function checkOnce() {
   if (runningCheck) return;
   runningCheck = true;
   try {
@@ -121,12 +135,8 @@ async function checkOnce({ startup = false } = {}) {
 
     const transition = watchdogTransition(state, snapshot, { failureThreshold: 2 });
     const now = new Date().toISOString();
-    const lastHeartbeatMs = new Date(state.lastTelegramHeartbeatAt || 0).getTime();
-    const heartbeatDue = snapshot.healthy
-      && (!Number.isFinite(lastHeartbeatMs) || Date.now() - lastHeartbeatMs >= heartbeatIntervalMs);
 
     let reportSent = false;
-    let heartbeatSent = false;
     if (transition.shouldReportFailure) {
       reportSent = await notify(`🔴 <b>服务异常</b>\n${escapeHtml(formatWatchdogStatus(snapshot))}${restarted ? "\n已尝试自动重启 Mamba。" : ""}`)
         .then(() => true)
@@ -139,13 +149,6 @@ async function checkOnce({ startup = false } = {}) {
         .then(() => true)
         .catch((error) => {
           console.log(`[watchdog] Telegram recovery alert failed: ${error.message}`);
-          return false;
-        });
-    } else if (snapshot.healthy && (startup || heartbeatDue)) {
-      heartbeatSent = await notify(`🟢 <b>心跳正常</b>\n${escapeHtml(formatWatchdogStatus(snapshot))}`)
-        .then(() => true)
-        .catch((error) => {
-          console.log(`[watchdog] Telegram heartbeat failed: ${error.message}`);
           return false;
         });
     }
@@ -165,7 +168,6 @@ async function checkOnce({ startup = false } = {}) {
       consecutiveFailures: transition.consecutiveFailures,
       reportedSignature: reportSent ? transition.signature : state.reportedSignature || "",
       lastRestartAttemptAt: restarted ? now : state.lastRestartAttemptAt || null,
-      lastTelegramHeartbeatAt: heartbeatSent ? now : state.lastTelegramHeartbeatAt || null,
       externalHeartbeatConfigured: Boolean(externalHeartbeatUrl),
     };
     await atomicWrite(statusPath, state);
@@ -177,10 +179,10 @@ async function checkOnce({ startup = false } = {}) {
 
 console.log(`Mamba Watchdog · ${deviceName}`);
 console.log(`Watching ${serverUrl} every ${Math.round(checkIntervalMs / 1000)} seconds.`);
-console.log(`Telegram heartbeat every ${Math.round(heartbeatIntervalMs / 60000)} minutes.`);
+console.log("Telegram only reports confirmed failures and recovery transitions.");
 console.log(externalHeartbeatUrl ? "External dead-man heartbeat enabled." : "External dead-man heartbeat not configured.");
 
-await checkOnce({ startup: true });
+await checkOnce();
 if (once) process.exit(0);
 const timer = setInterval(() => {
   checkOnce().catch((error) => console.log(`[watchdog] Check failed: ${error.message}`));

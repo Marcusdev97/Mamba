@@ -60,6 +60,39 @@ export function flowStateAfter(key) {
   };
 }
 
+// A delayed Notion job must never move a customer backwards. When the current
+// Last/Next pair is a valid later state in this sequence, the old job has been
+// superseded by a newer Campaign and can close without PATCHing Notion.
+export function classifyFlowAdvanceState({
+  sentFlowLabel,
+  currentLastFlowLabel,
+  currentNextFlowLabel,
+} = {}) {
+  const sentFlow = flowByLabel(sentFlowLabel);
+  if (!sentFlow) return "MISMATCH";
+  const expected = flowStateAfter(sentFlow.key);
+  if (
+    currentLastFlowLabel === expected?.lastFlowLabel
+    && currentNextFlowLabel === expected?.nextFlowLabel
+  ) {
+    return "ALREADY_SYNCED";
+  }
+  if (currentNextFlowLabel === sentFlow.label) return "READY";
+
+  const currentLastFlow = flowByLabel(currentLastFlowLabel);
+  if (!currentLastFlow) return "MISMATCH";
+  const sentIndex = FLOW_SEQUENCE.findIndex((flow) => flow.key === sentFlow.key);
+  const currentIndex = FLOW_SEQUENCE.findIndex((flow) => flow.key === currentLastFlow.key);
+  const currentPair = flowStateAfter(currentLastFlow.key);
+  if (
+    currentIndex > sentIndex
+    && currentPair?.nextFlowLabel === currentNextFlowLabel
+  ) {
+    return "SUPERSEDED";
+  }
+  return "MISMATCH";
+}
+
 function normalizeRuleList(payload) {
   return Array.isArray(payload?.rules) ? payload.rules : [];
 }

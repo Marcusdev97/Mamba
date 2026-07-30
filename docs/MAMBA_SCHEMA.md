@@ -27,7 +27,7 @@
 | Blast Leads(项目状态) | **`project_leads`** | `project_lead_key` | flow 序列状态,核心表 |
 | Ads Leads | `ads_leads` | `ad_lead_key` | 广告来源线索 |
 | Recycle Leads | `recycle_leads` | `recycle_lead_key` | 旧名单/回收 |
-| Own Leads | `own_leads` | `own_lead_key` | 业务人员本机私有客户 |
+| Others（底层 `OWN`） | `own_leads` | `own_lead_key` | ChatRoom 本机联系人，不进入 Notion／自动 Flow |
 | Chat Room 人工来源 | `lead_origins` | `origin_key` | 客户类型、Project、负责 sender 与 Notion 同步状态 |
 | Campaign Templates | `templates` | `template_key` | 话术,多 Active = 变体轮换 |
 | Images | `images` | `asset_key` = image_name | 素材 + 云端 URL |

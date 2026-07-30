@@ -22,6 +22,51 @@ function requireCampaign(runtime) {
   return runtime.campaign;
 }
 
+function requireRecipientRisk(campaign) {
+  if (!campaign.recipientRisk) {
+    throw httpError(503, "LIVE 收件人风险检查尚未载入。为避免误发，本次不会启动。", "RECIPIENT_RISK_UNAVAILABLE");
+  }
+  return campaign.recipientRisk;
+}
+
+async function analyzePreparedRecipientRisk(campaign, runner, skipIds = []) {
+  const service = requireRecipientRisk(campaign);
+  let connectedInstances;
+  try {
+    connectedInstances = await campaign.openInstances();
+  } catch (error) {
+    throw httpError(503, `无法核对本机 WhatsApp 号码：${error.message}`, "RECIPIENT_SENDER_CHECK_FAILED");
+  }
+  return service.analyze({
+    scopeId: runner.state.runId,
+    assignments: runner.state.assignments || [],
+    connectedInstances,
+    skipIds,
+  });
+}
+
+function laneRiskScope(projectId, leadGroupId, instanceName) {
+  return `lane:${String(projectId || "").trim()}:${String(leadGroupId || "").trim()}:${String(instanceName || "").trim()}`;
+}
+
+async function analyzeLaneRecipientRisk(campaign, {
+  projectId,
+  leadGroupId,
+  instanceName,
+  leads,
+  connectedInstances,
+} = {}) {
+  const service = requireRecipientRisk(campaign);
+  return service.analyze({
+    scopeId: laneRiskScope(projectId, leadGroupId, instanceName),
+    assignments: (leads || []).map((lead, index) => ({
+      id: String(lead?.id || lead?.pageId || lead?.contactKey || `lane_recipient_${index + 1}`),
+      lead,
+    })),
+    connectedInstances,
+  });
+}
+
 // requested 支持两种形态 (向后兼容):
 //   ["wa_01", "wa_02"]                        — 旧格式, 不限量
 //   [{ name: "wa_01", max: 100 }, "wa_02"]    — 带 per-sender quota (max = 本批上限)
@@ -257,6 +302,7 @@ async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error
 
 export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent = "campaign_run_error", { lane = false } = {}) {
   const campaign = requireCampaign(runtime);
+  const runId = String(runner?.state?.runId || "").trim();
   if (lane) {
     // 车道模式：只登记进 registry（监控可见），不抢「当前 runner」、不镜像
     // active-run.json、不触发 campaign 队列 —— 各条车道完全独立并行。
@@ -266,9 +312,28 @@ export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent
     campaign.setRunner(runner);
   }
   campaign.persistRunners?.().catch(() => {});
-  (async () => {
+  const task = (async () => {
+    try {
+      const awake = runtime.campaignAwake?.acquire?.(runId);
+      if (awake?.supported && !awake.active) {
+        await writeCampaignLog(runtime, "warn", "campaign_awake_guard_unavailable", "Campaign started without an active macOS idle-sleep guard.", {
+          runId,
+          error: awake.lastError || null,
+        });
+      }
+    } catch (error) {
+      await writeCampaignLog(runtime, "warn", "campaign_awake_guard_unavailable", "Campaign started without an active macOS idle-sleep guard.", {
+        runId,
+        error: error.message,
+      });
+    }
     try {
       await runner.run();
+      // Per-customer checkpoints deliberately use RUNNING while a batch is in
+      // progress. Once the runner reaches a terminal state, repeat the
+      // idempotent local write so SQLite—not the run JSON alone—owns the final
+      // status and aggregate counts.
+      await campaign.recordLocalFlowProgress?.(runner);
       const assignments = runner.state?.assignments || [];
       const pending = assignments.filter((job) => isResumableJobStatus(job.status)).length;
       const committed = assignments.filter((job) => job.localCheckpoint?.status === "SUCCEEDED").length;
@@ -304,9 +369,19 @@ export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent
       await runner.saveState();
       runner.pushLog(`SQLite 已逐客户完成 ${committed} 位；Notion 已排队，晚上 22:00 或手动同步。`);
     } catch (error) {
+      if (runner.state?.mode === "LIVE") {
+        runner.state.localAdvance = {
+          ...(runner.state.localAdvance || {}),
+          status: "FAILED",
+          error: `Campaign terminal SQLite commit failed: ${error.message}`,
+          updatedAt: new Date().toISOString(),
+        };
+        await runner.saveState?.().catch(() => {});
+      }
       runner.pushLog(`运行出错：${error.message}`);
       await runner.systemLog?.("error", errorEvent, "Campaign background run failed.", { error: error.message });
     } finally {
+      runtime.campaignAwake?.release?.(runId);
       await campaign.persistRunners?.().catch(() => {});
       // 车道不参与 campaign 队列（那是单线流程的排队机制）。
       if (!lane) {
@@ -320,6 +395,7 @@ export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent
       }
     }
   })();
+  return task;
 }
 
 export async function startNextQueued(runtime, { force = false } = {}) {
@@ -378,6 +454,39 @@ async function resolveStartRunner(campaign, body) {
 }
 
 export function registerCampaignRoutes(router) {
+  router.post("/api/campaign/recipient-risk", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    if (!String(body.runId || "").trim() && body.leadGroupId && body.instance) {
+      const { project } = await campaign.getProject(body.project);
+      const group = await campaign.readLeadGroup({
+        groupId: String(body.leadGroupId).trim(),
+        projectCode: project.id,
+      });
+      const leads = group?.leads || [];
+      if (!leads.length) {
+        throw httpError(400, "这个客户群没有可检查的客户。", "LANE_GROUP_EMPTY");
+      }
+      const connectedInstances = await campaign.openInstances();
+      selectedOpenInstances(connectedInstances, [String(body.instance).trim()]);
+      const risk = await analyzeLaneRecipientRisk(campaign, {
+        projectId: project.id,
+        leadGroupId: body.leadGroupId,
+        instanceName: body.instance,
+        leads,
+        connectedInstances,
+      });
+      json(res, 200, { ok: true, risk, leadGroupName: group.name || "" });
+      return;
+    }
+    const runner = await resolveStartRunner(campaign, body);
+    if (!runner?.state || runner.state.mode !== "LIVE") {
+      throw httpError(400, "收件人风险确认只适用于已经生成预览的 LIVE Campaign。", "LIVE_PREVIEW_REQUIRED");
+    }
+    const risk = await analyzePreparedRecipientRisk(campaign, runner, body.skipIds);
+    json(res, 200, { ok: true, risk });
+  });
+
   router.post("/api/prepare", async (req, res, runtime) => {
     const campaign = requireCampaign(runtime);
     const body = await readJson(req);
@@ -459,6 +568,16 @@ export function registerCampaignRoutes(router) {
     const body = await readJson(req);
     const runner = await resolveStartRunner(campaign, body);
     ensureRunnableStart(runner, body);
+    if (runner.state.mode === "LIVE") {
+      const risk = await analyzePreparedRecipientRisk(campaign, runner, body.skipIds);
+      if (!campaign.recipientRisk.matchesConfirmation(risk, body.recipientRiskToken)) {
+        throw httpError(
+          409,
+          "LIVE 收件人名单或风险资料已经改变。请重新查看发送前确认弹窗。",
+          "RECIPIENT_RISK_CONFIRMATION_REQUIRED",
+        );
+      }
+    }
     const skippedCount = applyManualSkips(runner, body.skipIds);
     if (skippedCount) {
       runner.pushLog(`手动跳过 ${skippedCount} 个收件人，本轮不会发送给他们。`);
@@ -758,6 +877,23 @@ export function registerCampaignRoutes(router) {
       leads = group?.leads || [];
       if (!leads.length) throw httpError(400, "这个客户群没有可发送的客户。", "LANE_GROUP_EMPTY");
       leadGroupName = group.name || "";
+    }
+
+    if (sendMode === "LIVE") {
+      const risk = await analyzeLaneRecipientRisk(campaign, {
+        projectId: project.id,
+        leadGroupId,
+        instanceName,
+        leads,
+        connectedInstances: open,
+      });
+      if (!campaign.recipientRisk.matchesConfirmation(risk, body.recipientRiskToken)) {
+        throw httpError(
+          409,
+          "这条 LIVE 车道的收件人风险资料已经改变。请重新查看确认弹窗。",
+          "RECIPIENT_RISK_CONFIRMATION_REQUIRED",
+        );
+      }
     }
 
     // 一个号码不能同时跑两批。

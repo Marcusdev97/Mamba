@@ -90,7 +90,8 @@ const RULES = [
   // 使用者就跑去查网路，实际上要做的是重新扫 QR。
   {
     code: "WHATSAPP_NOT_CONNECTED",
-    test: (text) => /ECONNREFUSED.*8080|127\.0\.0\.1:8080|Evolution.*(refused|unavailable)|instance.*not.*(found|connected)/i.test(text),
+    test: (text, error) => error?.code === "WHATSAPP_NOT_CONNECTED"
+      || /ECONNREFUSED.*8080|127\.0\.0\.1:8080|Evolution.*(refused|unavailable)|instance.*not.*(found|connected)/i.test(text),
     message: "连不上 Evolution（WhatsApp 发送服务）。",
     why: "Evolution 没在跑，或 WhatsApp 装置已经登出（手机上「已连结的装置」被移除也会这样）。",
     impact: "完全发不出讯息。进行中的 campaign 会整批失败。",

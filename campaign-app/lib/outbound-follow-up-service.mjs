@@ -176,7 +176,13 @@ export function createOutboundFollowUpService({
             connectionErrors.push(`${instance.name}: ${error.message}`);
           }
         }
-        if (connectionErrors.length === instances.length) throw new Error(`全部 WhatsApp connection 核对失败：${connectionErrors.join(" | ")}`);
+        if (connectionErrors.length === instances.length) {
+          const error = new Error(`全部 WhatsApp connection 核对失败：${connectionErrors.join(" | ")}`);
+          // This stage only calls Evolution. Mark it explicitly so a generic
+          // "fetch failed" is not incorrectly reported as a Notion outage.
+          error.code = "WHATSAPP_NOT_CONNECTED";
+          throw error;
+        }
 
         const followUpAt = nextFollowUpAt();
         let handled = 0;

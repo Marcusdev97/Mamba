@@ -4,6 +4,7 @@
 import {
   normalizePhone, extractText, describeMessage, jidPhone, resolvePhone,
   collectMessages, senderFromPayload, inboundEvent, extractPollVote, messageMediaKind,
+  collectMessageStatusUpdates, normalizeMessageDeliveryStatus, deliveryStatusRank,
 } from "./reply_intake.mjs";
 
 let fail = 0;
@@ -70,6 +71,52 @@ const payload = {
 };
 check("collectMessages finds nested", collectMessages(payload).length, 1);
 check("senderFromPayload", senderFromPayload(payload), "mamba01");
+
+// --- MESSAGES_UPDATE: delivery receipt shapes across Evolution/Baileys ---
+check("normalize numeric delivery status", normalizeMessageDeliveryStatus(3), "DELIVERY_ACK");
+check("normalize friendly delivery status", normalizeMessageDeliveryStatus("delivered"), "DELIVERY_ACK");
+check("delivery status rank is monotonic", [
+  deliveryStatusRank("PENDING"),
+  deliveryStatusRank("SERVER_ACK"),
+  deliveryStatusRank("DELIVERY_ACK"),
+  deliveryStatusRank("READ"),
+], [0, 2, 3, 4]);
+check("Evolution v2 delivery update", collectMessageStatusUpdates({
+  event: "messages.update",
+  instance: "wa_01",
+  date_time: "2026-07-30T06:00:00.000Z",
+  data: {
+    keyId: "OUT-DELIVERED",
+    fromMe: true,
+    status: "DELIVERY_ACK",
+  },
+}), [{
+  messageId: "OUT-DELIVERED",
+  status: "DELIVERY_ACK",
+  observedAt: "2026-07-30T06:00:00.000Z",
+  instanceName: "wa_01",
+}]);
+check("Baileys nested numeric read update", collectMessageStatusUpdates({
+  event: "MESSAGES_UPDATE",
+  instanceName: "wa_03",
+  data: [{
+    key: { id: "OUT-READ", fromMe: true },
+    update: { status: 4, timestamp: 1785391260 },
+  }],
+}), [{
+  messageId: "OUT-READ",
+  status: "READ",
+  observedAt: new Date(1785391260 * 1000).toISOString(),
+  instanceName: "wa_03",
+}]);
+check("customer-side status is ignored", collectMessageStatusUpdates({
+  event: "messages.update",
+  data: { key: { id: "IN-1", fromMe: false }, update: { status: "READ" } },
+}), []);
+check("upsert status-like fields cannot change delivery", collectMessageStatusUpdates({
+  event: "messages.upsert",
+  data: { keyId: "OUT-1", status: "READ" },
+}), []);
 
 // --- inboundEvent: the normalized shape both services consume ---
 const event = inboundEvent(payload, collectMessages(payload)[0]);

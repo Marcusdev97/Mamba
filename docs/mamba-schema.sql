@@ -70,6 +70,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_device_instance
   ON whatsapp_connections(device_key, instance_name)
   WHERE device_key IS NOT NULL AND instance_name <> '';
 
+-- Evolution instance 标签会改变；这张表保留标签与实际 WhatsApp 号码的历史绑定。
+CREATE TABLE IF NOT EXISTS instance_identity (
+  instance_name    TEXT PRIMARY KEY,
+  whatsapp_number TEXT NOT NULL,
+  source           TEXT NOT NULL DEFAULT 'evolution',
+  first_seen_at    TEXT NOT NULL,
+  last_seen_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_instance_identity_number ON instance_identity(whatsapp_number);
+
 -- =============================================================================
 -- B. 客户身份与线索(双键的核心)
 -- =============================================================================
@@ -301,6 +312,19 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv_time ON messages(conversation_id, sent_at);
 
+-- WhatsApp LID 与电话号码的本机证据映射。confidence 防止低可信来源覆盖高可信来源。
+CREATE TABLE IF NOT EXISTS lid_map (
+  lid         TEXT PRIMARY KEY,
+  phone       TEXT NOT NULL,
+  source      TEXT NOT NULL,
+  confidence  INTEGER NOT NULL DEFAULT 0,
+  evidence    TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lid_map_phone ON lid_map(phone);
+
 -- =============================================================================
 -- D. 模板与素材(出站话术真相源 = Notion,SQLite 是本机缓存)
 -- =============================================================================
@@ -464,9 +488,26 @@ CREATE TABLE IF NOT EXISTS golden_conversations (
   last_customer_reply_at TEXT
 );
 
--- followup_log 与 GC indexes 由 golden-conversation-ledger-service 安装。
--- 原因：旧 v3 也有同名 golden_conversations，但没有 lead_code/outcome；必须先
--- 识别并无损搬迁旧表，才能建立外键与新索引，否则旧电脑会在启动时失败。
+CREATE TABLE IF NOT EXISTS followup_log (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_code         TEXT NOT NULL,
+  seq               INTEGER NOT NULL,
+  sent_at           TEXT NOT NULL,
+  silence_gap_days  INTEGER NOT NULL,
+  followup_type     TEXT NOT NULL CHECK (followup_type IN (
+                        'ab_slot_template','festival_greeting','new_info',
+                        'price_update','personalized_question'
+                      )),
+  content_summary   TEXT,
+  revival           INTEGER NOT NULL CHECK (revival IN (0,1)),
+  revival_gap_hours INTEGER,
+  UNIQUE(lead_code, seq),
+  FOREIGN KEY (lead_code) REFERENCES golden_conversations(lead_code) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_gc_outcome ON golden_conversations(outcome);
+CREATE INDEX IF NOT EXISTS idx_gc_project ON golden_conversations(project_code);
+CREATE INDEX IF NOT EXISTS idx_fl_type ON followup_log(followup_type, revival);
 
 -- objection_key = scenario_slug:customer_says_slug
 CREATE TABLE IF NOT EXISTS objection_bank (
@@ -619,6 +660,10 @@ ON CONFLICT(id) DO NOTHING;
 
 INSERT INTO schema_migrations(version, name, applied_at)
 VALUES (3, 'systematic-business-schema', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+ON CONFLICT(version) DO NOTHING;
+
+INSERT INTO schema_migrations(version, name, applied_at)
+VALUES (301, 'runtime-support-tables', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 ON CONFLICT(version) DO NOTHING;
 
 INSERT INTO metadata(key, value, updated_at) VALUES

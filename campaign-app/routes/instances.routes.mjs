@@ -62,6 +62,17 @@ function assertInstanceName(name) {
 export function registerInstancesRoutes(router) {
   router.get("/api/instances", async (_req, res, runtime) => {
     const whatsapp = requireWhatsapp(runtime);
+    if (runtime.evolutionHealth?.check) {
+      const health = await runtime.evolutionHealth.check();
+      json(res, 200, {
+        ok: true,
+        online: health.evolution.ok,
+        error: health.evolution.ok ? null : health.evolution.detail,
+        instances: health.instances,
+        health,
+      });
+      return;
+    }
     try {
       const instances = await whatsapp.listInstances();
       json(res, 200, { ok: true, online: true, instances });

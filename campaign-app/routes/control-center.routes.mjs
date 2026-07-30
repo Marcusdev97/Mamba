@@ -149,6 +149,34 @@ async function whatsappHealth(runtime) {
   }
 }
 
+async function transportHealth(runtime) {
+  if (runtime.evolutionHealth?.check) return runtime.evolutionHealth.check();
+  const legacy = await whatsappHealth(runtime);
+  return {
+    docker: {
+      id: "docker",
+      ok: legacy.ok,
+      state: legacy.ok ? "online" : "warning",
+      detail: legacy.ok ? "Docker host inferred from Evolution API" : "Docker status unavailable",
+    },
+    evolution: {
+      id: "evolution",
+      ok: legacy.ok,
+      state: legacy.ok ? "online" : "offline",
+      detail: legacy.label,
+    },
+    whatsapp: {
+      id: "whatsapp",
+      ok: legacy.ok,
+      state: legacy.ok ? "online" : "offline",
+      detail: legacy.label,
+      open: legacy.open,
+      total: legacy.total,
+    },
+    instances: legacy.instances || [],
+  };
+}
+
 function healthItem(id, label, state, detail, href = "") {
   const normalized = ["online", "warning", "offline", "idle"].includes(state) ? state : "offline";
   return { id, label, state: normalized, ok: normalized === "online", detail: String(detail || ""), href };
@@ -204,7 +232,7 @@ export function registerControlCenterRoutes(router) {
       || await runtime.followUp?.readCache?.().catch(() => ({ syncedAt: null, records: [] }))
     ) ?? { syncedAt: null, records: [] };
     const allRecords = Array.isArray(cache.records) ? cache.records : [];
-    const whatsapp = await whatsappHealth(runtime);
+    const transport = await transportHealth(runtime);
     const device = runtime.device || { id: "this-device", name: "This device", hostname: "" };
     const localScope = filterRecordsForDevice(allRecords, {
       device,
@@ -286,7 +314,7 @@ export function registerControlCenterRoutes(router) {
       scope: {
         mode: "device",
         device,
-        senders: whatsapp.instances || [],
+        senders: transport.instances || [],
         localRecords: records.length,
         sharedRecords: allRecords.length,
         legacyRecords: localScope.counts.legacy,
@@ -302,7 +330,9 @@ export function registerControlCenterRoutes(router) {
       brain: { enabled: brainEnabled, activeProjects: activeBrain.length, provider: settings.brain?.provider || "rules", storedPending: storedBrainPending },
       health: [
         healthItem("server", "Mamba Server", "online", `Online · port ${runtime.port}`),
-        healthItem("whatsapp", "WhatsApp (Evolution)", whatsapp.ok ? "online" : "offline", whatsapp.label, "/settings"),
+        healthItem("docker", "Docker Engine", transport.docker.state, transport.docker.detail, "/settings"),
+        healthItem("evolution", "Evolution API", transport.evolution.state, transport.evolution.detail, "/settings"),
+        healthItem("whatsapp", "WhatsApp Instances", transport.whatsapp.state, transport.whatsapp.detail, "/settings"),
         healthItem(
           "notion",
           cache.source === "sqlite" ? "SQLite Customer Store" : "Notion Customer Cache",

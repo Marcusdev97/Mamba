@@ -15,24 +15,12 @@
 
 import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
+import { RUNTIME_REQUIRED_COLUMNS } from "./v3-runtime-schema.mjs";
 
 const DIGITS_RE = /\D/g;
 
 const digits = (value) => String(value ?? "").replace(DIGITS_RE, "");
 const clean = (value) => String(value ?? "").trim();
-
-export function schemaSql() {
-  return `
-CREATE TABLE IF NOT EXISTS instance_identity (
-  instance_name   TEXT PRIMARY KEY,
-  whatsapp_number TEXT NOT NULL,
-  source          TEXT NOT NULL DEFAULT 'evolution',
-  first_seen_at   TEXT NOT NULL,
-  last_seen_at    TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_instance_identity_number ON instance_identity(whatsapp_number);
-`;
-}
 
 export function createInstanceIdentityService({
   dataDir,
@@ -57,7 +45,15 @@ export function createInstanceIdentityService({
     if (!schemaReady) {
       schemaReady = (async () => {
         const database = await cli();
-        await database.exec(schemaSql());
+        const columns = new Set(
+          (await database.query("PRAGMA table_info(instance_identity);")).map((row) => row.name),
+        );
+        const missing = RUNTIME_REQUIRED_COLUMNS.instance_identity.filter((name) => !columns.has(name));
+        if (missing.length) {
+          const error = new Error(`instance_identity 尚未完成正式 Migration（缺少：${missing.join(", ")}）。`);
+          error.code = "SCHEMA_MIGRATION_REQUIRED";
+          throw error;
+        }
       })().catch((error) => { schemaReady = null; throw error; });
     }
     return schemaReady;

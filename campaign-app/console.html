@@ -168,6 +168,7 @@
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
+<script src="/assets/live-recipient-confirmation.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -568,7 +569,8 @@ function updRowLang(sel) {
 
 async function post(url, body) {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-  return r.json();
+  const data = await r.json().catch(() => ({}));
+  return { ...data, _httpStatus: r.status };
 }
 async function get(url) { return (await fetch(url)).json(); }
 
@@ -1013,7 +1015,7 @@ function collectSkipIds() {
 function selectedSendCount() {
   return document.querySelectorAll(".sendToggle:checked").length;
 }
-async function startCampaign(optIn) {
+async function startCampaign(optIn, recipientRiskToken = "") {
   $("startErr").textContent = "";
   $("queueMsg").textContent = "";
   if (selectedSendCount() < 1) { $("startErr").textContent = "请至少保留 1 个收件人。"; return; }
@@ -1023,6 +1025,7 @@ async function startCampaign(optIn) {
     runId: preparedRunId,
     overrides: collectOverrides(),
     skipIds: collectSkipIds(),
+    recipientRiskToken: optIn ? recipientRiskToken : undefined,
   });
   if (!r.ok) { $("startErr").textContent = r.error; return; }
   if (r.queued) {
@@ -1042,13 +1045,39 @@ $("btnStartTest").addEventListener("click", () => {
   if (!confirm(action + "，共 " + total + " 个测试收件人？")) return;
   startCampaign(false);
 });
-$("btnStartLive").addEventListener("click", () => {
+$("btnStartLive").addEventListener("click", async () => {
   if (!$("optIn").checked) { $("startErr").textContent = "请先勾选 opt-in 确认。"; return; }
   const total = selectedSendCount();
   const skipped = collectSkipIds().length;
   const action = preparedCanQueue ? "加入等待队列；轮到时会自动真实发送" : "立即真实发送";
-  if (!confirm("⚠️ LIVE：确认 " + action + "，共 " + total + " 个真实号码？" + (skipped ? " 已手动跳过 " + skipped + " 个。" : ""))) return;
-  startCampaign(true);
+  const btn = $("btnStartLive");
+  btn.disabled = true;
+  try {
+    const response = await post("/api/campaign/recipient-risk", {
+      project: currentProject,
+      runId: preparedRunId,
+      skipIds: collectSkipIds(),
+    });
+    if (!response.ok) {
+      const error = new Error(response.error || "无法检查 LIVE 收件人");
+      error.status = response._httpStatus;
+      throw error;
+    }
+    const confirmed = await window.MambaLiveRecipientConfirm.open(response.risk, {
+      actionLabel: preparedCanQueue ? "确认加入等待队列" : "确认 LIVE 发送",
+    });
+    if (!confirmed) return;
+    await startCampaign(true, response.risk.confirmationToken);
+  } catch (error) {
+    $("startErr").textContent = window.MambaLiveRecipientConfirm.formatRequestError(error, {
+      action: preparedCanQueue ? "加入等待队列" : "开始 LIVE 发送",
+    });
+  } finally {
+    if ($("progressCard").classList.contains("hidden") && !$("queueMsg").textContent) {
+      btn.disabled = false;
+      btn.textContent = preparedCanQueue ? "加入等待队列（LIVE）" : "开始发送（LIVE）";
+    }
+  }
 });
 $("btnStop").addEventListener("click", async () => {
   if (!confirm("暂停当前 Campaign？已发送和已保存的进度都会保留，之后可以安全继续。")) return;

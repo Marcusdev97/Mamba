@@ -24,6 +24,7 @@ export function createCampaignRunService({
   klDateTime,
   flowByLabel,
   flowStateAfter,
+  classifyFlowAdvanceState = () => "MISMATCH",
   execFileFn = execFile,
 }) {
   function klDateAfter(iso, days) {
@@ -101,6 +102,8 @@ export function createCampaignRunService({
       deviceId: state.deviceId || deviceIdentity.id || "",
       startedAt: state.startAt || state.createdAt || null,
       finishedAt: null,
+      requestedCount: state.assignments.length,
+      failedCount: state.assignments.filter((item) => item?.status === "FAILED").length,
       assignments: [{
         phone: normalizePhone(job.lead?.phone),
         name: job.lead?.name || "",
@@ -187,6 +190,8 @@ export function createCampaignRunService({
         : state.status === "STOPPED"
           ? "STOPPED"
           : "PARTIAL";
+    const requestedCount = (state.assignments || []).length;
+    const failedCount = (state.assignments || []).filter((job) => job?.status === "FAILED").length;
     state.localAdvance = {
       status: "RUNNING",
       recorded: 0,
@@ -209,6 +214,8 @@ export function createCampaignRunService({
       deviceId: state.deviceId || deviceIdentity.id || "",
       startedAt: state.startAt || state.createdAt || null,
       finishedAt: state.endAt || null,
+      requestedCount,
+      failedCount,
       assignments,
       notionSyncJob: deferredNotionJob(state),
     });
@@ -237,6 +244,7 @@ export function createCampaignRunService({
     let skippedSafety = 0;
     let notFound = 0;
     let flowMismatch = 0;
+    let superseded = 0;
     const sentFlow = flowByLabel(runner.state.flowLabel);
     if (!sentFlow) throw new Error(`无法识别已发送 Flow: ${runner.state.flowLabel || "(empty)"}`);
     const nextState = flowStateAfter(sentFlow.key);
@@ -291,12 +299,27 @@ export function createCampaignRunService({
           }
 
           const currentNext = nfSelect(page, "Next Flow");
-          if (currentNext === nextState.nextFlowLabel && nfSelect(page, "Last Flow Sent") === nextState.lastFlowLabel) {
+          const currentLast = nfSelect(page, "Last Flow Sent");
+          const flowState = currentNext === nextState.nextFlowLabel && currentLast === nextState.lastFlowLabel
+            ? "ALREADY_SYNCED"
+            : currentNext === runner.state.flowLabel
+              ? "READY"
+              : classifyFlowAdvanceState({
+                  sentFlowLabel: runner.state.flowLabel,
+                  currentLastFlowLabel: currentLast,
+                  currentNextFlowLabel: currentNext,
+                });
+          if (flowState === "ALREADY_SYNCED") {
             alreadyAdvanced += 1;
             outcome = "ALREADY_SYNCED";
             continue;
           }
-          if (currentNext !== runner.state.flowLabel) {
+          if (flowState === "SUPERSEDED") {
+            superseded += 1;
+            outcome = "SUPERSEDED";
+            continue;
+          }
+          if (flowState !== "READY") {
             flowMismatch += 1;
             outcome = "FLOW_MISMATCH";
             continue;
@@ -350,7 +373,7 @@ export function createCampaignRunService({
       runner.state.advanceError = issueCount
         ? `${notFound} 个 Notion row 找不到，${flowMismatch} 个客户的 Next Flow 与本轮不一致。`
         : null;
-      runner.state.advanceSummary = { advanced, alreadyAdvanced, skippedSafety, notFound, flowMismatch };
+      runner.state.advanceSummary = { advanced, alreadyAdvanced, superseded, skippedSafety, notFound, flowMismatch };
       runner.state.advanceProgress = {
         ...runner.state.advanceProgress,
         status: issueCount ? "PARTIAL" : "SUCCEEDED",
@@ -367,7 +390,7 @@ export function createCampaignRunService({
           ...runner.state.advanceSummary,
         });
       } else {
-        runner.pushLog?.(`Flow 状态已自动推进:${advanced} 人进入下一轮${alreadyAdvanced ? `，${alreadyAdvanced} 人之前已推进` : ""}。`);
+        runner.pushLog?.(`Flow 状态已自动推进:${advanced} 人进入下一轮${alreadyAdvanced ? `，${alreadyAdvanced} 人之前已推进` : ""}${superseded ? `，${superseded} 人已由后续 Campaign 推进` : ""}。`);
         await runner.systemLog?.("info", "flow_advance_succeeded", "Notion Flow advance completed.", {
           flowLabel: runner.state.flowLabel,
           ...runner.state.advanceSummary,
@@ -385,7 +408,7 @@ export function createCampaignRunService({
       runner.state.advanceDone = false;
       runner.state.advanceStatus = "FAILED";
       runner.state.advanceError = error.message;
-      runner.state.advanceSummary = { advanced, alreadyAdvanced, skippedSafety, notFound, flowMismatch };
+      runner.state.advanceSummary = { advanced, alreadyAdvanced, superseded, skippedSafety, notFound, flowMismatch };
       runner.state.advanceProgress = {
         ...(runner.state.advanceProgress || {}),
         status: "FAILED",

@@ -24,7 +24,7 @@ import { registerTeamViewRoutes } from "../routes/team-view.routes.mjs";
 
 export function createApp(runtime) {
   const router = createRouter(runtime);
-  registerStaticRoutes(router);
+  registerStaticRoutes(router, runtime);
   registerSettingsRoutes(router);
   registerProjectsRoutes(router);
   registerProjectBrainRoutes(router);

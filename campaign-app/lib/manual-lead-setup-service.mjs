@@ -22,10 +22,11 @@ const LEAD_TYPES = Object.freeze([
   }),
   Object.freeze({
     key: "OWN",
-    label: "Own Leads",
-    description: "自己的私有客户；只保存在本机，不进入 Notion 或 Campaign。",
+    label: "Others",
+    description: "自己打电话建立的号码、朋友或一般联系人；保留在 ChatRoom，只存本机，不进入 Notion、自动 Flow 或 Campaign。",
     requiresProject: false,
     notion: false,
+    default: true,
   }),
 ]);
 
@@ -111,7 +112,7 @@ export function createManualLeadSetupService({
         ...local,
         typeLabel: type.label,
         notionSyncStatus: "LOCAL_ONLY",
-        notice: "Own Lead 已保存到本机数据库，不会加入 Campaign 或 Notion。",
+        notice: "Others 联系人已保存到本机数据库；会保留在 ChatRoom，不会进入 Notion、自动 Flow 或 Campaign。",
       };
     }
 

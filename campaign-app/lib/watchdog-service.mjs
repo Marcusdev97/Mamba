@@ -1,4 +1,4 @@
-const CRITICAL_COMPONENTS = ["server", "whatsapp", "tracker", "brain"];
+const CRITICAL_COMPONENTS = ["server", "docker", "evolution", "whatsapp", "tracker", "brain"];
 
 function cleanHealthItem(item) {
   return {
@@ -15,11 +15,23 @@ export function summarizeWatchdogHealth(payload, {
 } = {}) {
   const health = Array.isArray(payload?.health) ? payload.health.map(cleanHealthItem) : [];
   const byId = new Map(health.map((item) => [item.id, item]));
-  const components = CRITICAL_COMPONENTS.map((id) => byId.get(id) || {
-    id,
-    label: id,
-    ok: false,
-    detail: "Health signal missing",
+  const legacyWhatsapp = byId.get("whatsapp");
+  const components = CRITICAL_COMPONENTS.map((id) => {
+    if (byId.has(id)) return byId.get(id);
+    if (legacyWhatsapp && ["docker", "evolution"].includes(id)) {
+      return {
+        id,
+        label: id === "docker" ? "Docker Engine" : "Evolution API",
+        ok: legacyWhatsapp.ok,
+        detail: `Rolling upgrade: inferred from legacy WhatsApp health · ${legacyWhatsapp.detail}`,
+      };
+    }
+    return {
+      id,
+      label: id,
+      ok: false,
+      detail: "Health signal missing",
+    };
   });
   const notion = byId.get("notion") || null;
   const failed = components.filter((item) => !item.ok);

@@ -588,7 +588,7 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
 // Drives one campaign run. Holds state in memory and mirrors it to disk so the
 // web console can poll progress and other tools can read active-run.json.
 export class CampaignRunner {
-  constructor({ config, env, onLog, systemLogs, conversationLog, customerCheckpoint } = {}) {
+  constructor({ config, env, onLog, systemLogs, conversationLog, customerCheckpoint, transportPreflight } = {}) {
     this.config = config;
     this.env = env;
     this.api = makeApi(env);
@@ -600,6 +600,10 @@ export class CampaignRunner {
     // LIVE campaign 在继续下一位以前，必须先把刚完成的客户 commit 到 SQLite。
     // callback 由 server 注入，core 测试/一次性脚本可以不接。
     this.customerCheckpoint = customerCheckpoint ?? null;
+    // Check the exact sender immediately before every WhatsApp request. The
+    // background monitor catches sustained outages; this preflight closes the
+    // wake-from-sleep window before the next customer can be attempted.
+    this.transportPreflight = transportPreflight ?? null;
     this.state = null;
     this.runPath = null;
     this.stopped = false;
@@ -660,6 +664,15 @@ export class CampaignRunner {
 
   showProgress(message) {
     this.pushLog(message);
+  }
+
+  async assertTransport(instanceName) {
+    if (!this.transportPreflight) return;
+    await this.transportPreflight({
+      instanceName,
+      runId: this.state?.runId || "",
+      mode: this.state?.mode || "",
+    });
   }
 
   async prepare({ mode, startAt, endAt, scheduleMode = "FIXED", instances, leads, project }) {
@@ -923,6 +936,7 @@ export class CampaignRunner {
         instanceName,
         messageId: sent?.messageId ?? "",
         sentAt: sent?.sentAt ?? "",
+        apiStatus: sent?.apiStatus ?? "",
         source: "blast",
         flowTopic: this.flowTopic(),
         ...extra,
@@ -1117,6 +1131,7 @@ export class CampaignRunner {
 
     try {
       if (!job.part1?.sentAt) {
+        await this.assertTransport(job.instanceName);
         job.status = "SENDING_PART1";
         await this.saveState();
         this.showProgress(`Part 1 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
@@ -1153,6 +1168,7 @@ export class CampaignRunner {
           return;
         }
 
+        await this.assertTransport(job.instanceName);
         job.status = "SENDING_PART2";
         await this.saveState();
         this.showProgress(`Part 2 → ${job.lead.name} (${job.lead.phone}) via ${job.instanceName}`);
@@ -1177,6 +1193,7 @@ export class CampaignRunner {
           return;
         }
         if (this.pastFixedEnd()) { job.status = "SENT"; await this.saveState(); return; }
+        await this.assertTransport(job.instanceName);
         job.status = `SENDING_PART${k + 3}`;
         // Part 3+ 也必须跟 Part 1/2 一样，在呼叫 WhatsApp 前先记录 SENDING。
         // 若程序在 API 确认回来前中断，重启恢复才能识别为不确定状态并停止盲目补发。
@@ -1193,6 +1210,22 @@ export class CampaignRunner {
       this.consecutiveFailures = 0;
       await this.saveState();
     } catch (error) {
+      if (error?.code === "CAMPAIGN_TRANSPORT_UNHEALTHY") {
+        job.error = error.message;
+        await this.interruptForTransportFailure({
+          code: error.transportCode || "WHATSAPP_TRANSPORT_UNHEALTHY",
+          message: error.message,
+          layer: error.transportLayer || "unknown",
+          checkedAt: error.checkedAt || new Date().toISOString(),
+        });
+        await this.systemLog("error", "campaign_transport_preflight_interrupted", "Campaign paused before a WhatsApp request because its transport was unhealthy.", {
+          jobId: job.id,
+          instanceName: job.instanceName,
+          code: error.transportCode || "WHATSAPP_TRANSPORT_UNHEALTHY",
+          layer: error.transportLayer || "unknown",
+        });
+        return;
+      }
       if (isRecipientNotOnWhatsAppError(error)) {
         job.status = "SKIPPED_NO_WHATSAPP";
         job.error = "号码未注册 WhatsApp；本次未发送，也不会自动重试。";
@@ -1463,6 +1496,28 @@ export class CampaignRunner {
       this.state.status = "STOPPED";
       this.saveState().catch(() => {});
     }
+  }
+
+  async interruptForTransportFailure({
+    code = "WHATSAPP_TRANSPORT_UNHEALTHY",
+    message = "WhatsApp transport is unavailable. Campaign paused.",
+    layer = "unknown",
+    checkedAt = new Date().toISOString(),
+  } = {}) {
+    if (!this.running || !this.state || this.stopped) return false;
+    this.interrupted = true;
+    this.stopped = true;
+    this.state.status = "INTERRUPTED";
+    this.state.interruption = {
+      code,
+      message,
+      layer,
+      interruptedAt: checkedAt || new Date().toISOString(),
+      requiresManualResume: true,
+    };
+    this.pushLog(`⛔ ${message}`);
+    await this.saveState();
+    return true;
   }
 
   snapshot() {

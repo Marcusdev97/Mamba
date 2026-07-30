@@ -71,6 +71,14 @@ function buildRuntime() {
     assertFirstConsoleRunUsesFlow1Only() {},
     setRunner() { currentRunnerSet += 1; },   // 车道**不该**呼叫这个
     registerLaneRunner(r) { registry.push(r); },
+    recipientRisk: {
+      async analyze() {
+        return { confirmationToken: "lane-risk-ok", total: 2 };
+      },
+      matchesConfirmation(_risk, token) {
+        return token === "lane-risk-ok";
+      },
+    },
     persistRunners: async () => {},
     listRunners: () => registry.map((r) => r),
     getRunner: () => null,
@@ -94,7 +102,7 @@ async function post(url, body) {
 // --- LIVE 车道：绑 wa_03、群 A、crazy 节奏 ---
 const launch = await post("/api/campaign/lane/launch", {
   project: "binastra", instance: "wa_03", pace: "crazy", mode: "LIVE",
-  leadGroupId: "group-A", optIn: true,
+  leadGroupId: "group-A", optIn: true, recipientRiskToken: "lane-risk-ok",
 });
 assert.equal(launch.status, 200, JSON.stringify(launch.body));
 assert.equal(launch.body.instance, "wa_03");
@@ -128,6 +136,7 @@ assert.equal(registry.length, 2, "两条车道并存，各自登记");
 laneRunner.running = true;   // 假装 wa_03 还在跑
 const dup = await post("/api/campaign/lane/launch", {
   project: "binastra", instance: "wa_03", pace: "normal", mode: "LIVE", leadGroupId: "group-A", optIn: true,
+  recipientRiskToken: "lane-risk-ok",
 });
 assert.equal(dup.status, 409, "同一号码正在跑，要拒绝");
 assert.match(dup.body.error, /已经在跑/);
@@ -138,5 +147,10 @@ assert.equal((await post("/api/campaign/lane/launch", { project: "binastra", ins
 assert.equal((await post("/api/campaign/lane/launch", { project: "binastra", instance: "wa_01", mode: "LIVE", optIn: true })).status, 400, "LIVE 没选群要挡");
 const emptyGroup = await post("/api/campaign/lane/launch", { project: "binastra", instance: "wa_01", mode: "LIVE", leadGroupId: "group-empty", optIn: true });
 assert.equal(emptyGroup.status, 400, "空客户群要挡");
+const staleRisk = await post("/api/campaign/lane/launch", {
+  project: "binastra", instance: "wa_01", mode: "LIVE", leadGroupId: "group-A", optIn: true,
+  recipientRiskToken: "stale",
+});
+assert.equal(staleRisk.status, 409, "LIVE 风险 token 不对要挡");
 
 console.log("✅ all lane launch tests passed");

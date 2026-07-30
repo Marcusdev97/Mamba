@@ -190,6 +190,8 @@ const outbound = await log.recordOutbound({
   sentAt: "2026-07-21T14:00:00.000Z",
   flowTopic: "Flow 1 - Project Template",
   source: "blast",
+  runId: "run-test-delivery",
+  apiStatus: "PENDING",
 });
 assert.deepEqual(outbound, { saved: true, reason: "" });
 
@@ -206,6 +208,65 @@ const outboundRow = (await database.query("SELECT * FROM messages WHERE id = 'OU
 assert.equal(outboundRow.source, "blast");
 assert.equal(outboundRow.flow_topic, "Flow 1 - Project Template");
 assert.equal(outboundRow.template_key, null, "templates 表还没资料，template_key 要留 NULL 免得踩 FK");
+assert.equal(JSON.parse(outboundRow.payload_json).runId, "run-test-delivery");
+assert.equal(JSON.parse(outboundRow.payload_json).deliveryStatus, "PENDING");
+assert.equal(JSON.parse(outboundRow.payload_json).deliveryObservedVia, "SEND_RESPONSE");
+const blastHistory = await log.sentBlastHistory(["60146426133", "60199999999"]);
+assert.deepEqual(blastHistory.get("60146426133"), {
+  lastSentAt: "2026-07-21T14:00:00.000Z",
+  times: 1,
+  flows: ["Flow 1 - Project Template"],
+});
+assert.equal(blastHistory.has("60199999999"), false);
+
+// --- Evolution delivery receipts update the same outbound ledger row ---
+assert.deepEqual(await log.recordDeliveryUpdates([{
+  messageId: "OUT-1",
+  status: "SERVER_ACK",
+  observedAt: "2026-07-21T14:00:01.000Z",
+  instanceName: "wa_01",
+}]), {
+  received: 1,
+  valid: 1,
+  matched: 1,
+  updated: 1,
+  stale: 0,
+  unmatched: 0,
+});
+await log.recordDeliveryUpdates([{
+  messageId: "OUT-1",
+  status: "DELIVERY_ACK",
+  observedAt: "2026-07-21T14:00:02.000Z",
+  instanceName: "wa_01",
+}]);
+await log.recordDeliveryUpdates([{
+  messageId: "OUT-1",
+  status: "READ",
+  observedAt: "2026-07-21T14:00:03.000Z",
+  instanceName: "wa_01",
+}]);
+const staleDelivery = await log.recordDeliveryUpdates([{
+  messageId: "OUT-1",
+  status: "SERVER_ACK",
+  observedAt: "2026-07-21T14:00:04.000Z",
+  instanceName: "wa_01",
+}]);
+assert.equal(staleDelivery.stale, 1, "late server ack must not downgrade an already-read message");
+const deliveryPayload = JSON.parse(
+  (await database.query("SELECT payload_json AS payloadJson FROM messages WHERE id='OUT-1';"))[0].payloadJson,
+);
+assert.equal(deliveryPayload.runId, "run-test-delivery", "delivery update must preserve original payload fields");
+assert.equal(deliveryPayload.deliveryStatus, "READ");
+assert.equal(deliveryPayload.serverAckAt, "2026-07-21T14:00:01.000Z");
+assert.equal(deliveryPayload.deliveredAt, "2026-07-21T14:00:02.000Z");
+assert.equal(deliveryPayload.readAt, "2026-07-21T14:00:03.000Z");
+assert.equal(deliveryPayload.deliveryObservedVia, "MESSAGES_UPDATE");
+const unknownDelivery = await log.recordDeliveryUpdates([{
+  messageId: "OUT-UNKNOWN",
+  status: "DELIVERY_ACK",
+  observedAt: "2026-07-21T14:00:02.000Z",
+}]);
+assert.equal(unknownDelivery.unmatched, 1, "unknown message ids must be reported rather than silently inserted");
 
 const afterOutbound = await database.query("SELECT reply_count FROM contacts WHERE contact_key='60146426133';");
 assert.equal(afterOutbound[0].reply_count, replyCountBefore, "我们发出去的不可以算进客户回复数");

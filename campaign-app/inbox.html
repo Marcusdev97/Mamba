@@ -346,6 +346,11 @@
     font-size:9.5px;
   }
   .entry-source { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .entry-time { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+  .delivery-mark { font-weight:800; letter-spacing:-2px; color:#91a0ae; cursor:help; }
+  .delivery-mark.delivered { color:#b6c2cc; }
+  .delivery-mark.read { color:#55b7ff; }
+  .delivery-mark.failed { color:var(--red); letter-spacing:0; }
   .media-card {
     width:min(270px,100%);
     min-height:64px;
@@ -930,14 +935,18 @@ function renderList() {
           <input id="newContactName" type="text" autocomplete="off" placeholder="名字（可不填）" aria-label="新客户名字">
           <select id="newContactLeadType" required aria-label="客户类型">
             <option value="">选择客户类型</option>
-            ${newContactLeadTypes.map((type) => `<option value="${esc(type.key)}">${esc(type.label)}</option>`).join("")}
+            ${newContactLeadTypes.map((type) => `<option value="${esc(type.key)}" ${type.default ? "selected" : ""}>${esc(type.label)}</option>`).join("")}
           </select>
           <select class="new-contact-project hidden" id="newContactProject" aria-label="Project">
             <option value="">选择 Project</option>
             ${newContactProjects.map((project) => `<option value="${esc(project.id)}">${esc(project.name)}</option>`).join("")}
           </select>
           <textarea id="newContactNote" placeholder="通话备注（可不填）" aria-label="客户备注"></textarea>
-          <div class="new-contact-note" id="newContactTypeNote">将使用 ${esc(currentInstance)}；请选择客户类型。</div>
+          <div class="new-contact-note" id="newContactTypeNote">${
+            newContactLeadTypes.find((type) => type.default)?.description
+              ? `${esc(newContactLeadTypes.find((type) => type.default).description)} · 将使用 ${esc(currentInstance)}`
+              : `将使用 ${esc(currentInstance)}；请选择客户类型。`
+          }</div>
           <div class="new-contact-error" id="newContactError"></div>
           <div class="new-contact-actions">
             <button class="new-contact-start" type="submit">开始聊天</button>
@@ -1138,6 +1147,22 @@ function sourceLabel(message) {
   return "我们";
 }
 
+function deliveryMark(message) {
+  if (message?.direction !== "outbound") return "";
+  const status = String(payloadOf(message).deliveryStatus || "").toUpperCase();
+  const marks = {
+    PENDING: ["○", "正在等待 WhatsApp 接收", ""],
+    ERROR: ["!", "发送失败；请检查号码或连接，不能据此直接判定被封锁", "failed"],
+    SERVER_ACK: ["✓", "WhatsApp 服务器已接收（单勾）", ""],
+    DELIVERY_ACK: ["✓✓", "已送达客户装置（双勾）", "delivered"],
+    READ: ["✓✓", "客户已读", "read"],
+    PLAYED: ["✓✓", "客户已播放", "read"],
+  };
+  const item = marks[status];
+  if (!item) return "";
+  return `<span class="delivery-mark ${item[2]}" title="${esc(item[1])}" aria-label="${esc(item[1])}">${item[0]}</span>`;
+}
+
 function messageContent(message) {
   const raw = (message.text || "").trim();
   const payload = payloadOf(message);
@@ -1186,7 +1211,7 @@ function conversationMarkup(messages) {
         <div class="entry-text">${messageContent(message)}</div>
         <footer class="entry-meta">
           <span class="entry-source">${direction === "outbound" ? esc(sourceLabel(message)) : "客户"}</span>
-          <time>${esc(time)}</time>
+          <span class="entry-time">${deliveryMark(message)}<time>${esc(time)}</time></span>
         </footer>
       </article>`);
   }

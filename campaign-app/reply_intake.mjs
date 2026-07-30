@@ -173,6 +173,105 @@ export function senderFromPayload(payload) {
   return payload?.instance ?? payload?.instanceName ?? payload?.data?.instance ?? "unknown";
 }
 
+const DELIVERY_STATUS_ALIASES = new Map([
+  ["0", "ERROR"],
+  ["1", "PENDING"],
+  ["2", "SERVER_ACK"],
+  ["3", "DELIVERY_ACK"],
+  ["4", "READ"],
+  ["5", "PLAYED"],
+  ["FAILED", "ERROR"],
+  ["FAILURE", "ERROR"],
+  ["SENT", "SERVER_ACK"],
+  ["DELIVERED", "DELIVERY_ACK"],
+]);
+
+const DELIVERY_STATUS_RANKS = new Map([
+  ["PENDING", 0],
+  ["ERROR", 1],
+  ["SERVER_ACK", 2],
+  ["DELIVERY_ACK", 3],
+  ["READ", 4],
+  ["PLAYED", 5],
+]);
+
+export function normalizeMessageDeliveryStatus(value) {
+  const key = String(value ?? "").trim().toUpperCase().replace(/[\s.-]+/g, "_");
+  const normalized = DELIVERY_STATUS_ALIASES.get(key) ?? key;
+  return DELIVERY_STATUS_RANKS.has(normalized) ? normalized : "";
+}
+
+export function deliveryStatusRank(value) {
+  return DELIVERY_STATUS_RANKS.get(normalizeMessageDeliveryStatus(value)) ?? -1;
+}
+
+function normalizedEventName(value) {
+  return String(value ?? "").trim().toUpperCase().replace(/[\s.-]+/g, "_");
+}
+
+function statusTimestamp(payload, node) {
+  const raw = node?.date_time
+    ?? node?.dateTime
+    ?? node?.updatedAt
+    ?? node?.timestamp
+    ?? node?.update?.date_time
+    ?? node?.update?.dateTime
+    ?? node?.update?.timestamp
+    ?? payload?.date_time
+    ?? payload?.dateTime
+    ?? payload?.timestamp;
+  if (raw === undefined || raw === null || raw === "") return new Date().toISOString();
+  const numeric = Number(raw);
+  const ms = Number.isFinite(numeric)
+    ? (numeric < 100000000000 ? numeric * 1000 : numeric)
+    : new Date(raw).getTime();
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : new Date().toISOString();
+}
+
+// Evolution sends delivery receipts separately from message upserts. Keep the
+// parser tolerant of v1/v2 and Baileys shapes, but only accept MESSAGES_UPDATE
+// payloads so a message body's unrelated "status" field cannot change delivery.
+export function collectMessageStatusUpdates(payload) {
+  if (normalizedEventName(payload?.event ?? payload?.type) !== "MESSAGES_UPDATE") return [];
+
+  const updates = new Map();
+  const walk = (node) => {
+    if (!node || typeof node !== "object") return;
+    const status = normalizeMessageDeliveryStatus(
+      node.messageStatus
+      ?? node.message_status
+      ?? node.update?.status
+      ?? node.status,
+    );
+    const messageId = String(
+      node.messageId
+      ?? node.message_id
+      ?? node.keyId
+      ?? node.key?.id
+      ?? (status ? node.id : "")
+      ?? "",
+    ).trim();
+    const fromMe = node.fromMe ?? node.key?.fromMe;
+
+    if (status && messageId && fromMe !== false) {
+      const candidate = {
+        messageId,
+        status,
+        observedAt: statusTimestamp(payload, node),
+        instanceName: senderFromPayload(payload),
+      };
+      const current = updates.get(messageId);
+      if (!current || deliveryStatusRank(candidate.status) >= deliveryStatusRank(current.status)) {
+        updates.set(messageId, candidate);
+      }
+    }
+    for (const child of Object.values(node)) walk(child);
+  };
+
+  walk(payload?.data ?? payload);
+  return [...updates.values()];
+}
+
 // Turn one raw message into the normalized inbound event both services use.
 // Returns null for own messages, group chats, or unresolvable phones.
 export function inboundEvent(payload, message) {

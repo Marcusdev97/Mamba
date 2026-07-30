@@ -14,11 +14,13 @@ for (const text of [
   "开新一批",
   "开工",
   "预计发完",
+  "自动接下一批",
+  "确认开启 LIVE",
 ]) {
   assert.ok(html.includes(text), `Campaign Automations must show ${text}`);
 }
 
-for (const forbidden of ["TEST 模式名单", "<h2>Progress</h2>", "<h2>Links</h2>", "立即 TEST", ">Inbox<", "Needs You", "Today Flow"]) {
+for (const forbidden of ["TEST 模式名单", "<h2>Progress</h2>", "<h2>Links</h2>", "立即 TEST", ">Inbox<", "Needs You", "Today Flow", "真实客户自动发送仍被安全锁挡住"]) {
   assert.ok(!html.includes(forbidden), `Campaign Automations must not show ${forbidden}`);
 }
 

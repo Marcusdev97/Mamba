@@ -27,5 +27,11 @@ assert.match(inlineScript, /video\.preload = "metadata"/);
 assert.match(inlineScript, /video\.playsInline = true/);
 assert.doesNotMatch(inlineScript, /video\.autoplay\s*=\s*true/);
 assert.match(inlineScript, /\/api\/inbox\/media\/file/);
+assert.match(inlineScript, /function deliveryMark\(message\)/);
+assert.match(inlineScript, /SERVER_ACK/);
+assert.match(inlineScript, /DELIVERY_ACK/);
+assert.match(inlineScript, /已送达客户装置（双勾）/);
+assert.match(inlineScript, /不能据此直接判定被封锁/);
+assert.match(html, /delivery-mark\.read/);
 
 console.log("✅ Chat Room follow-up UI tests passed");

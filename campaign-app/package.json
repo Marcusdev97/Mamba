@@ -5,6 +5,8 @@
   "type": "module",
   "description": "Mamba campaign automation scripts",
   "scripts": {
+    "test": "node run-tests.mjs",
+    "test:safe": "node run-tests.mjs --skip-local-server",
     "sync:cloudflare-assets": "node cloudflare_assets_sync.mjs",
     "check:cloudflare-assets": "node cloudflare_assets_sync.mjs --dry-run",
     "db:v4:dry-run": "node migrate_v3_to_v4.mjs --dry-run",

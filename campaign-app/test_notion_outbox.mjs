@@ -124,6 +124,21 @@ assert.equal(snap.failedSamples[0].flowLabel, "Flow 4 - Package");
 assert.deepEqual(snap.failedSamples[0].phoneSamples, ["60133333333"]);
 assert.match(snap.failedSamples[0].lastErrorMessage, /still down/);
 
+// A historical Flow job can be closed without deleting its audit trail when a
+// newer Campaign has already advanced every affected customer.
+const failedJobId = snap.failedSamples[0].jobId;
+await outbox.markSuperseded(failedJobId, "Newer campaign state verified.");
+snap = await outbox.snapshot();
+assert.equal(snap.failed, 0);
+const supersededRows = await database.query(`
+SELECT status, last_error_code AS errorCode, last_error_message AS errorMessage
+FROM sync_jobs WHERE id=${Number(failedJobId)};`);
+assert.equal(supersededRows[0].status, "COMPLETED");
+assert.equal(supersededRows[0].errorCode, "SUPERSEDED_FLOW_STATE");
+assert.equal(supersededRows[0].errorMessage, "Newer campaign state verified.");
+await outbox.enqueue({ entityType: "campaign_run", entityId: "run_C", idempotencyKey: "k_C", payload: { runId: "run_C" } });
+await database.exec("UPDATE sync_jobs SET status='FAILED' WHERE idempotency_key='k_C';");
+
 // --- 人工救回 ---
 assert.deepEqual(await outbox.retryFailed(), { requeued: 1 });
 assert.equal((await outbox.due()).length, 1, "救回来就该重新排队");
@@ -153,6 +168,9 @@ const sendScript = sendHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
 assert.doesNotThrow(() => new vm.Script(sendScript), "Send page inline JavaScript must parse");
 assert.match(sendHtml, /function failedOutboxDetail\(queue\)/);
 assert.match(sendHtml, /Task \$\{failure\.jobId\}/);
+assert.match(sendHtml, /本次没有可同步任务；仍有 \$\{remainingFailed\} 笔历史失败未解决/);
+assert.match(sendHtml, /finishOutboxSyncOverlay\(data\.result \|\| \{\}, data\.queue \|\| \{\}\)/);
+assert.match(sendHtml, /failure\.lastErrorMessage/);
 
 // --- 排程：每晚一次，错过整点还补得到，同一天不重复 ---
 const kl = (iso) => new Date(iso);

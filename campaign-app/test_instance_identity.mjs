@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInstanceIdentityService } from "./lib/instance-identity-service.mjs";
 import { createSqliteCli } from "./lib/sqlite-cli.mjs";
+import { INSTANCE_IDENTITY_SCHEMA_SQL } from "./lib/v3-runtime-schema.mjs";
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-identity-"));
 const database = await createSqliteCli({ databasePath: path.join(dataDir, "mamba.sqlite") });
@@ -20,7 +21,8 @@ INSERT INTO whatsapp_connections VALUES ('device-1::60168568756', '', '601685687
 INSERT INTO messages VALUES
   ('m1', '{"instanceName":"wa_01"}'),
   ('m2', '{"instanceName":"wa_02"}'),
-  ('m3', '{"instanceName":"wa_03"}');`);
+  ('m3', '{"instanceName":"wa_03"}');
+${INSTANCE_IDENTITY_SCHEMA_SQL}`);
 
 const identity = createInstanceIdentityService({ dataDir });
 
@@ -63,7 +65,8 @@ assert.deepEqual(await identity.siblingInstances(""), []);
 CREATE TABLE whatsapp_connections (connection_key TEXT PRIMARY KEY, instance_name TEXT NOT NULL DEFAULT '', whatsapp_number TEXT NOT NULL DEFAULT '', updated_at TEXT);
 CREATE TABLE messages (id TEXT PRIMARY KEY, payload_json TEXT);
 INSERT INTO whatsapp_connections VALUES ('d::60111111111','', '60111111111',''), ('d::60222222222','', '60222222222','');
-INSERT INTO messages VALUES ('m1', '{"instanceName":"wa_09"}');`);
+INSERT INTO messages VALUES ('m1', '{"instanceName":"wa_09"}');
+${INSTANCE_IDENTITY_SCHEMA_SQL}`);
   const two = createInstanceIdentityService({ dataDir: twoDir });
   const result = await two.adoptOrphans();
   assert.deepEqual(result.adopted, [], "两个号码就不该乱猜");

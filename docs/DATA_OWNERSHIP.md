@@ -1,0 +1,90 @@
+# Mamba Data Ownership Matrix
+
+> 状态：Current + Target · 更新日期：2026-07-30
+>
+> 一种业务资料只能有一个权威来源。Cache、镜像和恢复文件可以存在，但不得反向覆盖
+> 已确认的本机事实。
+
+## 1. 权威资料表
+
+| 业务资料 | 权威来源 | Cache／恢复 | 外部镜像 | 写入时机 |
+|---|---|---|---|---|
+| Contact、STOP、回复摘要 | SQLite `contacts` | suppression JSON | Notion 部分字段 | 收到回复或人工操作时 |
+| Project 内 Flow／状态 | SQLite `project_leads` | Notion import cache | Notion Blast Leads | 每位客户发送完成时 |
+| Others 联系人 | SQLite `own_leads` + `lead_origins(OWN)` | 无 | 不同步 | ChatRoom 人工建立或安全分类 |
+| 私人联系人边界 | `work_inbox_ignore.json` | 无 | 不同步 | Settings 人工设置 |
+| Conversation／Messages | SQLite `conversations` + `messages` | 少量 JSONL 兼容记录 | 不作为主账 | 每条消息进入系统时 |
+| Lead Group | SQLite `lead_groups` + members | 上传文件只作输入 | 不同步 | 名单确认时 |
+| Campaign Run | SQLite `campaign_runs` | `campaign-data/runs/*.json` 恢复回执 | Notion Campaign 视图 | 客户 checkpoint + terminal commit |
+| 每个发送动作 | SQLite `send_jobs` | Run JSON provider evidence | Notion 汇总 | Provider 确认后 |
+| Notion 同步任务 | SQLite `sync_jobs` | 无 | Notion 是目标 | 本机业务 transaction 内排队 |
+| Template | Notion 人工内容 | SQLite `templates` 本机快照 | Notion 是编辑入口 | 明确 Refresh 时 |
+| Project Knowledge | Notion／受控 YAML 人工内容 | SQLite／Brain JSON 快照 | Notion 是编辑入口 | 明确 Refresh 时 |
+| Project Registry | Project repository 配置 | SQLite `projects` 运行快照 | Notion content | Project 载入时 |
+| WhatsApp sender binding | SQLite `devices` + `whatsapp_connections` | `instance_identity` 辅助映射 | Evolution 是健康来源 | Phone Health refresh |
+| LID → Phone evidence | SQLite `lid_map` | 内存 cache | 无 | 收到可验证证据时 |
+| Secret／TEST_LEADS | `.env` | Settings masked view | 无 | Settings 保存时 |
+| System log | JSONL system logs | UI 查询 cache | 无 | 事件发生时 |
+
+## 2. 不允许的反向覆盖
+
+- Notion 不得把较旧 Flow 覆盖已经由 WhatsApp provider 确认的 SQLite Flow。
+- Run JSON 用于恢复和对账，但正常运行结束必须把 terminal state 写回 SQLite。
+- Others 不得因为 Notion 找不到号码而自动升级成 Blasting Lead。
+- Private Contact 不等于 STOP；从私人名单移除后，历史消息仍存在。
+- Template cache 只能由明确的 Refresh 更新，Campaign 发送期间不得临时改版本。
+- Evolution instance name 不是 sender 永久身份，必须解析到稳定 connection key。
+
+## 3. Others 与未分类联系人
+
+`Others` 的底层兼容 key 仍为 `OWN`，避免为了改产品名称进行生产 Schema 迁移。
+
+- 显示在 ChatRoom。
+- 允许人工发送与安排 Follow-up。
+- 不写 Notion。
+- 不进入自动 Flow 或 Campaign。
+- ChatRoom 新增号码默认使用 Others。
+- 旧的未分类联系人只能通过 maintenance dry-run 分类；活动 Campaign、STOP、私人联系人、
+  无效号码及已有 Lead 来源全部排除。
+
+## 4. Campaign terminal invariant
+
+每位客户发送成功时：
+
+1. SQLite 写入客户 Flow、发送证据和 Notion outbox。
+2. Campaign 在发送期间保持 `RUNNING`。
+
+整批结束时：
+
+1. Runner 决定 `COMPLETED`、`STOPPED` 或 `FAILED`。
+2. 同一最终状态和 requested／sent／failed 汇总再次幂等写入 SQLite。
+3. 终态写入失败时，不得将下一批视为安全接力。
+4. Run JSON 保留为恢复证据，但不代替 SQLite terminal state。
+
+## 5. Schema change
+
+- 正式基础 Schema：`docs/mamba-schema.sql`
+- v3 Runtime Patch：`schema_migrations.version = 301`
+- Runtime Service 只验证需要的表和字段，不在启动时执行 `CREATE`、`ALTER` 或 `RENAME`。
+- Migration 默认 dry-run，Apply 前必须没有近期活动 Campaign，并先建立 SQLite backup。
+
+## 6. Maintenance 顺序
+
+以下工具默认全部只读：
+
+```text
+node scripts/maintenance/migrate-v3-runtime-schema.mjs --dry-run
+node scripts/maintenance/reconcile-campaign-terminal-state.mjs --dry-run
+node scripts/maintenance/classify-unassigned-contacts-as-others.mjs --dry-run
+```
+
+真正 Apply 必须等待所有 Campaign 完成／明确停止，并保持 Scheduler 不再启动新批次：
+
+1. Runtime Schema Migration
+2. Campaign terminal reconciliation
+3. Others classification
+4. `PRAGMA quick_check` 与 `foreign_key_check`
+5. Restart Mamba，再恢复 Scheduler
+
+任一工具看到 `RUNNING`／`SENDING`／`QUEUED_BATCH` Run 时都必须拒绝写入；不能只因
+一段时间没有新日志就把 Campaign 当成 stale。

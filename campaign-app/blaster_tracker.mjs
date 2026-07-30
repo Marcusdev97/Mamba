@@ -13,7 +13,17 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { paths, loadEnv, makeApi, listInstances } from "./campaign_core.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
-import { normalizePhone, describeMessage, messageMediaKind, resolvePhone, resolvePhoneWithLid, lidPhonePair, collectMessages, senderFromPayload } from "./reply_intake.mjs";
+import {
+  normalizePhone,
+  describeMessage,
+  messageMediaKind,
+  resolvePhone,
+  resolvePhoneWithLid,
+  lidPhonePair,
+  collectMessages,
+  collectMessageStatusUpdates,
+  senderFromPayload,
+} from "./reply_intake.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
 import { addLocalStop } from "./suppression.mjs";
@@ -455,9 +465,20 @@ async function processWebhook(payload) {
     console.log(`[LOCAL_WEBHOOK_SCOPE_BLOCKED] ignored webhook from ${payloadInstance || "unknown instance"}; instance is not OPEN on this Evolution server.`);
     return [];
   }
+
+  const deliveryUpdates = collectMessageStatusUpdates(payload);
+  if (deliveryUpdates.length) {
+    const report = await conversationLog.recordDeliveryUpdates(deliveryUpdates);
+    console.log(
+      `[delivery] ${payloadInstance}: ${report.updated} updated, ${report.stale} stale, ${report.unmatched} unmatched`,
+    );
+  }
+
+  // A delivery-only webhook has no customer message to classify or sync.
+  const messages = collectMessages(payload);
+  if (!messages.length) return [];
   await refreshLeadIndex();
   const alertCfg = await loadAlertConfig(); // re-read each batch so edits apply live
-  const messages = collectMessages(payload);
   const seen = new Set();
   const saved = [];
 
@@ -504,7 +525,7 @@ async function processWebhook(payload) {
 // renamed fields (byEvents/base64); v1 used a flat body. Try v2 first, fall
 // back to v1 so it works across Evolution versions.
 async function setInstanceWebhook(instanceName) {
-  const events = ["MESSAGES_UPSERT"];
+  const events = ["MESSAGES_UPSERT", "MESSAGES_UPDATE"];
   const v2 = { webhook: { enabled: true, url: PUBLIC_URL, byEvents: false, base64: false, events } };
   const v1 = { enabled: true, url: PUBLIC_URL, webhookByEvents: false, webhookBase64: false, events };
   const endpoint = `/webhook/set/${encodeURIComponent(instanceName)}`;

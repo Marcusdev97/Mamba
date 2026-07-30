@@ -150,13 +150,15 @@ function modeOf(data) {
   return data?.schedulerMode || (!data?.config?.enabled ? "OFF" : data?.config?.mode === "LIVE" ? "LIVE" : "TEST");
 }
 
-function renderMode(mode) {
+function renderMode(mode, data = currentSnapshot) {
   document.querySelectorAll("#modeSeg button").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
   el("modeNote").className = `mode-note${mode === "LIVE" ? " warn" : ""}`;
   el("modeNote").textContent = mode === "OFF"
     ? "关闭后不会自动发送。"
     : mode === "LIVE"
-      ? "LIVE 已显示，但真实客户自动发送仍被安全锁挡住。"
+      ? data?.config?.liveArmed
+        ? "LIVE 自动值班已开启；一批完成后会安全检查并自动接下一批。"
+        : "LIVE 尚未确认开启，不会发送真实客户。"
       : "TEST 会使用同一引擎，但只发给测试号码。";
 }
 
@@ -168,7 +170,9 @@ function renderShift(shift = {}) {
   el("shiftBadge").textContent = labels[status] || "CLOSED";
   el("shiftTitle").textContent = mode === "OFF" ? "自动化关闭" : shift.stoppedToday ? "今天已提前放工" : status === "on-shift" ? "正在值班" : "窗口外安静";
   el("shiftDetail").textContent = mode === "LIVE"
-    ? "LIVE 入口已选择，但安全锁会阻止真实发送。"
+    ? currentSnapshot?.config?.liveArmed
+      ? "当前批完成后会重新读取进度与回复，再自动接下一批。"
+      : "尚未授权真实发送；确认开启 LIVE 后才会自动值班。"
     : status === "off-shift"
       ? `窗口外不发送；下一班 ${shift.remainingLabel || "明天 10:00"}。`
       : `固定窗口 ${shift.workStart || "10:00"}–${shift.workEnd || "21:00"}；窗口外不发送。`;
@@ -186,7 +190,7 @@ function renderShift(shift = {}) {
 function renderSnapshot(data) {
   currentSnapshot = data;
   const mode = modeOf(data);
-  renderMode(mode);
+  renderMode(mode, data);
   renderShift(data.shift || {});
 }
 
@@ -247,7 +251,15 @@ function renderCheck(data) {
   renderLifecycle(data.cohort || {});
   renderProgress(data.progress || {});
   renderGates(data);
-  el("runBtn").disabled = modeOf(data) === "LIVE";
+  const mode = modeOf(data);
+  if (mode === "LIVE") {
+    const armed = data?.config?.liveArmed === true;
+    el("runBtn").textContent = armed ? "自动接力中" : "确认开启 LIVE";
+    el("runBtn").disabled = armed;
+  } else {
+    el("runBtn").textContent = "开工";
+    el("runBtn").disabled = false;
+  }
 }
 
 async function check(deep = false) {
@@ -276,7 +288,14 @@ async function load() {
 
 async function setMode(mode) {
   const previous = modeOf(currentSnapshot);
-  renderMode(mode);
+  if (mode === "LIVE" && currentSnapshot?.config?.liveArmed !== true) {
+    const confirmed = confirm("开启 LIVE 自动值班？\n\n10:00–21:00 内，系统会对已进入 Flow 的真实客户执行深度回复检查；当前批完成后，会自动启动下一批。Flow 1 新客户仍必须由你亲自开单。");
+    if (!confirmed) {
+      renderMode(previous, currentSnapshot);
+      return;
+    }
+  }
+  renderMode(mode, currentSnapshot);
   try {
     const config = currentSnapshot?.config || {};
     const data = await api("/api/daily-campaign/config", { method:"POST", body:JSON.stringify({
@@ -284,12 +303,13 @@ async function setMode(mode) {
       projects: config.projects || ["Binastra", "Enlace"],
       maxLeads: 5,
       requireDeepCheck: true,
+      liveArmed: mode === "LIVE",
     }) });
     renderSnapshot(data);
     el("actionMessage").textContent = "已保存";
     await check(false);
   } catch (error) {
-    renderMode(previous);
+    renderMode(previous, currentSnapshot);
     el("actionMessage").textContent = error.message;
   }
 }
@@ -312,7 +332,10 @@ el("stopBtn").addEventListener("click", async () => {
 });
 el("runBtn").addEventListener("click", async () => {
   const mode = modeOf(currentCheck || currentSnapshot);
-  if (mode === "LIVE") return;
+  if (mode === "LIVE") {
+    if (currentSnapshot?.config?.liveArmed !== true) await setMode("LIVE");
+    return;
+  }
   if (mode === "OFF") {
     await setMode("TEST");
     return;
@@ -339,7 +362,10 @@ el("runBtn").addEventListener("click", async () => {
     await check(false);
   } finally {
     setBusy(el("runBtn"), false, "");
-    el("runBtn").disabled = modeOf(currentCheck) === "LIVE";
+    if (modeOf(currentCheck) === "LIVE") {
+      el("runBtn").textContent = currentSnapshot?.config?.liveArmed ? "自动接力中" : "确认开启 LIVE";
+      el("runBtn").disabled = currentSnapshot?.config?.liveArmed === true;
+    }
   }
 });
 

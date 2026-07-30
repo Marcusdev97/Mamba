@@ -13,6 +13,7 @@ function makeService(execFileFn, overrides = {}) {
     klDateTime: () => "",
     flowByLabel: () => null,
     flowStateAfter: () => ({}),
+    classifyFlowAdvanceState: () => "MISMATCH",
     execFileFn,
     ...overrides,
   });
@@ -309,6 +310,40 @@ function makeRunner() {
   assert.equal(properties["Last Sender Key"], undefined);
   assert.equal(properties["Last Sender Phone"], undefined);
   assert.equal(properties["Last Sent By Device"], undefined);
+}
+
+{
+  const page = {
+    id: "page-newer-flow",
+    properties: {
+      "Stop Flag": { checkbox: false },
+      "Sequence Status": { select: { name: "Running" } },
+      "Next Flow": { select: { name: "Flow 4 - Package" } },
+      "Last Flow Sent": { select: { name: "Flow 3 - Location" } },
+    },
+  };
+  const calls = [];
+  const service = makeService(() => {}, {
+    notion: async (method) => {
+      calls.push(method);
+      return { results: [page] };
+    },
+    nfSelect: (item, name) => item?.properties?.[name]?.select?.name || "",
+    flowByLabel: () => ({ key: "flow_2" }),
+    flowStateAfter: () => ({
+      lastFlowLabel: "Flow 2 - Layout",
+      nextFlowLabel: "Flow 3 - Location",
+      cohortDay: "Day 2",
+      dueDays: 2,
+    }),
+    classifyFlowAdvanceState: () => "SUPERSEDED",
+  });
+  const runner = makeFlowRunner();
+  await service.autoAdvanceFlow(runner);
+  assert.equal(runner.state.advanceStatus, "SUCCEEDED");
+  assert.equal(runner.state.advanceDone, true);
+  assert.equal(runner.state.advanceSummary.superseded, 1);
+  assert.deepEqual(calls, ["POST"], "a superseded job must never PATCH Notion backwards");
 }
 
 {

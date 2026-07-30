@@ -110,4 +110,25 @@ assert.equal(blockedResult.checkedClients, 0);
 assert.equal(blockedResult.connections, 0);
 assert.equal(blockedApiCalls, 0, "an empty device scope must not scan WhatsApp history");
 
+const connectionLogs = [];
+const disconnectedService = createOutboundFollowUpService({
+  blastDatabaseId: "database123",
+  api: async () => { throw new Error("fetch failed"); },
+  notion: async (method) => method === "GET" ? { properties: { "Follow Up At": { type: "date" } } } : {},
+  openInstances: async () => [{ name: "wa_01" }, { name: "wa_03" }],
+  normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+  collectMessageObjects: () => [],
+  describeMessage: () => "",
+  resolvePhone: () => "",
+  messageTime: () => 0,
+  queryNotionRows: async () => [liveCandidate],
+  writeCache: async () => {},
+  systemLogs: { write: async (entry) => { connectionLogs.push(entry); } },
+  onLog: () => {},
+});
+const disconnectedResult = await disconnectedService.runOnce({ reason: "connection-test" });
+assert.match(disconnectedResult.error, /全部 WhatsApp connection 核对失败/);
+assert.equal(connectionLogs.at(-1).event, "WHATSAPP_NOT_CONNECTED");
+assert.doesNotMatch(connectionLogs.at(-1).message, /Notion 当下比较慢/);
+
 console.log("✅ all outbound follow-up tests passed");

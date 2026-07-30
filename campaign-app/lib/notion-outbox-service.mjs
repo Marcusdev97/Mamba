@@ -136,6 +136,20 @@ UPDATE sync_jobs SET status='COMPLETED', last_error_code='', last_error_message=
 WHERE id=${sqlValue(id)};`);
   }
 
+  async function markSuperseded(id, message = "") {
+    const database = await cli();
+    const nowIso = clock().toISOString();
+    const reason = clean(message) || "A newer Campaign already advanced these customers beyond this Flow.";
+    await database.exec(`
+UPDATE sync_jobs SET
+  status='COMPLETED',
+  last_error_code='SUPERSEDED_FLOW_STATE',
+  last_error_message=${sqlValue(reason.slice(0, 500))},
+  updated_at=${sqlValue(nowIso)}
+WHERE id=${sqlValue(id)} AND status='FAILED';`);
+    return { completed: true, jobId: Number(id), resolution: "SUPERSEDED_FLOW_STATE" };
+  }
+
   async function markDeferred(job, { availableAt = null, delayMs = 5 * 60_000 } = {}) {
     const database = await cli();
     const nowMs = clock().getTime();
@@ -313,5 +327,16 @@ WHERE status='FAILED';`);
     return { requeued: count };
   }
 
-  return { enqueue, due, drain, snapshot, requeueStuckRunning, retryFailed, markFailure, markCompleted, markCompletedByKey };
+  return {
+    enqueue,
+    due,
+    drain,
+    snapshot,
+    requeueStuckRunning,
+    retryFailed,
+    markFailure,
+    markCompleted,
+    markCompletedByKey,
+    markSuperseded,
+  };
 }

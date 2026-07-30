@@ -49,8 +49,16 @@ WhatsApp → Evolution webhook/history → Mamba
 - 只有 OPEN 且属于本机 device policy 的 sender 可以发送。
 - 入站 webhook 必须覆盖这台电脑 Evolution 上所有 OPEN instances；不得使用
   Campaign 的 primary sender filter 排除 `wa_03` 等本机辅助号码。
+- Webhook 同时订阅 `MESSAGES_UPSERT` 与 `MESSAGES_UPDATE`。前者写对话，后者按
+  Evolution message id 更新原本的 SQLite 出站消息；投递状态与
+  `serverAckAt`／`deliveredAt`／`readAt` 保存在 `messages.payload_json`。
+- `SERVER_ACK` 只代表 WhatsApp 服务器收到（单勾），`DELIVERY_ACK` 才代表客户
+  装置收到（双勾）。长期没有双勾只能列为「疑似未送达」，不得自动判定客户封锁。
 - 入站范围与发送权限分离：接收所有本机 OPEN 号码不代表 Campaign 可以任选号码发送。
 - 发送前必须完成 recipient normalization。
+- 人工 LIVE `/api/start` 前会重新读取所有 OPEN instance 的 owner phone，并与本批
+  收件人比较；命中自己的其他号码时必须在最终风险弹窗明确确认。前端确认不能取代
+  后端 token 校验，收件人选择改变后必须重新确认。
 - Timeout 后状态不明确时，不得自动重发。
 - ChatRoom 不得把整段对话的 base64 媒体一次塞进页面：图片只在接近可视区时
   读取缩图，影片必须由操作员点击后才读取，且禁止 autoplay。
@@ -60,6 +68,25 @@ WhatsApp → Evolution webhook/history → Mamba
   操作员再次确认，且发送结果写入本机 conversation ledger。
 - Evolution 的 PostgreSQL 不存放 Mamba 业务 schema。
 - Instance name 不是客户或 sender 的永久业务 ID。
+
+### 本机健康与睡眠边界
+
+Mamba 不再把所有 `fetch failed` 都显示成「Evolution 掉线」，而是分三层检查：
+
+1. `Docker Engine`：Docker daemon 是否存在。
+2. `Evolution API`：`:8080` 是否可访问并通过 API key。
+3. `WhatsApp Instances`：本批实际使用的 `wa_01`／`wa_03` 是否为 `OPEN`。
+
+任一发送所需层连续两次异常，运行中的 Campaign 进入 `INTERRUPTED`，写入明确
+错误码并通知 Ops；不得自动 reconnect、自动 retry 状态不明的发送，或在恢复后
+自动继续。macOS Campaign 运行期间会阻止 idle sleep，但合上 MacBook 仍会触发
+系统强制睡眠，操作员必须保持屏幕打开，或改用不会睡眠的常驻主机。
+
+常驻 Watchdog 可以在 Mamba Server 离线时独立读取这三层 transport 状态，但默认
+只报警，不自动重启 Server。这样 Scheduler 与中断的 LIVE run 不会因为服务恢复
+而在无人确认时重新发送。Telegram 只在同一异常连续两次确认后首次报警，并在恢复
+时通知一次；正常启动与持续健康检查不会发送心跳消息。Watchdog 仍会每 30 秒更新
+本机状态文件，供 Control Center 判断健康状态。
 
 ## 3. Notion
 
@@ -120,7 +147,7 @@ connection。系统先写 SQLite，再按客户来源处理外部镜像：
 | Blasting Leads | `contacts` + `project_leads` + `lead_origins` | Blast Leads；必须有 Project | 不自动加入 |
 | Recycle Leads | `contacts` + `recycle_leads` + `lead_origins` | Recycle Leads | 不自动加入 |
 | Ads Leads | `contacts` + `ads_leads` + `lead_origins` | Ads Leads | 不自动加入 |
-| Own Leads | `contacts` + `own_leads` + `lead_origins` | 不同步 | 不加入 |
+| Others（底层 `OWN`） | `contacts` + `own_leads` + `lead_origins` | 不同步 | 不加入 |
 
 规则：
 
@@ -130,6 +157,8 @@ connection。系统先写 SQLite，再按客户来源处理外部镜像：
 4. 已有 `Do Not Contact`／全局 suppression 不得因再次 Setup 而被重新启用。
 5. 手工建立的 Blasting Lead 不得插入正在运行的 Campaign；后续只能通过明确的
    Project／Lead Group 选择进入新的 LIVE run。
+6. ChatRoom 默认使用 Others；它仍显示在工作 ChatRoom，但不进入 Notion、自动
+   Flow 或 Campaign。真正不想在工作页面出现的朋友应另设为 Private Contact。
 
 ### 冲突与重试
 
@@ -146,6 +175,11 @@ Settings 的「私人联系人 / 不进入工作 Inbox」是本机工作边界�
 
 1. 入站消息先写入本机 conversation ledger，保留审计证据。
 2. 命中私人名单后，不查询／写入 Notion，也会清除该号码旧的 Notion 回复重试。
+
+延迟的 Campaign Flow 回写必须防止状态倒退：如果 Notion 当前的
+`Last Flow Sent` / `Next Flow` 已组成一个有效且更后的自动 Flow 状态，
+旧任务标记为 `SUPERSEDED_FLOW_STATE` 并结案，不得 PATCH 回旧 Flow。
+无法组成有效状态对的 mismatch 仍保留为失败，等待人工检查。
 3. 不触发 Sales Brain、Telegram 客户通知或自动 STOP 判断。
 4. ChatRoom 清单与单一 thread API 都不显示该号码。
 5. 历史消息不删除；从私人名单移除后可以重新在工作 ChatRoom 查看。
@@ -236,6 +270,7 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
 - Notion outbox
 - Device／sender binding
 - Idempotency 和 retry state
+- LIVE 发送前的历史 Blast 风险查询
 
 ### 代码入口
 
@@ -249,6 +284,8 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
 - Migration 必须可验证，不在启动时静默破坏资料。
 - 大型 import／repair 先 dry-run。
 - Notion 和 Evolution 都不能覆盖本机已确认的发送事实。
+- LIVE 风险弹窗的「曾经 Blast」只读取 `messages` 中 `direction=outbound` 且
+  `source=blast` 的完整本机历史；manual ChatRoom 发送不算 Campaign Blast。
 
 ## 8. Configuration Ownership
 
