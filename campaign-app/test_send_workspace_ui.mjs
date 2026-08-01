@@ -56,6 +56,7 @@ assert.doesNotMatch(flowOneHtml, /<span class="step-no">4<\/span>/);
 
 const refreshHtml = await fs.readFile(new URL("./refresh.html", import.meta.url), "utf8");
 assert.match(refreshHtml, /html\.mamba-embedded \.top\{display:none\}/);
+assert.match(refreshHtml, /<script src="\/assets\/mamba-shell\.js" defer><\/script>/, "Standalone Refresh page must load the shared sidebar shell");
 assert.doesNotMatch(refreshHtml, /<nav class="nav">/, "Global navigation comes from the sidebar");
 
 const shellScript = await fs.readFile(new URL("./assets/mamba-shell.js", import.meta.url), "utf8");
