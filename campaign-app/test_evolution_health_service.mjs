@@ -4,8 +4,8 @@ import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs
 const healthy = createEvolutionHealthService({
   dockerInfo: async () => "29.1.3",
   listInstances: async () => [
-    { name: "wa_01", status: "open", number: "60111111111" },
-    { name: "wa_03", status: "OPEN", number: "60133333333" },
+    { name: "wa_01", status: "open", number: "60111111111", integration: "WHATSAPP-BAILEYS" },
+    { name: "wa_03", status: "OPEN", number: "60133333333", integration: "WHATSAPP-BUSINESS" },
   ],
 });
 const open = await healthy.check({ requiredInstances: ["wa_01", "wa_03"] });
@@ -13,6 +13,8 @@ assert.equal(open.docker.ok, true);
 assert.equal(open.evolution.ok, true);
 assert.equal(open.whatsapp.ok, true);
 assert.equal(open.healthy, true);
+assert.equal(open.instances[0].provider.key, "BAILEYS");
+assert.equal(open.instances[1].provider.key, "META_CLOUD_API");
 
 const partial = createEvolutionHealthService({
   dockerInfo: async () => "29.1.3",

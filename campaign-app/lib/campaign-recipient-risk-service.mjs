@@ -29,6 +29,14 @@ function confirmationToken(scopeId, recipients, risks) {
     previousBlast: risks.previousBlast
       .map((item) => `${item.id}:${item.lastSentAt || ""}:${item.times || 0}`)
       .sort(),
+    missingConsentIds: risks.missingConsent.map((item) => item.id).sort(),
+    expiredConsentIds: risks.expiredConsent.map((item) => item.id).sort(),
+    revokedConsentIds: risks.revokedConsent.map((item) => item.id).sort(),
+    contactBudget: risks.contactBudget
+      .map((item) => `${item.id}:${item.assessment?.code || ""}:${item.assessment?.outcome || ""}`)
+      .sort(),
+    blockedRecipientIds: risks.blockedRecipients.map((item) => item.id).sort(),
+    safetyUnavailableChecks: [...risks.safetyUnavailableChecks].sort(),
     unavailableChecks: [...risks.unavailableChecks].sort(),
   };
   return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -37,6 +45,7 @@ function confirmationToken(scopeId, recipients, risks) {
 export function createCampaignRecipientRiskService({
   conversationLog,
   workInboxIgnore,
+  campaignSafety,
   clock = () => new Date(),
 } = {}) {
   async function analyze({
@@ -60,6 +69,12 @@ export function createCampaignRecipientRiskService({
       connectedSenders: [],
       privateContacts: [],
       previousBlast: [],
+      missingConsent: [],
+      expiredConsent: [],
+      revokedConsent: [],
+      contactBudget: [],
+      blockedRecipients: [],
+      safetyUnavailableChecks: [],
       unavailableChecks: [],
     };
 
@@ -119,18 +134,42 @@ export function createCampaignRecipientRiskService({
       risks.unavailableChecks.push("历史 Blast 检查未启用");
     }
 
+    if (campaignSafety?.analyzeRecipients) {
+      try {
+        const safety = await campaignSafety.analyzeRecipients({
+          scopeId,
+          recipients,
+          record: true,
+        });
+        risks.missingConsent = safety.missingConsent || [];
+        risks.expiredConsent = safety.expiredConsent || [];
+        risks.revokedConsent = safety.revokedConsent || [];
+        risks.contactBudget = safety.contactBudget || [];
+        risks.blockedRecipients = safety.blockedRecipients || [];
+        risks.safetyUnavailableChecks.push(...(safety.unavailableChecks || []));
+      } catch {
+        risks.safetyUnavailableChecks.push("Consent 与联系预算检查暂时无法读取");
+      }
+    } else {
+      risks.safetyUnavailableChecks.push("Consent 与联系预算检查未启用");
+    }
+
     const riskIds = new Set([
       ...risks.connectedSenders,
       ...risks.privateContacts,
       ...risks.previousBlast,
+      ...risks.missingConsent,
+      ...risks.expiredConsent,
+      ...risks.revokedConsent,
+      ...risks.contactBudget,
     ].map((item) => item.id));
     const result = {
-      version: 1,
+      version: 2,
       scopeId: clean(scopeId),
       checkedAt: clock().toISOString(),
       total: recipients.length,
       riskCount: riskIds.size,
-      hasRisk: riskIds.size > 0 || risks.unavailableChecks.length > 0,
+      hasRisk: riskIds.size > 0 || risks.unavailableChecks.length > 0 || risks.safetyUnavailableChecks.length > 0,
       ...risks,
     };
     result.confirmationToken = confirmationToken(scopeId, recipients, result);

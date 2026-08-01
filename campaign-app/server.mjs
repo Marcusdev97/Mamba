@@ -20,6 +20,7 @@ import { createManualLeadSetupService } from "./lib/manual-lead-setup-service.mj
 import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
 import { createCampaignRecipientRiskService } from "./lib/campaign-recipient-risk-service.mjs";
+import { createCampaignSafetyService } from "./lib/campaign-safety-service.mjs";
 import { createCampaignAwakeService } from "./lib/campaign-awake-service.mjs";
 import { createCampaignTransportGuard, transportFailure } from "./lib/campaign-transport-guard.mjs";
 import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs";
@@ -144,6 +145,12 @@ const goldenLedgerService = createGoldenConversationLedgerService({
 });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
 const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const campaignSafetyService = createCampaignSafetyService({
+  dataDir: paths.dataDir,
+  localDatabase: localDatabaseService,
+  conversationLog,
+  listInstances: deviceListInstances,
+});
 const lidMap = createLidMapService({ dataDir: paths.dataDir });
 const instanceIdentity = createInstanceIdentityService({ dataDir: paths.dataDir });
 const campaignModeService = createCampaignModeService({ dataDir: paths.dataDir });
@@ -440,6 +447,7 @@ const refreshCampaignService = createRefreshCampaignService({
 const campaignRecipientRiskService = createCampaignRecipientRiskService({
   conversationLog,
   workInboxIgnore: workInboxIgnoreService,
+  campaignSafety: campaignSafetyService,
 });
 const dailyCampaignService = createDailyCampaignService({
   rootDir: paths.rootDir,
@@ -566,6 +574,7 @@ const runtime = await loadRuntime({
   evolutionReconnect: evolutionReconnectService,
   campaignAwake: campaignAwakeService,
   campaignTransportGuard,
+  campaignSafety: campaignSafetyService,
   remoteMamba: remoteMambaService,
   projects: {
     alias: notionConfig?.projectAlias || {},
@@ -735,6 +744,7 @@ const runtime = await loadRuntime({
     },
     queue: campaignQueueService,
     recipientRisk: campaignRecipientRiskService,
+    safety: campaignSafetyService,
     refreshCampaign: refreshCampaignService,
     refreshTemplateFlow: REFRESH_TEMPLATE_FLOW,
     applyNotionFlowTemplatesToState,

@@ -16,12 +16,13 @@
   .settings-grid > .card { margin: 0; min-width: 0; }
   .phone-card { order: 1; grid-column: 1 / -1; }
   .test-card { order: 2; grid-column: 1 / -1; }
-  .notion-card { order: 3; grid-column: span 6; }
-  .database-card { order: 4; grid-column: span 6; }
-  .telegram-card { order: 5; grid-column: 1 / -1; }
-  .private-contacts-card { order: 6; grid-column: 1 / -1; }
-  .ai-card { order: 7; grid-column: 1 / -1; }
-  .save-card { order: 8; grid-column: 1 / -1; display: flex; flex-direction: column; }
+  .safety-card { order: 3; grid-column: 1 / -1; }
+  .notion-card { order: 4; grid-column: span 6; }
+  .database-card { order: 5; grid-column: span 6; }
+  .telegram-card { order: 6; grid-column: 1 / -1; }
+  .private-contacts-card { order: 7; grid-column: 1 / -1; }
+  .ai-card { order: 8; grid-column: 1 / -1; }
+  .save-card { order: 9; grid-column: 1 / -1; display: flex; flex-direction: column; }
   .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
   .card-head h2 { margin: 0; }
   .card-kicker { color: var(--muted); font-size: 13px; margin-top: 5px; line-height: 1.5; }
@@ -116,6 +117,21 @@
   .database-note { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
   .database-report { margin-top: 12px; border: 1px solid #1d4ed8; border-radius: var(--radius); background: rgba(29,78,216,.08); padding: 12px 14px; color: var(--text); font-size: 12px; line-height: 1.65; white-space: pre-line; }
   .database-report.hidden { display: none; }
+  .safety-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-bottom:16px; }
+  .safety-stat { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:11px 12px; }
+  .safety-stat span { display:block; color:var(--muted); font-size:11px; margin-bottom:4px; }
+  .safety-stat b { font-size:17px; }
+  .safety-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:18px; }
+  .safety-panel { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:15px; }
+  .safety-panel h3 { margin:0 0 5px; font-size:15px; }
+  .safety-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:14px; }
+  .safety-fields.two { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .sender-safety-table { margin-top:14px; }
+  .sender-safety-table th,.sender-safety-table td { font-size:12px; }
+  .safety-pill { display:inline-flex; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:800; }
+  .safety-pill.ok { background:var(--green-bg); color:var(--green); }
+  .safety-pill.warn { background:var(--amber-bg); color:var(--amber); }
+  .safety-pill.bad { background:var(--red-bg); color:var(--red); }
   .test-table input, .test-table select { min-height: 38px; padding: 8px 10px; }
   .test-table .test-name { min-width: 150px; }
   .test-table .test-phone { min-width: 180px; font-family: var(--font-mono); }
@@ -136,7 +152,7 @@
   .model-grid, .model-grid.three { display: grid; grid-template-columns: 1fr; gap: 0; }
   .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
   @media (max-width: 1050px) {
-    .notion-card, .database-card, .telegram-card, .private-contacts-card, .ai-card, .save-card, .test-card { grid-column: 1 / -1; }
+    .notion-card, .database-card, .telegram-card, .private-contacts-card, .ai-card, .save-card, .test-card, .safety-card { grid-column: 1 / -1; }
     .phone-overview { grid-template-columns: 1fr; }
     .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
     .ai-provider + .ai-provider { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; }
@@ -152,6 +168,7 @@
     .phone-card th, .phone-card td { padding-left: 10px; padding-right: 10px; font-size: 12px; }
     .model-grid, .model-grid.three { grid-template-columns: 1fr; }
     .database-stats { grid-template-columns: 1fr; }
+    .safety-stats,.safety-layout,.safety-fields,.safety-fields.two { grid-template-columns:1fr; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
@@ -445,6 +462,57 @@
       <div class="status-line">健康标准：至少 1 个 Key 显示 OPEN，才可以发送 campaign。</div>
     </div>
 
+    <div class="card safety-card">
+      <div class="card-head">
+        <div>
+          <h2 class="step-title"><span class="step-no">P0</span> WhatsApp Safety</h2>
+          <div class="card-kicker">Consent Ledger · 跨 Campaign 联系预算 · Sender Health 熔断 · Provider 识别</div>
+        </div>
+        <div class="actions" style="margin-top:0"><button class="btn" id="btnRefreshSafety">刷新安全状态</button></div>
+      </div>
+      <div class="safety-stats">
+        <div class="safety-stat"><span>Consent Events</span><b id="safetyPermissionEvents">0</b></div>
+        <div class="safety-stat"><span>有证据客户</span><b id="safetyPermissionContacts">0</b></div>
+        <div class="safety-stat"><span>暂停 Sender</span><b id="safetyPausedSenders">0</b></div>
+        <div class="safety-stat"><span>被阻止检查</span><b id="safetyBlockedChecks">0</b></div>
+      </div>
+      <div class="safety-layout">
+        <section class="safety-panel">
+          <h3>新 LIVE Campaign 安全策略</h3>
+          <div class="provider-sub">只影响之后的 preflight；不会改写正在运行或已完成的 Campaign。Consent 撤回永远不可绕过。</div>
+          <div class="safety-fields">
+            <label class="fld"><span>Consent 证据</span><select id="safetyConsentMode"><option value="warn">Warn（先兼容旧名单）</option><option value="enforce">Enforce（缺证据即阻止）</option><option value="off">Off</option></select></label>
+            <label class="fld"><span>联系预算</span><select id="safetyBudgetMode"><option value="warn">Warn</option><option value="enforce">Enforce</option><option value="off">Off</option></select></label>
+            <label class="fld"><span>Sender 熔断</span><select id="safetySenderMode"><option value="enforce">Enforce</option><option value="warn">Warn</option><option value="off">Off</option></select></label>
+          </div>
+          <div class="database-note" id="safetyPolicyNote">默认预算：7 天最多 2 批、30 天最多 5 批、连续 3 批未回复后警告。</div>
+          <div class="actions"><button class="btn primary" id="btnSaveSafetyPolicy">保存 P0 策略</button></div>
+        </section>
+        <section class="safety-panel">
+          <h3>记录客户 Consent</h3>
+          <div class="provider-sub">Append-only SQLite Ledger；Grant 与 Revoke 都会留下时间及来源，历史证据不会被覆盖。</div>
+          <div class="safety-fields two">
+            <label class="fld"><span>客户号码</span><input id="safetyConsentPhone" type="tel" placeholder="012 345 6789" /></label>
+            <label class="fld"><span>来源</span><select id="safetyConsentSource"><option value="PHONE_CALL">Phone Call</option><option value="FACEBOOK_AD">Facebook Ad</option><option value="WEB_FORM">Web Form</option><option value="WHATSAPP_REPLY">WhatsApp Reply</option><option value="CUSTOMER_REQUEST">Customer Request</option></select></label>
+            <label class="fld"><span>证据参考</span><input id="safetyConsentReference" type="text" placeholder="广告表单、通话备注或 URL" /></label>
+            <label class="fld"><span>发生时间（可留空）</span><input id="safetyConsentAt" type="datetime-local" /></label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="btnGrantConsent">记录 Grant</button>
+            <button class="btn" id="btnLookupConsent">查询</button>
+            <button class="btn" id="btnRevokeConsent">记录 Revoke</button>
+          </div>
+          <div class="status-line" id="safetyConsentStatus">输入号码即可查询或记录 Consent。</div>
+        </section>
+      </div>
+      <div class="filter-panel">
+        <div class="provider-title">Sender Health 与 Transport</div>
+        <div class="provider-sub">只有带 delivery status 的新证据会进入熔断计算；旧消息没有状态，不会被误判成失败。正式规模建议使用 Meta Cloud API。</div>
+        <table class="sender-safety-table"><thead><tr><th>Sender</th><th>Provider</th><th>24h 证据</th><th>状态</th><th>判断</th><th></th></tr></thead><tbody id="senderSafetyBody"><tr><td colspan="6" class="muted">读取中...</td></tr></tbody></table>
+        <div class="status-line" id="safetyStatus">读取 P0 安全状态...</div>
+      </div>
+    </div>
+
     <div class="card test-card">
       <div class="card-head">
         <div>
@@ -484,6 +552,7 @@ let qrName = null;
 let qrTimer = null;
 let qrTicks = 0;
 let savedWorkInboxIgnoreCount = 0;
+let campaignSafetyPolicy = null;
 async function api(url, body) {
   const res = await fetch(url, body === undefined ? undefined : {
     method: "POST",
@@ -707,6 +776,73 @@ async function refreshWorkInboxIgnore() {
   }
 }
 
+function safetyModeLabel(mode) {
+  return mode === "enforce" ? "强制阻止" : mode === "warn" ? "只警告" : "已关闭";
+}
+
+function renderCampaignSafety(safety) {
+  const data = safety || {};
+  campaignSafetyPolicy = data.policy || campaignSafetyPolicy;
+  const counts = data.counts || {};
+  $("safetyPermissionEvents").textContent = String(counts.permissionEvents || 0);
+  $("safetyPermissionContacts").textContent = String(counts.permissionContacts || 0);
+  $("safetyPausedSenders").textContent = String(counts.pausedSenders || 0);
+  $("safetyBlockedChecks").textContent = String(counts.blockedChecks || 0);
+  if (data.policy) {
+    $("safetyConsentMode").value = data.policy.consent?.mode || "warn";
+    $("safetyBudgetMode").value = data.policy.contactBudget?.mode || "warn";
+    $("safetySenderMode").value = data.policy.senderHealth?.mode || "enforce";
+    const windows = (data.policy.contactBudget?.windows || []).map((item) => `${item.days} 天最多 ${item.maxRuns} 批`).join(" · ");
+    $("safetyPolicyNote").textContent = `${windows || "尚未配置联系窗口"} · 连续 ${data.policy.contactBudget?.maxUnansweredRuns || 0} 批未回复后${safetyModeLabel(data.policy.contactBudget?.mode)}。`;
+  }
+  const senders = Array.isArray(data.senders) ? data.senders : [];
+  $("senderSafetyBody").innerHTML = senders.length ? senders.map((sender) => {
+    const paused = sender.persistedState?.state === "PAUSED";
+    const outcome = sender.assessment?.outcome || "WARN";
+    const pill = outcome === "BLOCK" ? "bad" : outcome === "WARN" ? "warn" : "ok";
+    const metrics = sender.metrics || {};
+    const provider = sender.provider || {};
+    const action = paused
+      ? `<button class="btn" type="button" data-sender-resume="${escapeHtml(sender.instanceName)}">检查后恢复</button>`
+      : `<button class="btn" type="button" data-sender-pause="${escapeHtml(sender.instanceName)}">人工暂停</button>`;
+    return `<tr><td><b>${escapeHtml(sender.instanceName)}</b><br><span class="muted">${escapeHtml(sender.status || "UNKNOWN")}</span></td><td>${escapeHtml(provider.label || "Provider 未识别")}${provider.official ? '<br><span class="safety-pill ok">OFFICIAL</span>' : ''}</td><td>${Number(metrics.attempts || 0)} 次 · ${Number(metrics.failures || 0)} 失败 · ${Number(metrics.unknown || 0)} 不明确</td><td><span class="safety-pill ${paused ? "bad" : "ok"}">${paused ? "PAUSED" : "HEALTHY"}</span></td><td><span class="safety-pill ${pill}">${escapeHtml(sender.assessment?.code || "CHECKING")}</span><br><span class="muted">${escapeHtml(sender.assessment?.reason || "")}</span></td><td>${action}</td></tr>`;
+  }).join("") : '<tr><td colspan="6" class="muted">目前没有可识别的 Sender；先检查 Evolution Phone Health。</td></tr>';
+  $("safetyStatus").textContent = data.available === false
+    ? `P0 数据层尚未就绪：${data.error || "请执行 SQLite migration"}`
+    : (data.transportRecommendation || "P0 安全层已就绪。新 LIVE Campaign 会执行 Consent、联系预算与 Sender Health 检查。");
+}
+
+async function refreshCampaignSafety() {
+  const btn = $("btnRefreshSafety");
+  if (btn) { btn.disabled = true; btn.textContent = "查询中..."; }
+  try {
+    const data = await api("/api/campaign-safety");
+    renderCampaignSafety(data.safety);
+  } catch (error) {
+    $("safetyStatus").textContent = `读取失败：${error.message}`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "刷新安全状态"; }
+  }
+}
+
+function consentRequest() {
+  const occurred = $("safetyConsentAt").value;
+  return {
+    phone: $("safetyConsentPhone").value.trim(),
+    sourceType: $("safetyConsentSource").value,
+    sourceReference: $("safetyConsentReference").value.trim(),
+    ...(occurred ? { occurredAt: new Date(occurred).toISOString() } : {}),
+  };
+}
+
+function renderPermission(permission) {
+  const assessment = permission?.assessment;
+  const latest = assessment?.latest;
+  $("safetyConsentStatus").textContent = assessment
+    ? `${permission.phone} · ${assessment.code} · ${assessment.reason}${latest ? ` · 来源 ${latest.sourceType} · ${new Date(latest.occurredAt).toLocaleString("en-MY")}` : ""}`
+    : "找不到有效号码。";
+}
+
 function renderIdentity(identity) {
   const n = identity?.notion || {};
   $("notionLinked").textContent = n.ok
@@ -859,6 +995,77 @@ async function qrTick() {
   // QR. Poll quickly until one appears, then use the normal 25-second refresh.
   if ($("qrImg").classList.contains("hidden") || qrTicks % 5 === 0) refreshQr();
 }
+
+$("btnRefreshSafety").addEventListener("click", refreshCampaignSafety);
+$("btnSaveSafetyPolicy").addEventListener("click", async () => {
+  const btn = $("btnSaveSafetyPolicy");
+  btn.disabled = true;
+  try {
+    const policy = structuredClone(campaignSafetyPolicy || {});
+    policy.consent = { ...(policy.consent || {}), mode: $("safetyConsentMode").value };
+    policy.contactBudget = { ...(policy.contactBudget || {}), mode: $("safetyBudgetMode").value };
+    policy.senderHealth = { ...(policy.senderHealth || {}), mode: $("safetySenderMode").value };
+    await api("/api/campaign-safety/policy", { policy });
+    await refreshCampaignSafety();
+    message("P0 安全策略已保存；只影响之后启动或恢复的发送。", "");
+  } catch (error) {
+    message("", error.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("btnLookupConsent").addEventListener("click", async () => {
+  try {
+    const phone = $("safetyConsentPhone").value.trim();
+    if (!phone) throw new Error("请先输入客户号码。");
+    const data = await api("/api/campaign-safety/permission?phone=" + encodeURIComponent(phone));
+    renderPermission(data.permission);
+  } catch (error) {
+    $("safetyConsentStatus").textContent = `查询失败：${error.message}`;
+  }
+});
+
+$("btnGrantConsent").addEventListener("click", async () => {
+  try {
+    const data = await api("/api/campaign-safety/permission", consentRequest());
+    $("safetyConsentStatus").textContent = `${data.event.phone} · Consent Grant 已记录 · ${data.event.sourceType}`;
+    await refreshCampaignSafety();
+  } catch (error) {
+    $("safetyConsentStatus").textContent = `记录失败：${error.message}`;
+  }
+});
+
+$("btnRevokeConsent").addEventListener("click", async () => {
+  const request = consentRequest();
+  if (!request.phone) { $("safetyConsentStatus").textContent = "请先输入客户号码。"; return; }
+  if (!confirm(`确认记录 ${request.phone} 已撤回推广 Consent？之后 LIVE Campaign 会阻止这个号码。`)) return;
+  try {
+    const data = await api("/api/campaign-safety/permission/revoke", request);
+    $("safetyConsentStatus").textContent = `${data.event.phone} · Consent Revoke 已记录；之后不可发送。`;
+    await refreshCampaignSafety();
+  } catch (error) {
+    $("safetyConsentStatus").textContent = `记录失败：${error.message}`;
+  }
+});
+
+$("senderSafetyBody").addEventListener("click", async (event) => {
+  const pause = event.target.closest("[data-sender-pause]");
+  const resume = event.target.closest("[data-sender-resume]");
+  const instanceName = pause?.dataset.senderPause || resume?.dataset.senderResume;
+  if (!instanceName) return;
+  if (resume && !confirm(`你已经在 WhatsApp 手机端和 Evolution 检查 ${instanceName}，确定人工恢复？`)) return;
+  try {
+    await api("/api/campaign-safety/sender-state", {
+      instanceName,
+      state: pause ? "PAUSED" : "HEALTHY",
+      ...(resume ? { confirmation: "RESUME_SENDER" } : {}),
+    });
+    await refreshCampaignSafety();
+  } catch (error) {
+    message("", error.message);
+  }
+});
 
 $("btnSave").addEventListener("click", async () => {
   message("", "");
@@ -1189,6 +1396,7 @@ refreshInstances();
 refreshTelegramFilters();
 refreshWorkInboxIgnore();
 refreshLocalDatabase();
+refreshCampaignSafety();
 setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
 </script>
 </body>

@@ -79,6 +79,7 @@ function buildRuntime() {
         return token === "lane-risk-ok";
       },
     },
+    safety: { async assertSendersAllowed() { return []; } },
     persistRunners: async () => {},
     listRunners: () => registry.map((r) => r),
     getRunner: () => null,

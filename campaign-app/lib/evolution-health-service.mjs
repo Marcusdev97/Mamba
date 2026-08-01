@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { evolutionProviderFromInstance } from "../integrations/evolution/provider-normalizer.mjs";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -55,6 +56,7 @@ function instanceView(item) {
     number: clean(item?.number || item?.owner || item?.instance?.owner),
     status: upper(item?.status || item?.connectionStatus || item?.instance?.state || "UNKNOWN"),
     allowedOnThisDevice: item?.allowedOnThisDevice !== false,
+    provider: item?.provider?.key ? item.provider : evolutionProviderFromInstance(item),
   };
 }
 

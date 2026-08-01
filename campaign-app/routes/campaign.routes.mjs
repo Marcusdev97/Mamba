@@ -36,6 +36,41 @@ function requireRecipientRisk(campaign) {
   return campaign.recipientRisk;
 }
 
+function assertRecipientSafety(result) {
+  const unavailable = result?.safetyUnavailableChecks || [];
+  if (unavailable.length) {
+    throw httpError(503, `P0 Consent／联系预算检查无法完成：${unavailable.join("；")}。为避免误发，本次不会启动。`, {
+      code: "CAMPAIGN_SAFETY_UNAVAILABLE",
+    });
+  }
+  const blocked = result?.blockedRecipients || [];
+  if (!blocked.length) return;
+  throw httpError(
+    409,
+    `P0 安全检查已阻止 ${blocked.length} 位收件人。请先移除已撤回 Consent 或超过联系预算的号码。`,
+    {
+      code: "CAMPAIGN_SAFETY_BLOCKED",
+      blocked: blocked.map((item) => ({ id: item.id, phone: item.phone, codes: item.codes || [] })),
+    },
+  );
+}
+
+async function assertSenderSafety(campaign, instanceNames) {
+  if (!campaign.safety?.assertSendersAllowed) {
+    throw httpError(503, "Sender Health 安全熔断尚未载入；为避免号码继续受限，本次不会发送。", {
+      code: "SENDER_SAFETY_UNAVAILABLE",
+    });
+  }
+  try {
+    return await campaign.safety.assertSendersAllowed(instanceNames);
+  } catch (error) {
+    throw httpError(409, error.message, {
+      code: error.code || "SENDER_SAFETY_PAUSED",
+      blocked: error.blocked || [],
+    });
+  }
+}
+
 async function analyzePreparedRecipientRisk(campaign, runner, skipIds = []) {
   const service = requireRecipientRisk(campaign);
   let connectedInstances;
@@ -443,6 +478,12 @@ export async function startNextQueued(runtime, { force = false } = {}) {
   }
 
   const nextRunner = await restoreQueuedRunner(campaign, next);
+  try {
+    await assertSenderSafety(campaign, runnerInstanceNames(nextRunner));
+  } catch (error) {
+    await campaign.queue.setHold(error.message, next.runId);
+    return { held: true, reason: error.message };
+  }
   await campaign.queue.remove(next.runId);
   await campaign.queue.clearHold();
   nextRunner.pushLog(`Queue 接力启动: 前一批已结束，现在开始 ${next.project || next.projectId} · ${next.flowLabel}。`);
@@ -625,6 +666,7 @@ export function registerCampaignRoutes(router) {
           "RECIPIENT_RISK_CONFIRMATION_REQUIRED",
         );
       }
+      assertRecipientSafety(risk);
     }
     const skippedCount = applyManualSkips(runner, body.skipIds);
     if (skippedCount) {
@@ -678,6 +720,7 @@ export function registerCampaignRoutes(router) {
     }
 
     const instanceNames = runnerInstanceNames(runner);
+    await assertSenderSafety(campaign, instanceNames);
     const activeConflict = conflictingRunner(campaign, instanceNames, runner.state.runId, {
       ignoreReadyPreviews: true,
     });
@@ -714,6 +757,8 @@ export function registerCampaignRoutes(router) {
     const resumeJobs = runner.state.assignments.filter((job) => isCampaignResumeCandidate(runner.state, job));
     const remaining = resumeJobs.length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
+
+    await assertSenderSafety(campaign, runnerInstanceNames(runner));
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
       // An unsent preview owns no sender lane. Resume is an explicit action;
@@ -761,6 +806,8 @@ export function registerCampaignRoutes(router) {
     );
     const failed = failedJobs.length;
     if (!failed) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
+
+    await assertSenderSafety(campaign, runnerInstanceNames(runner));
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
       // An old preview has never used the sender. Explicit recovery of an
@@ -963,7 +1010,10 @@ export function registerCampaignRoutes(router) {
           "RECIPIENT_RISK_CONFIRMATION_REQUIRED",
         );
       }
+      assertRecipientSafety(risk);
     }
+
+    await assertSenderSafety(campaign, [instanceName]);
 
     // 一个号码不能同时跑两批。
     const conflict = conflictingRunner(campaign, [instanceName], null, { ignoreReadyPreviews: true });

@@ -36,6 +36,8 @@
 - `campaign-app/lib/inbox-send-service.mjs`
 - `campaign-app/lib/evolution-history-sync.mjs`
 - `campaign-app/lib/evolution-reconnect-service.mjs`
+- `campaign-app/integrations/evolution/provider-normalizer.mjs`
+- `campaign-app/lib/campaign-safety-service.mjs`
 - `campaign-app/routes/instances.routes.mjs`
 
 ### 资料方向
@@ -91,6 +93,15 @@ WhatsApp → Evolution webhook/history → Mamba
   可选择预设或自定义客户 gap；保存后由 Campaign prepare 读取，Scheduler 与人工
   Campaign 共用同一规则。这个设置用于控制合规发送节奏，不能替代 opt-in、STOP、
   suppression、回复检查或 WhatsApp 官方限制。
+- Evolution instance response 会被 normalize 为 `META_CLOUD_API`、`BAILEYS` 或
+  `UNKNOWN`。Settings 会明确显示 provider；`BAILEYS` 是 WhatsApp Web session，
+  不能假装成官方 Cloud API。当前版本只完成 provider-aware 诊断与安全边界，实际
+  切换至 Meta Cloud API 仍需要 WABA、phone number ID、access token 和 webhook
+  配置，不会自动把现有号码迁移。
+- Sender Health circuit breaker 读取 SQLite 中带 `deliveryStatus` 的 Blast 出站证据。
+  旧 payload 没有 delivery status 的消息不进入失败率或连续失败统计。Sender 达到
+  策略阈值后写入 `sender_safety_state=PAUSED`；新 Start、Queue、Resume 与 Retry
+  都 fail closed，直到操作员明确恢复。
 
 ### 本机健康与睡眠边界
 
@@ -310,6 +321,9 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
 - Device／sender binding
 - Idempotency 和 retry state
 - LIVE 发送前的历史 Blast 风险查询
+- Consent Grant／Revoke append-only ledger
+- 跨 Campaign 联系预算与 preflight audit
+- Sender Health pause／resume state
 
 ### 代码入口
 
@@ -325,6 +339,10 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
 - Notion 和 Evolution 都不能覆盖本机已确认的发送事实。
 - LIVE 风险弹窗的「曾经 Blast」只读取 `messages` 中 `direction=outbound` 且
   `source=blast` 的完整本机历史；manual ChatRoom 发送不算 Campaign Blast。
+- `contact_permission_events` 不允许 UPDATE 覆盖事实；新的 Grant 或 Revoke 必须
+  追加 event，并记录来源、发生时间、可选证据参考及 expiry。
+- `campaign_safety_checks` 使用稳定 scope／contact／check type idempotency key，
+  重复读取同一个 preflight 不会堆积重复审计行。
 
 ## 8. Configuration Ownership
 
@@ -334,6 +352,7 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
 | TEST recipients | `TEST_LEADS` | Settings 的 TEST 表格 |
 | Notion database IDs | `campaign-data/notion_config.json` | 安装／维护流程 |
 | Device identity | 本机 campaign-data | Settings／device tools |
+| P0 Campaign safety | `campaign_safety_policy.json` + SQLite ledgers | Settings 的 WhatsApp Safety |
 | Project config | repository project files + Notion content | 对应 Project 工具 |
 
 `.env.example` 只记录 key 和安全的空值，不应包含可以误发的号码或真实 secret。

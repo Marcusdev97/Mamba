@@ -1628,6 +1628,191 @@ COMMIT;`, 60000);
     return { originKey: key, status: normalizedStatus, notionPageId: clean(notionPageId), updatedAt: now };
   }
 
+  async function recordPermissionEvent({
+    phone,
+    category = "PROPERTY_MARKETING",
+    action = "GRANTED",
+    sourceType,
+    sourceReference = "",
+    evidence = {},
+    occurredAt = null,
+    expiresAt = null,
+    recordedBy = "operator",
+  } = {}) {
+    const contactKey = normalizePhone(phone);
+    const normalizedCategory = clean(category).toUpperCase();
+    const normalizedAction = clean(action).toUpperCase();
+    const normalizedSource = clean(sourceType).toUpperCase();
+    if (!contactKey) {
+      const error = new Error("Consent 电话号码格式不正确。");
+      error.code = "CONSENT_PHONE_INVALID";
+      throw error;
+    }
+    if (!/^[A-Z][A-Z0-9_]{2,60}$/.test(normalizedCategory)) {
+      const error = new Error("Consent category 格式不正确。");
+      error.code = "CONSENT_CATEGORY_INVALID";
+      throw error;
+    }
+    if (!new Set(["GRANTED", "REVOKED"]).has(normalizedAction)) {
+      const error = new Error("Consent action 只支持 GRANTED 或 REVOKED。");
+      error.code = "CONSENT_ACTION_INVALID";
+      throw error;
+    }
+    if (!/^[A-Z][A-Z0-9_]{2,60}$/.test(normalizedSource)) {
+      const error = new Error("必须记录客户同意来源，例如 FACEBOOK_AD、WEB_FORM 或 PHONE_CALL。");
+      error.code = "CONSENT_SOURCE_REQUIRED";
+      throw error;
+    }
+    const occurred = new Date(occurredAt || Date.now());
+    const expiry = expiresAt ? new Date(expiresAt) : null;
+    if (!Number.isFinite(occurred.getTime()) || (expiry && !Number.isFinite(expiry.getTime()))) {
+      const error = new Error("Consent 时间格式不正确。");
+      error.code = "CONSENT_TIME_INVALID";
+      throw error;
+    }
+    const binary = await requireV3Database();
+    const recordedAt = new Date().toISOString();
+    const eventId = `permission_${crypto.randomUUID()}`;
+    const evidenceJson = JSON.stringify(evidence && typeof evidence === "object" ? evidence : {});
+    await runProcess(binary, ["-batch", databasePath], `
+BEGIN IMMEDIATE;
+INSERT INTO contacts(
+  contact_key, phone, display_name, stop_flag, stop_reason, stop_at, reply_count,
+  last_reply_text, last_reply_at, created_at, updated_at
+) VALUES (
+  ${sqlText(contactKey)}, ${sqlText(contactKey)}, ${sqlText(contactKey)}, 0, '', NULL, 0, '', NULL,
+  ${sqlText(recordedAt)}, ${sqlText(recordedAt)}
+)
+ON CONFLICT(contact_key) DO UPDATE SET updated_at=excluded.updated_at;
+INSERT INTO contact_permission_events(
+  event_id, contact_key, category, action, source_type, source_reference,
+  evidence_json, occurred_at, expires_at, recorded_by, recorded_at
+) VALUES (
+  ${sqlText(eventId)}, ${sqlText(contactKey)}, ${sqlText(normalizedCategory)}, ${sqlText(normalizedAction)},
+  ${sqlText(normalizedSource)}, ${sqlText(clean(sourceReference).slice(0, 500))},
+  ${sqlText(evidenceJson)}, ${sqlText(occurred.toISOString())}, ${sqlNullable(expiry?.toISOString())},
+  ${sqlText(clean(recordedBy).slice(0, 120))}, ${sqlText(recordedAt)}
+);
+COMMIT;`, 60000);
+    return {
+      eventId,
+      phone: contactKey,
+      category: normalizedCategory,
+      action: normalizedAction,
+      sourceType: normalizedSource,
+      sourceReference: clean(sourceReference).slice(0, 500),
+      occurredAt: occurred.toISOString(),
+      expiresAt: expiry?.toISOString() || null,
+      recordedBy: clean(recordedBy).slice(0, 120),
+      recordedAt,
+    };
+  }
+
+  async function permissionEventsForPhones(phones = [], { category = "" } = {}) {
+    const keys = [...new Set((phones || []).map(normalizePhone).filter(Boolean))];
+    if (!keys.length) return new Map();
+    const binary = await requireV3Database();
+    const conditions = [`contact_key IN (${keys.map(sqlText).join(",")})`];
+    const normalizedCategory = clean(category).toUpperCase();
+    if (normalizedCategory) conditions.push(`category=${sqlText(normalizedCategory)}`);
+    const rows = await queryJson(binary, `
+SELECT event_id AS eventId, contact_key AS phone, category, action,
+       source_type AS sourceType, source_reference AS sourceReference,
+       evidence_json AS evidenceJson, occurred_at AS occurredAt, expires_at AS expiresAt,
+       recorded_by AS recordedBy, recorded_at AS recordedAt
+FROM contact_permission_events
+WHERE ${conditions.join(" AND ")}
+ORDER BY occurred_at DESC, recorded_at DESC;`);
+    const byPhone = new Map(keys.map((phone) => [phone, []]));
+    for (const row of rows) {
+      try { row.evidence = JSON.parse(row.evidenceJson || "{}"); } catch { row.evidence = {}; }
+      delete row.evidenceJson;
+      byPhone.get(row.phone)?.push(row);
+    }
+    return byPhone;
+  }
+
+  async function senderSafetyStates(instanceNames = []) {
+    const names = [...new Set((instanceNames || []).map(clean).filter(Boolean))];
+    const binary = await requireV3Database();
+    const where = names.length ? `WHERE instance_name IN (${names.map(sqlText).join(",")})` : "";
+    const rows = await queryJson(binary, `
+SELECT instance_name AS instanceName, state, reason_code AS reasonCode, reason,
+       metrics_json AS metricsJson, paused_at AS pausedAt, resumed_at AS resumedAt, updated_at AS updatedAt
+FROM sender_safety_state ${where}
+ORDER BY instance_name;`);
+    return new Map(rows.map((row) => {
+      try { row.metrics = JSON.parse(row.metricsJson || "{}"); } catch { row.metrics = {}; }
+      delete row.metricsJson;
+      return [row.instanceName, row];
+    }));
+  }
+
+  async function setSenderSafetyState({ instanceName, state, reasonCode = "", reason = "", metrics = {} } = {}) {
+    const instance = clean(instanceName);
+    const normalizedState = clean(state).toUpperCase();
+    if (!instance || !new Set(["HEALTHY", "WARNING", "PAUSED"]).has(normalizedState)) {
+      const error = new Error("Sender safety state 格式不正确。");
+      error.code = "SENDER_SAFETY_STATE_INVALID";
+      throw error;
+    }
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    await runProcess(binary, ["-batch", databasePath], `
+INSERT INTO sender_safety_state(
+  instance_name, state, reason_code, reason, metrics_json, paused_at, resumed_at, updated_at
+) VALUES (
+  ${sqlText(instance)}, ${sqlText(normalizedState)}, ${sqlText(clean(reasonCode).slice(0, 120))},
+  ${sqlText(clean(reason).slice(0, 1000))}, ${sqlText(JSON.stringify(metrics || {}))},
+  ${normalizedState === "PAUSED" ? sqlText(now) : "NULL"},
+  ${normalizedState === "HEALTHY" ? sqlText(now) : "NULL"}, ${sqlText(now)}
+)
+ON CONFLICT(instance_name) DO UPDATE SET
+  state=excluded.state, reason_code=excluded.reason_code, reason=excluded.reason,
+  metrics_json=excluded.metrics_json,
+  paused_at=CASE WHEN excluded.state='PAUSED' THEN COALESCE(sender_safety_state.paused_at, excluded.paused_at) ELSE sender_safety_state.paused_at END,
+  resumed_at=CASE WHEN excluded.state='HEALTHY' THEN excluded.resumed_at ELSE sender_safety_state.resumed_at END,
+  updated_at=excluded.updated_at;`, 60000);
+    return (await senderSafetyStates([instance])).get(instance);
+  }
+
+  async function recordCampaignSafetyChecks(checks = []) {
+    const rows = (Array.isArray(checks) ? checks : []).filter((item) => clean(item?.checkId));
+    if (!rows.length) return { recorded: 0 };
+    const binary = await requireV3Database();
+    const statements = ["BEGIN IMMEDIATE;"];
+    for (const item of rows) {
+      statements.push(`INSERT INTO campaign_safety_checks(
+        check_id, scope_id, contact_key, instance_name, check_type, outcome, code, details_json, checked_at
+      ) VALUES (
+        ${sqlText(clean(item.checkId))}, ${sqlText(clean(item.scopeId))}, ${sqlText(normalizePhone(item.phone))},
+        ${sqlText(clean(item.instanceName))}, ${sqlText(clean(item.checkType))}, ${sqlText(clean(item.outcome).toUpperCase())},
+        ${sqlText(clean(item.code))}, ${sqlText(JSON.stringify(item.details || {}))},
+        ${sqlText(item.checkedAt || new Date().toISOString())}
+      ) ON CONFLICT(check_id) DO UPDATE SET
+        outcome=excluded.outcome, code=excluded.code, details_json=excluded.details_json, checked_at=excluded.checked_at;`);
+    }
+    statements.push("COMMIT;");
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 60000);
+    return { recorded: rows.length };
+  }
+
+  async function campaignSafetyCounts() {
+    const binary = await requireV3Database();
+    const [row] = await queryJson(binary, `
+SELECT
+  (SELECT COUNT(*) FROM contact_permission_events) AS permissionEvents,
+  (SELECT COUNT(DISTINCT contact_key) FROM contact_permission_events) AS permissionContacts,
+  (SELECT COUNT(*) FROM sender_safety_state WHERE state='PAUSED') AS pausedSenders,
+  (SELECT COUNT(*) FROM campaign_safety_checks WHERE outcome='BLOCK') AS blockedChecks;`);
+    return {
+      permissionEvents: Number(row?.permissionEvents || 0),
+      permissionContacts: Number(row?.permissionContacts || 0),
+      pausedSenders: Number(row?.pausedSenders || 0),
+      blockedChecks: Number(row?.blockedChecks || 0),
+    };
+  }
+
   async function setStorageMode(mode) {
     const normalized = clean(mode).toLowerCase();
     if (!["shadow", "primary"].includes(normalized)) {
@@ -1888,6 +2073,12 @@ COMMIT;
     recordConversationDisposition,
     setupManualLead,
     markManualLeadNotionSync,
+    recordPermissionEvent,
+    permissionEventsForPhones,
+    senderSafetyStates,
+    setSenderSafetyState,
+    recordCampaignSafetyChecks,
+    campaignSafetyCounts,
     listLeadGroups,
     readLeadGroup,
     createLeadGroup,

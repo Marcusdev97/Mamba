@@ -48,6 +48,7 @@ const campaign = {
   listRunners: () => [runner],
   setRunner: () => {},
   persistRunners: async () => {},
+  safety: { async assertSendersAllowed() { return []; } },
 };
 const runtime = {
   campaign,

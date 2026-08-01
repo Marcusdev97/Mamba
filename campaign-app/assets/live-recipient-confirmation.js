@@ -44,7 +44,7 @@
       .mamba-risk-head h2{margin:0;color:#f8fafc;font-size:20px}
       .mamba-risk-head p{margin:6px 0 0;color:#94a3b8;font-size:13px;line-height:1.55}
       .mamba-risk-body{padding:18px 22px}
-      .mamba-risk-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
+      .mamba-risk-counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:16px}
       .mamba-risk-count{padding:10px;border:1px solid #2b394d;border-radius:9px;background:#0f172a}
       .mamba-risk-count span{display:block;color:#94a3b8;font-size:10.5px}
       .mamba-risk-count b{display:block;margin-top:3px;color:#f8fafc;font-size:19px}
@@ -92,8 +92,23 @@
     const connected = risk?.connectedSenders || [];
     const privateContacts = risk?.privateContacts || [];
     const previous = risk?.previousBlast || [];
+    const missingConsent = risk?.missingConsent || [];
+    const expiredConsent = risk?.expiredConsent || [];
+    const revokedConsent = risk?.revokedConsent || [];
+    const contactBudget = risk?.contactBudget || [];
+    const blocked = risk?.blockedRecipients || [];
+    const safetyUnavailable = risk?.safetyUnavailableChecks || [];
     const unavailable = risk?.unavailableChecks || [];
-    const needsExtraAck = Boolean(connected.length || privateContacts.length || previous.length || unavailable.length);
+    const hasBlock = blocked.length > 0 || safetyUnavailable.length > 0;
+    const needsExtraAck = !hasBlock && Boolean(
+      connected.length
+      || privateContacts.length
+      || previous.length
+      || missingConsent.length
+      || expiredConsent.length
+      || contactBudget.length
+      || unavailable.length
+    );
     const modal = document.createElement("div");
     modal.id = MODAL_ID;
     modal.className = "mamba-risk-backdrop";
@@ -104,7 +119,7 @@
       <div class="mamba-risk-dialog">
         <header class="mamba-risk-head">
           <div class="mamba-risk-icon">!</div>
-          <div><h2 id="${MODAL_ID}-title">确定要发给这群人？</h2><p>这是最后一道 LIVE 检查。请确认没有把自己的其他号码、私人联系人或已经 Blast 过的客户混进来。</p></div>
+          <div><h2 id="${MODAL_ID}-title">${hasBlock ? "这批目前不能发送" : "确定要发给这群人？"}</h2><p>这是最后一道 LIVE 检查：自己的号码、私人联系人、历史 Blast、Consent 证据与近期联系预算都会在这里核对。</p></div>
         </header>
         <div class="mamba-risk-body">
           <div class="mamba-risk-counts">
@@ -112,17 +127,26 @@
             <div class="mamba-risk-count"><span>自己的号码</span><b>${connected.length}</b></div>
             <div class="mamba-risk-count"><span>私人联系人</span><b>${privateContacts.length}</b></div>
             <div class="mamba-risk-count"><span>曾经 Blast</span><b>${previous.length}</b></div>
+            <div class="mamba-risk-count"><span>缺少 Consent</span><b>${missingConsent.length + expiredConsent.length}</b></div>
+            <div class="mamba-risk-count"><span>联系预算</span><b>${contactBudget.length}</b></div>
+            <div class="mamba-risk-count"><span>强制阻止</span><b>${blocked.length}</b></div>
           </div>
-          ${needsExtraAck ? "" : '<div class="mamba-risk-clear">✓ 没有发现自己的连接号码、私人联系人或历史 Blast 记录。仍请确认这就是你选择的客户群。</div>'}
+          ${(!needsExtraAck && !hasBlock) ? '<div class="mamba-risk-clear">✓ 名单已通过 P0 检查。仍请确认这就是你选择的客户群。</div>' : ""}
           ${section("自己的已连接号码", connected, "danger", (item) => item.reason)}
           ${section("Settings 私人联系人", privateContacts, "danger", (item) => item.reason)}
           ${section("本机有历史 Blast 记录", previous, "warn", (item) => `${item.reason} · 最近 ${displayTime(item.lastSentAt)}${item.flows?.length ? ` · ${item.flows.join(" / ")}` : ""}`)}
+          ${section("缺少 Consent 证据", missingConsent, "warn", (item) => item.reason)}
+          ${section("Consent 证据已过期", expiredConsent, "warn", (item) => item.reason)}
+          ${section("Consent 已撤回（不可发送）", revokedConsent, "danger", (item) => item.reason)}
+          ${section("近期联系预算已满", contactBudget, contactBudget.some((item) => item.assessment?.outcome === "BLOCK") ? "danger" : "warn", (item) => item.reason)}
+          ${safetyUnavailable.length ? `<div class="mamba-risk-unavailable">⛔ P0 安全资料无法读取：${safetyUnavailable.map(escapeHtml).join("；")}。系统会 fail closed，不允许继续发送。</div>` : ""}
+          ${blocked.length ? '<div class="mamba-risk-unavailable">⛔ 这批含有不可发送的号码。请返回名单移除后重新检查；确认按钮不会绕过安全规则。</div>' : ""}
           ${unavailable.length ? `<div class="mamba-risk-unavailable">⚠️ ${unavailable.map(escapeHtml).join("；")}。系统无法证明名单安全，请先返回检查，或明确承担风险后继续。</div>` : ""}
-          ${needsExtraAck ? '<label class="mamba-risk-ack"><input type="checkbox" data-risk-ack><span>我已经检查以上标记号码，确认仍要把未取消选择的人加入 LIVE 发送。</span></label>' : ""}
+          ${needsExtraAck ? '<label class="mamba-risk-ack"><input type="checkbox" data-risk-ack><span>我已经检查以上警告与 Consent 证据，确认仍要把未取消选择的人加入 LIVE 发送。</span></label>' : ""}
         </div>
         <footer class="mamba-risk-actions">
           <button type="button" data-risk-cancel>返回检查名单</button>
-          <button type="button" class="confirm" data-risk-confirm ${needsExtraAck ? "disabled" : ""}>${escapeHtml(actionLabel)} ${Number(risk?.total || 0)} 人</button>
+          <button type="button" class="confirm" data-risk-confirm ${(needsExtraAck || hasBlock) ? "disabled" : ""}>${hasBlock ? "请先移除被阻止号码" : `${escapeHtml(actionLabel)} ${Number(risk?.total || 0)} 人`}</button>
         </footer>
       </div>`;
     document.body.appendChild(modal);
@@ -140,7 +164,7 @@
       modal.querySelector("[data-risk-cancel]").addEventListener("click", () => finish(false));
       confirm.addEventListener("click", () => finish(true));
       modal.querySelector("[data-risk-ack]")?.addEventListener("change", (event) => {
-        confirm.disabled = !event.target.checked;
+        confirm.disabled = hasBlock || !event.target.checked;
       });
       modal.addEventListener("click", (event) => {
         if (event.target === modal) finish(false);

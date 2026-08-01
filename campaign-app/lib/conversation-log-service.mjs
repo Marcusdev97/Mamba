@@ -652,6 +652,108 @@ GROUP BY v.contact_key;`);
     }]));
   }
 
+  async function campaignTouchActivity(phones, { windows = [7, 30] } = {}) {
+    const keys = [...new Set((phones ?? []).map(digits).filter(Boolean))];
+    if (!keys.length) return new Map();
+    const safeWindows = [...new Set((windows || []).map(Number).filter((value) => Number.isInteger(value) && value > 0 && value <= 365))]
+      .sort((a, b) => a - b);
+    const maxDays = Math.max(...safeWindows, 30);
+    const since = new Date(clock().getTime() - maxDays * 24 * 60 * 60 * 1000).toISOString();
+    const database = await cli();
+    const rows = await database.query(`
+SELECT
+  v.contact_key AS contactKey,
+  m.id AS messageId,
+  m.direction AS direction,
+  m.source AS source,
+  m.sent_at AS sentAt,
+  CASE WHEN json_valid(m.payload_json)
+    THEN COALESCE(NULLIF(json_extract(m.payload_json, '$.runId'), ''), 'legacy:' || m.id)
+    ELSE 'legacy:' || m.id END AS runId
+FROM messages m
+JOIN conversations v ON v.id = m.conversation_id
+WHERE v.contact_key IN (${keys.map(sqlValue).join(", ")})
+  AND m.sent_at >= ${sqlValue(since)}
+  AND (m.direction='inbound' OR (m.direction='outbound' AND m.source='blast'))
+ORDER BY m.sent_at ASC, m.id ASC;`);
+    const grouped = new Map(keys.map((phone) => [phone, []]));
+    for (const row of rows) grouped.get(row.contactKey)?.push(row);
+    const result = new Map();
+    for (const [phone, events] of grouped) {
+      const lastInboundAt = events
+        .filter((event) => event.direction === "inbound")
+        .map((event) => event.sentAt)
+        .sort()
+        .at(-1) || null;
+      const blasts = events.filter((event) => event.direction === "outbound" && event.source === "blast");
+      const runCounts = {};
+      for (const days of safeWindows) {
+        const boundary = clock().getTime() - days * 24 * 60 * 60 * 1000;
+        runCounts[days] = new Set(blasts
+          .filter((event) => new Date(event.sentAt).getTime() >= boundary)
+          .map((event) => event.runId)).size;
+      }
+      const unansweredRuns = new Set(blasts
+        .filter((event) => !lastInboundAt || event.sentAt > lastInboundAt)
+        .map((event) => event.runId)).size;
+      result.set(phone, {
+        runCounts,
+        unansweredRuns,
+        lastInboundAt,
+        lastBlastAt: blasts.map((event) => event.sentAt).sort().at(-1) || null,
+      });
+    }
+    return result;
+  }
+
+  async function senderDeliveryMetrics(instanceNames, { sinceHours = 24 } = {}) {
+    const names = [...new Set((instanceNames || []).map(clean).filter(Boolean))];
+    if (!names.length) return new Map();
+    const hours = Math.max(1, Math.min(Number(sinceHours) || 24, 168));
+    const since = new Date(clock().getTime() - hours * 60 * 60 * 1000).toISOString();
+    const database = await cli();
+    const rows = await database.query(`
+SELECT
+  json_extract(m.payload_json, '$.instanceName') AS instanceName,
+  COALESCE(NULLIF(json_extract(m.payload_json, '$.deliveryStatus'), ''), 'UNKNOWN') AS deliveryStatus,
+  m.sent_at AS sentAt
+FROM messages m
+WHERE m.direction='outbound'
+  AND m.source='blast'
+  AND m.sent_at >= ${sqlValue(since)}
+  AND json_valid(m.payload_json)
+  -- Historical blast rows did not record deliveryStatus. They are useful send
+  -- evidence, but they are not failure evidence and must never trip the sender
+  -- circuit breaker after this feature is deployed.
+  AND json_type(m.payload_json, '$.deliveryStatus') IS NOT NULL
+  AND json_extract(m.payload_json, '$.instanceName') IN (${names.map(sqlValue).join(", ")})
+ORDER BY m.sent_at DESC, m.id DESC;`);
+    const grouped = new Map(names.map((name) => [name, []]));
+    for (const row of rows) grouped.get(clean(row.instanceName))?.push(row);
+    return new Map([...grouped].map(([instanceName, events]) => {
+      const statuses = events.map((event) => normalizeMessageDeliveryStatus(event.deliveryStatus) || "UNKNOWN");
+      const failures = statuses.filter((status) => status === "ERROR").length;
+      const unknown = statuses.filter((status) => status === "UNKNOWN").length;
+      let consecutiveFailures = 0;
+      for (const status of statuses) {
+        if (!["ERROR", "UNKNOWN"].includes(status)) break;
+        consecutiveFailures += 1;
+      }
+      return [instanceName, {
+        instanceName,
+        since,
+        sinceHours: hours,
+        attempts: statuses.length,
+        serverAck: statuses.filter((status) => deliveryStatusRank(status) >= deliveryStatusRank("SERVER_ACK")).length,
+        delivered: statuses.filter((status) => deliveryStatusRank(status) >= deliveryStatusRank("DELIVERY_ACK")).length,
+        read: statuses.filter((status) => deliveryStatusRank(status) >= deliveryStatusRank("READ")).length,
+        failures,
+        unknown,
+        consecutiveFailures,
+      }];
+    }));
+  }
+
   // Refresh Campaign 的名单检查一次读取完整活动摘要。这里把人工发送与
   // Campaign blast 分开，因为人工跟进过的人不能再进入旧客重联批次。
   async function refreshActivity(phones) {
@@ -816,6 +918,8 @@ ON CONFLICT(key) DO UPDATE SET
     recentThread,
     sentFlowSince,
     sentBlastHistory,
+    campaignTouchActivity,
+    senderDeliveryMetrics,
     refreshActivity,
     inboxThreads,
     fullThread,

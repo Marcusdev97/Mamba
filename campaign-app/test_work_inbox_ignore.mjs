@@ -29,7 +29,8 @@ const settingsScript = settingsHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] |
 assert.doesNotThrow(() => new vm.Script(settingsScript), "Settings inline JavaScript must parse");
 assert.match(settingsHtml, /私人联系人 \/ 不进入工作 Inbox/);
 assert.match(settingsHtml, /class="card private-contacts-card"/);
-assert.match(settingsHtml, /\.private-contacts-card \{ order: 6; grid-column: 1 \/ -1; \}/);
+assert.match(settingsHtml, /\.safety-card \{ order: 3; grid-column: 1 \/ -1; \}/);
+assert.match(settingsHtml, /\.private-contacts-card \{ order: 7; grid-column: 1 \/ -1; \}/);
 assert.match(settingsHtml, /\/api\/settings\/work-inbox-ignore/);
 assert.match(settingsHtml, /示例不会自动加入名单/);
 assert.match(settingsScript, /私人联系人名单仍是空的/);

@@ -161,6 +161,10 @@ Application Services
 Select Project / Lead Group
         ↓
 Safety checks
+  ├── suppression / resend guard
+  ├── Consent evidence
+  ├── cross-Campaign contact budget
+  └── Sender Health circuit breaker
         ↓
 Prepare preview
         ↓
@@ -189,6 +193,12 @@ reference count。这个 lease 只能避免闲置睡眠，不能绕过 MacBook �
 Transport Guard 每 15 秒分别检查 Docker daemon、Evolution API 和本批实际 sender
 instance；连续两次异常会把 run 标为 `INTERRUPTED`。恢复连接后仍必须由操作员
 人工继续，系统不得自动重连号码或恢复发送。
+
+P0 Campaign Safety 由 `domain/campaign-safety.mjs` 保存纯判断，
+`lib/campaign-safety-service.mjs` 编排 SQLite、conversation ledger 与 Evolution
+instance 资料，`routes/campaign-safety.routes.mjs` 只提供验证过的设置入口。
+它会在新 LIVE、sender lane、Queue 接力、Resume 与 Retry 真正发送前重新检查。
+已经建立的 run snapshot、已发送 Part 和 SQLite 回执不会被 migration 改写。
 
 ### Refresh Campaign（RECYCLE）
 
@@ -244,6 +254,13 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 - 人工 LIVE 发送在最终启动前必须显示收件人风险确认：本批人数、本机已连接号码、
   Settings 私人联系人，以及 SQLite 中任何历史 Blast 记录。确认 token 绑定当前
   run 与实际未跳过的 recipient IDs；名单或风险资料改变后旧 token 立即失效。
+- 同一个确认 token 还绑定 Consent 与跨 Campaign 联系预算结果。`REVOKED` 永远
+  `BLOCK`；旧客户缺少 Consent 证据初次上线默认 `WARN`，操作员完成 evidence
+  backfill 后才可在 Settings 切到 `ENFORCE`。联系预算默认 7 天 2 批、30 天 5 批、
+  连续 3 批未回复即警告；切到 `ENFORCE` 后由后端阻止，前端确认不能绕过。
+- Sender Health 只使用含真实 `deliveryStatus` 的新出站证据。历史消息没有投递状态
+  不算失败或 `UNKNOWN`，不得因为上线新规则而误暂停号码。达到连续失败或比例阈值时
+  sender 写入 `PAUSED`，Queue 保持 HOLD；人工检查 WhatsApp 与 provider 后才可恢复。
 - Campaign sender policy 只限制出站发送；Tracker／Brain 必须接收本机 Evolution
   上所有 OPEN instances 的入站 webhook，避免辅助号码回复遗失。
 - 运行期间不得被维护任务重启、补发或改写状态。
@@ -277,6 +294,10 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 | 当前 run state | `campaign-data/runs` + SQLite | 用于恢复和诊断 |
 | TEST 收件人 | `.env` 的 `TEST_LEADS` | Settings 是编辑界面 |
 | 私人联系人名单 | `campaign-data/work_inbox_ignore.json` | 本机工作 Inbox 边界，不等于 suppression |
+| Consent evidence | SQLite `contact_permission_events` | Append-only；Grant／Revoke 不覆盖历史 |
+| Sender safety state | SQLite `sender_safety_state` | 熔断与人工恢复状态 |
+| Campaign safety audit | SQLite `campaign_safety_checks` | 每次 preflight 的 ALLOW／WARN／BLOCK 证据 |
+| P0 safety policy | `campaign-data/campaign_safety_policy.json` | Settings 编辑；不进入 Git |
 | Secret | `evolution-pilot/.env` | 不进入 Git |
 
 不要让同一种资料同时拥有两个可以互相覆盖的真相源。

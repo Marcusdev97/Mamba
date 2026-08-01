@@ -2,6 +2,7 @@ import { createRouter, json, notFound } from "../lib/http.mjs";
 import { registerBotRulesRoutes } from "../routes/bot-rules.routes.mjs";
 import { registerBrainLearningRoutes } from "../routes/brain-learning.routes.mjs";
 import { registerCampaignRoutes } from "../routes/campaign.routes.mjs";
+import { registerCampaignSafetyRoutes } from "../routes/campaign-safety.routes.mjs";
 import { registerConversationsRoutes } from "../routes/conversations.routes.mjs";
 import { registerInboxRoutes } from "../routes/inbox.routes.mjs";
 import { registerControlCenterRoutes } from "../routes/control-center.routes.mjs";
@@ -41,6 +42,7 @@ export function createApp(runtime) {
   registerBrainLearningRoutes(router);
   registerKnowledgeRoutes(router);
   registerCampaignRoutes(router);
+  registerCampaignSafetyRoutes(router);
   registerRefreshCampaignRoutes(router);
   registerNextFlowRoutes(router);
   registerConversationsRoutes(router);

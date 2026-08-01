@@ -13,6 +13,7 @@ import {
   sanitizeGoldenPii,
 } from "./lib/golden-conversation-ledger-service.mjs";
 import { migrateRuntimeSchema } from "../scripts/maintenance/migrate-v3-runtime-schema.mjs";
+import { RUNTIME_SCHEMA_PATCH_VERSION } from "./lib/v3-runtime-schema.mjs";
 
 function sqlite(databasePath, sql, json = false) {
   const args = ["-batch", ...(json ? ["-json"] : []), databasePath];
@@ -146,7 +147,7 @@ CREATE TABLE golden_conversations(
   conversation_hash TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 INSERT INTO golden_conversations VALUES('old:1',NULL,'BINASTRA','Viewing Push','legacy text','abc123','2026-01-01','2026-01-02');
-DELETE FROM schema_migrations WHERE version=301;
+DELETE FROM schema_migrations WHERE version=${RUNTIME_SCHEMA_PATCH_VERSION};
 PRAGMA foreign_keys=ON;
 `);
 const legacyMigration = migrateRuntimeSchema({
@@ -162,6 +163,7 @@ assert.equal(legacyStatus.migration.schemaReady, true);
 assert.equal(sqlite(legacyPath, "SELECT COUNT(*) FROM golden_conversations_legacy_v3;"), "1");
 assert.equal(sqlite(legacyPath, "SELECT COUNT(*) FROM golden_conversations WHERE lead_code LIKE 'LEGACY%';"), "1");
 assert.equal(sqlite(legacyPath, "PRAGMA user_version;"), "3");
+assert.equal(sqlite(legacyPath, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('contact_permission_events','sender_safety_state','campaign_safety_checks');"), "3");
 
 // Viewing Booked fields and manual-read decision trace are mandatory.
 assert.throws(() => normalizeGoldenConversation({

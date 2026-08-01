@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CAMPAIGN_SAFETY_SCHEMA_SQL,
   GOLDEN_CONVERSATION_SCHEMA_SQL,
   GOLDEN_FOLLOWUP_SCHEMA_SQL,
   INSTANCE_IDENTITY_SCHEMA_SQL,
@@ -38,6 +39,9 @@ function migrationPlan(binary, databasePath) {
   const lidColumns = tableColumns(binary, databasePath, "lid_map");
   const goldenColumns = tableColumns(binary, databasePath, "golden_conversations");
   const followupColumns = tableColumns(binary, databasePath, "followup_log");
+  const permissionColumns = tableColumns(binary, databasePath, "contact_permission_events");
+  const senderSafetyColumns = tableColumns(binary, databasePath, "sender_safety_state");
+  const safetyCheckColumns = tableColumns(binary, databasePath, "campaign_safety_checks");
   const applied = sqlite(
     binary,
     databasePath,
@@ -70,6 +74,9 @@ function migrationPlan(binary, databasePath) {
       lidMap: lidColumns.length ? "none" : "create",
       goldenConversations: goldenAction,
       followupLog: followupColumns.length ? "none" : "create",
+      contactPermissionEvents: permissionColumns.length ? "none" : "create",
+      senderSafetyState: senderSafetyColumns.length ? "none" : "create",
+      campaignSafetyChecks: safetyCheckColumns.length ? "none" : "create",
     },
   };
 }
@@ -107,6 +114,7 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated
     INSTANCE_IDENTITY_SCHEMA_SQL,
     LID_MAP_SCHEMA_SQL,
     GOLDEN_FOLLOWUP_SCHEMA_SQL,
+    CAMPAIGN_SAFETY_SCHEMA_SQL,
     `INSERT INTO schema_migrations(version, name, applied_at)
      VALUES (${RUNTIME_SCHEMA_PATCH_VERSION}, ${sqlText(RUNTIME_SCHEMA_PATCH_NAME)}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(version) DO UPDATE SET name=excluded.name;`,

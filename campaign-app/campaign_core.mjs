@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { campaignSenderSummary } from "./lib/campaign-notification.mjs";
+import { evolutionProviderFromInstance } from "./integrations/evolution/provider-normalizer.mjs";
 import {
   AUTO_SCHEDULE,
   campaignPacing,
@@ -409,6 +410,7 @@ export async function openInstances(api) {
     .map((item) => ({
       name: item.name ?? item?.instance?.instanceName,
       owner: String(item.ownerJid ?? item?.instance?.owner ?? "").split("@")[0].split(":")[0],
+      provider: evolutionProviderFromInstance(item),
     }))
     .filter((item) => item.name);
 }
@@ -423,7 +425,7 @@ export async function listInstances(api) {
     const owner = item?.ownerJid ?? item?.instance?.owner;
     const digits = String(owner ?? "").split("@")[0].split(":")[0].replace(/\D/g, "");
     const number = digits ? `+${digits}` : "Not connected";
-    return { name, status: String(status).toUpperCase(), number };
+    return { name, status: String(status).toUpperCase(), number, provider: evolutionProviderFromInstance(item) };
   });
 }
 

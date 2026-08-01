@@ -625,6 +625,55 @@ CREATE TABLE IF NOT EXISTS system_logs (
 
 CREATE INDEX IF NOT EXISTS idx_syslogs_time ON system_logs(at, level);
 
+-- P0 WhatsApp 安全：同意证据使用 append-only event ledger，撤回不会覆盖历史。
+CREATE TABLE IF NOT EXISTS contact_permission_events (
+  event_id TEXT PRIMARY KEY,
+  contact_key TEXT NOT NULL,
+  category TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('GRANTED','REVOKED')),
+  source_type TEXT NOT NULL,
+  source_reference TEXT NOT NULL DEFAULT '',
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  occurred_at TEXT NOT NULL,
+  expires_at TEXT,
+  recorded_by TEXT NOT NULL DEFAULT '',
+  recorded_at TEXT NOT NULL,
+  FOREIGN KEY (contact_key) REFERENCES contacts(contact_key) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_permission_contact_category
+  ON contact_permission_events(contact_key, category, occurred_at DESC, recorded_at DESC);
+
+-- Sender 熔断状态独立保存；没有人工恢复时，重启不能偷偷解除 PAUSED。
+CREATE TABLE IF NOT EXISTS sender_safety_state (
+  instance_name TEXT PRIMARY KEY,
+  state TEXT NOT NULL DEFAULT 'HEALTHY' CHECK (state IN ('HEALTHY','WARNING','PAUSED')),
+  reason_code TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  paused_at TEXT,
+  resumed_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+-- Preflight 结果使用稳定 check_id upsert，保留“为什么允许／警告／阻止”的证据。
+CREATE TABLE IF NOT EXISTS campaign_safety_checks (
+  check_id TEXT PRIMARY KEY,
+  scope_id TEXT NOT NULL,
+  contact_key TEXT NOT NULL DEFAULT '',
+  instance_name TEXT NOT NULL DEFAULT '',
+  check_type TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('ALLOW','WARN','BLOCK')),
+  code TEXT NOT NULL,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  checked_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_safety_scope
+  ON campaign_safety_checks(scope_id, check_type, outcome);
+CREATE INDEX IF NOT EXISTS idx_campaign_safety_contact
+  ON campaign_safety_checks(contact_key, checked_at DESC);
+
 -- Sync Worker 单例状态。
 CREATE TABLE IF NOT EXISTS sync_worker_state (
   id               TEXT PRIMARY KEY CHECK (id = 'singleton'),
@@ -664,6 +713,10 @@ ON CONFLICT(version) DO NOTHING;
 
 INSERT INTO schema_migrations(version, name, applied_at)
 VALUES (301, 'runtime-support-tables', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+ON CONFLICT(version) DO NOTHING;
+
+INSERT INTO schema_migrations(version, name, applied_at)
+VALUES (302, 'p0-campaign-safety', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 ON CONFLICT(version) DO NOTHING;
 
 INSERT INTO metadata(key, value, updated_at) VALUES
