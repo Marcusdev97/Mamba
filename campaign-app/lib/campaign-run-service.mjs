@@ -63,7 +63,8 @@ export function createCampaignRunService({
   function deferredNotionJob(state) {
     const runId = state?.runId || "";
     const flowLabel = state?.flowLabel || "";
-    const suffix = flowLabel ? "flow_advance" : "flow1_upload";
+    const isRefresh = state?.campaignType === "RECYCLE";
+    const suffix = isRefresh ? "refresh_sync" : flowLabel ? "flow_advance" : "flow1_upload";
     return {
       entityType: "campaign_run",
       entityId: runId,
@@ -74,15 +75,81 @@ export function createCampaignRunService({
         project: typeof state?.project === "string" ? state.project : state?.project?.name || "",
         flowLabel,
         autoAdvance: Boolean(flowLabel),
+        campaignType: state?.campaignType || "NEW",
         reason: "customer_checkpoint",
       },
     };
+  }
+
+  function localAssignment(state, job) {
+    const senderPhone = senderPhoneForInstance(state.instances, job.instanceName);
+    const sentAt = latestSentAt(job) || job.part1?.sentAt;
+    return {
+      phone: normalizePhone(job.lead?.phone),
+      name: job.lead?.name || "",
+      instanceName: job.instanceName || "",
+      senderPhone,
+      senderKey: buildSenderKey(state.deviceId, senderPhone),
+      part1SentAt: job.part1?.sentAt || null,
+      part2SentAt: job.part2?.sentAt || null,
+      sentAt,
+    };
+  }
+
+  async function checkpointRefreshCustomer(runner, job) {
+    const state = runner?.state;
+    const result = await localDatabase.recordRefreshCampaignProgress({
+      runId: state.runId,
+      projectCode: state.projectId || state.campaignId,
+      projectName: typeof state.project === "string" ? state.project : state.project?.name,
+      mode: state.mode,
+      runStatus: "RUNNING",
+      deviceId: state.deviceId || deviceIdentity.id || "",
+      startedAt: state.startAt || state.createdAt || null,
+      requestedCount: state.assignments.length,
+      failedCount: state.assignments.filter((item) => item?.status === "FAILED").length,
+      assignments: [localAssignment(state, job)],
+      notionSyncJob: deferredNotionJob(state),
+    });
+    if (Number(result.recorded || 0) !== 1) {
+      const error = new Error(`客户 ${job.lead?.name || job.lead?.phone || ""} 的 Refresh 发送证据没有完整写入，Campaign 已暂停。`);
+      error.code = "LOCAL_REFRESH_CHECKPOINT_INCOMPLETE";
+      throw error;
+    }
+    job.localCheckpoint = {
+      status: "SUCCEEDED",
+      flowLabel: "Refresh - Reconnect",
+      preservedFlow: true,
+      committedAt: new Date().toISOString(),
+    };
+    const completed = state.assignments.filter((item) => item?.localCheckpoint?.status === "SUCCEEDED").length;
+    state.localAdvance = {
+      status: state.assignments.some((item) => isResumableJobStatus(item.status)) ? "RUNNING" : "SUCCEEDED",
+      recorded: completed,
+      total: state.assignments.length,
+      flowLabel: "Refresh - Reconnect",
+      preservedFlow: true,
+      updatedAt: new Date().toISOString(),
+    };
+    state.notionSync = {
+      ...(state.notionSync || {}),
+      status: "WAITING",
+      stage: "queued",
+      message: "Refresh 已保存 SQLite；Notion 只会更新发送时间与号码，不推进 Flow。",
+      updatedAt: new Date().toISOString(),
+    };
+    await runner.saveState();
+    runner.pushLog?.(`SQLite 已保存 Refresh · ${job.lead?.name || job.lead?.phone}；客户原本 Flow 保持不变。`);
+    return { ...result, checkpoint: job.localCheckpoint };
   }
 
   async function checkpointCompletedCustomer(runner, job) {
     const state = runner?.state;
     if (!localDatabase || !state || state.mode !== "LIVE" || job?.status !== "SENT" || !job?.part1?.sentAt) {
       return { recorded: 0, reason: "not_completed_live_customer" };
+    }
+    if (state.campaignType === "RECYCLE") {
+      return checkpointRefreshCustomer(runner, job);
     }
     const flow = flowByLabel(state.flowLabel || state.templateFlow);
     const after = flow ? flowStateAfter(flow.key) : null;
@@ -162,6 +229,41 @@ export function createCampaignRunService({
   // already-contacted customers back into the old Flow.
   async function recordLocalFlowProgress(runner, sentFlow = null, nextState = null) {
     const state = runner?.state;
+    if (state?.campaignType === "RECYCLE") {
+      if (!localDatabase || state.mode !== "LIVE") return { recorded: 0, reason: "not_live_refresh_run" };
+      const assignments = (state.assignments || [])
+        .filter((job) => completedForFlow(state, job))
+        .map((job) => localAssignment(state, job));
+      const runStatus = state.status === "COMPLETED"
+        ? "COMPLETED"
+        : state.status === "FAILED"
+          ? "FAILED"
+          : state.status === "STOPPED" ? "STOPPED" : "PARTIAL";
+      const result = await localDatabase.recordRefreshCampaignProgress({
+        runId: state.runId,
+        projectCode: state.projectId || state.campaignId,
+        projectName: typeof state.project === "string" ? state.project : state.project?.name,
+        mode: state.mode,
+        runStatus,
+        deviceId: state.deviceId || deviceIdentity.id || "",
+        startedAt: state.startAt || state.createdAt || null,
+        finishedAt: state.endAt || null,
+        requestedCount: (state.assignments || []).length,
+        failedCount: (state.assignments || []).filter((job) => job?.status === "FAILED").length,
+        assignments,
+        notionSyncJob: deferredNotionJob(state),
+      });
+      state.localAdvance = {
+        status: "SUCCEEDED",
+        recorded: result.recorded || 0,
+        total: assignments.length,
+        flowLabel: "Refresh - Reconnect",
+        preservedFlow: true,
+        updatedAt: new Date().toISOString(),
+      };
+      await runner.saveState();
+      return result;
+    }
     const flow = sentFlow || flowByLabel(state?.flowLabel || state?.templateFlow);
     const after = nextState || (flow ? flowStateAfter(flow.key) : null);
     if (!localDatabase || !state || state.mode !== "LIVE" || !flow || !after) {
@@ -443,7 +545,7 @@ export function createCampaignRunService({
   }
 
   async function autoNotionUpload(runner, { allowPartial = false } = {}) {
-    if (!runner?.runPath || runner?.state?.mode !== "LIVE" || runner.state.flowLabel) {
+    if (!runner?.runPath || runner?.state?.mode !== "LIVE" || runner.state.flowLabel || runner.state.campaignType === "RECYCLE") {
       return null;
     }
     const pending = (runner.state.assignments || []).filter((job) => isResumableJobStatus(job.status)).length;
@@ -549,6 +651,90 @@ export function createCampaignRunService({
     }
   }
 
+  async function syncRefreshCampaignToNotion(runner) {
+    const state = runner?.state;
+    if (!state || state.mode !== "LIVE" || state.campaignType !== "RECYCLE") return null;
+    const jobs = (state.assignments || []).filter((job) => completedForFlow(state, job));
+    let synced = 0;
+    let notFound = 0;
+    await saveNotionSync(runner, {
+      status: "RUNNING",
+      stage: "refresh",
+      message: "正在同步 Refresh 发送证据；客户原本 Flow 不会改变。",
+      startedAt: new Date().toISOString(),
+      error: null,
+      progress: { status: "RUNNING", current: 0, total: jobs.length, currentItem: null },
+    });
+    try {
+      for (const job of jobs) {
+        const phone = normalizePhone(job.lead?.phone);
+        let id = pageId(job.lead?.id);
+        if (!id) {
+          const query = await notion("POST", `/databases/${blastDatabaseId}/query`, {
+            filter: {
+              and: [
+                { property: "Phone", phone_number: { equals: phone } },
+                { property: "Project", select: { equals: typeof state.project === "string" ? state.project : state.project?.name || "" } },
+              ],
+            },
+            page_size: 1,
+          });
+          id = pageId(query?.results?.[0]?.id);
+        }
+        if (!id) {
+          notFound += 1;
+        } else {
+          const sentAt = latestSentAt(job) || job.part1?.sentAt;
+          const senderPhone = senderPhoneForInstance(state.instances, job.instanceName);
+          const senderKey = buildSenderKey(state.deviceId, senderPhone);
+          const properties = {
+            "Last Blast At": { date: { start: sentAt } },
+            "Sender Instance": { select: { name: job.instanceName || "Unknown" } },
+            "Campaign Run ID": { rich_text: [{ text: { content: state.runId || "" } }] },
+          };
+          if (senderKey) {
+            properties["Assigned Sender Key"] = { rich_text: [{ text: { content: senderKey } }] };
+            properties["Last Sender Key"] = { rich_text: [{ text: { content: senderKey } }] };
+          }
+          if (senderPhone) properties["Last Sender Phone"] = { phone_number: senderPhone };
+          if (state.deviceId) properties["Last Sent By Device"] = { rich_text: [{ text: { content: state.deviceId } }] };
+          await notion("PATCH", `/pages/${id}`, { properties });
+          synced += 1;
+        }
+        await saveNotionSync(runner, {
+          progress: {
+            status: "RUNNING",
+            current: synced + notFound,
+            total: jobs.length,
+            currentItem: { name: job.lead?.name || phone, phone, outcome: id ? "SYNCED" : "NOT_FOUND" },
+          },
+        });
+      }
+      if (notFound) throw new Error(`${notFound} 位 Refresh 客户找不到 Notion page；SQLite 发送证据仍然安全。`);
+      await saveNotionSync(runner, {
+        status: "SUCCEEDED",
+        message: `Refresh 已同步 ${synced} 位；客户原本 Flow 保持不变。`,
+        finishedAt: new Date().toISOString(),
+        progress: { status: "SUCCEEDED", current: synced, total: jobs.length, finishedAt: new Date().toISOString() },
+      });
+      return runner.state.notionSync;
+    } catch (error) {
+      await saveNotionSync(runner, {
+        status: "FAILED",
+        message: "Refresh Notion 同步失败；发送证据已保存在 SQLite，可安全重试。",
+        error: error.message,
+        finishedAt: new Date().toISOString(),
+        progress: {
+          ...(runner.state.notionSync?.progress || {}),
+          status: "FAILED",
+          error: error.message,
+          finishedAt: new Date().toISOString(),
+        },
+      });
+      throw error;
+    }
+  }
+
   async function recoverPendingUpdates(runner) {
     const state = runner?.state;
     if (!state || state.mode !== "LIVE" || state.status !== "COMPLETED") {
@@ -581,7 +767,9 @@ export function createCampaignRunService({
     await runner.saveState();
     return {
       recovered: true,
-      kind: state.flowLabel ? "flow-advance-queued" : "flow-1-upload-queued",
+      kind: state.campaignType === "RECYCLE"
+        ? "refresh-sync-queued"
+        : state.flowLabel ? "flow-advance-queued" : "flow-1-upload-queued",
       status: "WAITING",
       recorded: local.recorded || 0,
     };
@@ -660,6 +848,7 @@ export function createCampaignRunService({
     checkpointCompletedCustomer,
     autoAdvanceFlow,
     autoNotionUpload,
+    syncRefreshCampaignToNotion,
     recoverPendingUpdates,
     incPageNumber,
     creditSentCounts,

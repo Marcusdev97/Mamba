@@ -102,6 +102,19 @@ assert.equal(await runner.recentSendSkip(job("60111000222")), null, "30 天前�
 const longCooldown = runnerWith({ delivery: { resendCooldownDays: 60 } });
 assert.ok(await longCooldown.recentSendSkip(job("60111000222")), "冷却期拉到 60 天就该挡住那笔 30 天前的");
 
+const refreshRunner = runnerWith();
+refreshRunner.state = {
+  mode: "LIVE",
+  campaignType: "RECYCLE",
+  templateFlow: "Refresh - Reconnect",
+  refreshCooldownDays: 30,
+  campaignId: "binastra",
+};
+assert.ok(
+  await refreshRunner.recentSendSkip(job("60111000111")),
+  "Refresh cooldown must block any recent outbound message, not only the Refresh flow topic",
+);
+
 // --- 关掉冷却 -> 整道闸停用 ---
 const off = runnerWith({ delivery: { resendCooldownDays: 0 } });
 assert.equal(off.resendCooldownDays(), 0, "设成 0 = 停用这道闸");

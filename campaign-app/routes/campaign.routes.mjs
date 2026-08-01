@@ -4,6 +4,8 @@ import {
   isCampaignResumeCandidate,
   isRecipientNotOnWhatsAppError,
   isResumableJobStatus,
+  restoreTimeWindowResumeJob,
+  startCampaignResumeSession,
 } from "../campaign_core.mjs";
 import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner-registry.mjs";
 import { campaignExecutionLease } from "../lib/campaign-execution-lease.mjs";
@@ -283,10 +285,11 @@ async function restoreQueuedRunner(campaign, item) {
 async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error } = {}) {
   const runId = runner?.state?.runId;
   if (!runtime.notionOutbox || !runId) return;
+  const isRefresh = runner.state?.campaignType === "RECYCLE";
   await runtime.notionOutbox.enqueue({
     entityType: "campaign_run",
     entityId: runId,
-    idempotencyKey: `LOCAL_TO_NOTION:campaign_run:${runId}:${autoAdvance ? "flow_advance" : "flow1_upload"}`,
+    idempotencyKey: `LOCAL_TO_NOTION:campaign_run:${runId}:${isRefresh ? "refresh_sync" : autoAdvance ? "flow_advance" : "flow1_upload"}`,
     payload: {
       runId,
       projectId: runner.state?.projectId ?? runner.state?.campaignId ?? "",
@@ -295,6 +298,7 @@ async function queueNotionFinalise(runtime, runner, { reason, autoAdvance, error
       // 真正决定走哪条路的是重试当下的 run 状态，不是这里存的值。
       flowLabel: runner.state?.flowLabel ?? "",
       autoAdvance: Boolean(autoAdvance),
+      campaignType: runner.state?.campaignType || "NEW",
       reason: reason ?? "",
       lastError: error?.message ?? "",
     },
@@ -515,6 +519,15 @@ export function registerCampaignRoutes(router) {
       throw httpError(400, "没有处于 OPEN 状态的 WhatsApp 号码，无法发送。请到 Settings 重新扫码或检查 Phone Health。");
     }
     const instances = selectedOpenInstances(open, body.instances);
+    let pacingSelection = null;
+    if (runtime.campaignMode?.applyToConfig) {
+      try {
+        pacingSelection = await runtime.campaignMode.applyToConfig(config, instances.map((item) => item.name));
+        config = pacingSelection.config;
+      } catch (error) {
+        throw httpError(error.statusCode || 500, `读取发送节奏失败: ${error.message}`);
+      }
+    }
     const leads = selectLeads(campaign, project, mode, body);
     const preparingBehindActiveRun = Boolean(conflictingRunner(campaign, instances.map((item) => item.name), null, {
       ignoreReadyPreviews: true,
@@ -528,10 +541,27 @@ export function registerCampaignRoutes(router) {
       runner.state.projectId = project.id;
       runner.state.deviceId = campaign.device?.id || "";
       runner.state.deviceName = campaign.device?.name || "";
+      runner.state.campaignMode = pacingSelection?.mode || config.campaignMode || null;
+      runner.state.campaignModeByInstance = config.campaignModeByInstance || Object.fromEntries(
+        (pacingSelection?.settings || []).map((item) => [item.instance, {
+          mode: item.mode,
+          contactGapSeconds: item.contactGapSeconds,
+        }]),
+      );
+      if (mode === "TEST" && body.campaignType === "RECYCLE") {
+        runner.state.campaignType = "RECYCLE";
+        runner.state.templateFlow = campaign.refreshTemplateFlow;
+      }
       if (mode === "LIVE") {
         const cache = campaign.getLeadsCache();
         runner.state.leadGroupId = cache?.leadGroupId || "";
         runner.state.leadGroupName = cache?.leadGroupName || "";
+        runner.state.campaignType = cache?.campaignType || "NEW";
+        if (cache?.campaignType === "RECYCLE") {
+          runner.state.refreshCooldownDays = cache.refreshCooldownDays;
+          runner.state.refreshPreviewToken = cache.refreshPreviewToken || "";
+          runner.state.templateFlow = cache.templateFlow || campaign.refreshTemplateFlow;
+        }
       }
     } catch (error) {
       throw httpError(500, `生成 campaign 预览失败: ${error.message}`);
@@ -539,13 +569,14 @@ export function registerCampaignRoutes(router) {
     try {
       await campaign.applyNotionFlowTemplatesToState(runner.state, {
         projectName: project.name,
-        flow: campaign.firstFlowLabel,
+        flow: runner.state.templateFlow || campaign.firstFlowLabel,
         markFlowRun: false,
         credit: false,
       });
       runner.refreshAutoScheduleEstimate();
     } catch (error) {
-      throw httpError(502, `读取或套用 Notion Flow 1 模板失败: ${error.message}`);
+      const label = runner.state?.campaignType === "RECYCLE" ? campaign.refreshTemplateFlow : "Flow 1";
+      throw httpError(502, `读取或套用 Notion ${label} 模板失败: ${error.message}`);
     }
     try {
       await runner.saveState();
@@ -575,6 +606,13 @@ export function registerCampaignRoutes(router) {
     const runner = await resolveStartRunner(campaign, body);
     ensureRunnableStart(runner, body);
     if (runner.state.mode === "LIVE") {
+      if (runner.state.campaignType === "RECYCLE") {
+        try {
+          await campaign.refreshCampaign.assertPreparedRunner(runner);
+        } catch (error) {
+          throw httpError(409, error.message, { code: error.code || "REFRESH_RECIPIENT_CHECK_FAILED" });
+        }
+      }
       const risk = await analyzePreparedRecipientRisk(campaign, runner, body.skipIds);
       if (!campaign.recipientRisk.matchesConfirmation(risk, body.recipientRiskToken)) {
         throw httpError(
@@ -617,7 +655,13 @@ export function registerCampaignRoutes(router) {
     }
 
     try {
-      campaign.assertFirstConsoleRunUsesFlow1Only(runner.config, runner.state);
+      if (runner.state.campaignType === "RECYCLE") {
+        if (runner.state.templateFlow !== campaign.refreshTemplateFlow) {
+          throw new Error(`Refresh Campaign 只允许使用「${campaign.refreshTemplateFlow}」模板。`);
+        }
+      } else {
+        campaign.assertFirstConsoleRunUsesFlow1Only(runner.config, runner.state);
+      }
     } catch (error) {
       throw httpError(400, `模板安全检查失败: ${error.message}`);
     }
@@ -680,6 +724,9 @@ export function registerCampaignRoutes(router) {
     markNotionSyncWaiting(runner);
     const autoAdvance = markFlowAdvanceWaiting(runner);
     for (const job of resumeJobs) {
+      // A fixed window is an execution boundary, not a permanent customer outcome.
+      // Explicit Continue opens a new recovery window while sent Part evidence stays intact.
+      restoreTimeWindowResumeJob(job);
       const partNumber = Number(job.manualContinuePart || 0);
       const unknownPartNumber = firstUnsentPartNumber(job);
       const previousAttempt = job.sendAttempts?.[`part${unknownPartNumber}`]?.at?.(-1);
@@ -690,11 +737,7 @@ export function registerCampaignRoutes(router) {
       job.manualPartAllowedThrough = Math.max(Number(job.manualPartAllowedThrough || 0), partNumber);
       job.manualContinuePart = null;
     }
-    runner.state.resumeSession = {
-      startedAt: new Date().toISOString(),
-      total: remaining,
-      jobIds: resumeJobs.map((job) => job.id),
-    };
+    runner.state.resumeSession = startCampaignResumeSession(runner.state, resumeJobs);
     runner.pushLog(`继续上一轮：当前待继续 ${remaining} 位；本次进度从 0/${remaining} 开始，历史发送记录保留。`);
     await runner.saveState();
 
@@ -745,11 +788,7 @@ export function registerCampaignRoutes(router) {
     });
     markNotionSyncWaiting(runner);
     const autoAdvance = markFlowAdvanceWaiting(runner);
-    runner.state.resumeSession = {
-      startedAt: new Date().toISOString(),
-      total: queued,
-      jobIds: failedJobs.map((job) => job.id),
-    };
+    runner.state.resumeSession = startCampaignResumeSession(runner.state, failedJobs);
     runner.pushLog(`继续发送异常：本次进度从 0/${queued} 开始；已成功的客户与 Part 不会重发。`);
     await runner.saveState();
 
@@ -849,12 +888,18 @@ export function registerCampaignRoutes(router) {
   router.post("/api/campaign/mode", async (req, res, runtime) => {
     if (!runtime.campaignMode) throw httpError(503, "发送模式功能尚未启用。", "CAMPAIGN_MODE_UNAVAILABLE");
     const body = await readJson(req);
-    await runtime.campaignMode.setMode(String(body?.instance || ""), String(body?.mode || ""));
+    await runtime.campaignMode.setMode(
+      String(body?.instance || ""),
+      String(body?.mode || ""),
+      { customGapSeconds: body?.customGapSeconds },
+    );
     const names = await onlineInstanceNames(runtime);
     json(res, 200, {
       ok: true,
       ...(await runtime.campaignMode.snapshot(names)),
-      message: `号码 ${String(body?.instance || "").trim()} 的发送模式已设为「${String(body?.mode || "")}」。`,
+      message: String(body?.mode || "") === "custom"
+        ? `号码 ${String(body?.instance || "").trim()} 已使用自定义客户间隔。`
+        : `号码 ${String(body?.instance || "").trim()} 的发送模式已设为「${String(body?.mode || "")}」。`,
     });
   });
 
@@ -868,8 +913,12 @@ export function registerCampaignRoutes(router) {
     const body = await readJson(req);
     const instanceName = String(body?.instance || "").trim();
     const sendMode = body?.mode === "LIVE" ? "LIVE" : "TEST";
-    const paceKey = String(body?.pace || "normal").trim() || "normal";
     if (!instanceName) throw httpError(400, "缺少号码，无法启动车道。", "LANE_INSTANCE_REQUIRED");
+    if (!runtime.campaignMode?.getSetting) {
+      throw httpError(503, "发送节奏服务尚未启用，车道不会使用未经验证的临时间隔。", "CAMPAIGN_MODE_UNAVAILABLE");
+    }
+    const paceSetting = await runtime.campaignMode.getSetting(instanceName);
+    const paceKey = paceSetting.mode;
 
     const { project, config } = await campaign.getProject(body.project);
 
@@ -916,8 +965,9 @@ export function registerCampaignRoutes(router) {
     const conflict = conflictingRunner(campaign, [instanceName], null, { ignoreReadyPreviews: true });
     if (conflict) throw httpError(409, `号码 ${instanceName} 已经在跑另一批 Campaign：${conflict.state?.runId}`, "LANE_BUSY");
 
-    // 套上这个号码的节奏（crazy 20-30s / 普通 45-75s / 保守 90-150s）。
-    const lanedConfig = applyModeDelivery(config, paceKey);
+    // 节奏只从中央 campaign-mode service 读取。Request body 不可临时覆盖，
+    // 否则 UI、Scheduler 和实际 runner 会出现三份不同的业务规则。
+    const lanedConfig = applyModeDelivery(config, paceKey, paceSetting.customGapSeconds);
     const { startAt, endAt, scheduleMode } = resolveSchedule(campaign, lanedConfig, body, leads.length);
 
     const runner = campaign.createRunner(lanedConfig);
@@ -929,6 +979,9 @@ export function registerCampaignRoutes(router) {
       runner.state.deviceId = campaign.device?.id || "";
       runner.state.deviceName = campaign.device?.name || "";
       runner.state.campaignMode = paceKey;
+      runner.state.campaignModeByInstance = {
+        [instanceName]: { mode: paceKey, contactGapSeconds: paceSetting.contactGapSeconds },
+      };
       runner.state.laneInstance = instanceName;
       if (sendMode === "LIVE") { runner.state.leadGroupId = leadGroupId; runner.state.leadGroupName = leadGroupName; }
     } catch (error) {
@@ -956,6 +1009,7 @@ export function registerCampaignRoutes(router) {
       instance: instanceName,
       mode: sendMode,
       pace: paceKey,
+      contactGapSeconds: paceSetting.contactGapSeconds,
       leadCount: leads.length,
       leadGroupName,
       snapshot: runner.snapshot(),

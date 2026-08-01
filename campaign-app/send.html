@@ -6,31 +6,40 @@
 <title>发送台 · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
 <style>
-  /* 发送台壳: 一个 program、两个 tab。每个 tab 承载现有页面 (iframe),
-     切换时两边都保持活着 — 正在跑的 blast 进度不会因为切 tab 而丢。
-     真正的 DOM 级合并等这个壳跑稳后再做 (两页 element id 有冲突, 硬合高风险)。 */
+  /* 发送台壳保留现有 iframe 生命周期，避免切换工作区时重建正在使用的表单。
+     Flow 1 与 Flow 2–10 在 UI 上属于同一个 Campaign workspace；监控独立成页。 */
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; background: var(--bg, #0b1120); }
-  .sendbar {
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 10px 18px; border-bottom: 1px solid var(--line, #1f2a3d);
-    background: var(--panel, #0f172a);
+  .campaign-page-head {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    gap: 24px; padding: 22px 28px 18px; border-bottom: 1px solid var(--line, #1f2a3d);
+    background: linear-gradient(180deg, rgba(24, 27, 33, .98), rgba(13, 18, 27, .98));
   }
-  .sendbar h1 { margin: 0; font-size: 17px; color: var(--text, #e2e8f0); }
-  .tabs { display: flex; gap: 8px; margin-left: 8px; }
+  .campaign-page-copy { min-width: 240px; }
+  .campaign-page-kicker {
+    color: #38bdf8; font-size: 10px; font-weight: 850; letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .campaign-page-copy h1 { margin: 5px 0 3px; color: var(--text, #e2e8f0); font-size: 25px; letter-spacing: -.02em; }
+  .campaign-page-copy p { margin: 0; color: #718096; font-size: 12px; line-height: 1.5; }
+  .campaign-page-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .tab {
-    padding: 8px 18px; border-radius: 10px; border: 1px solid var(--line, #334155);
-    background: transparent; color: var(--muted, #94a3b8); cursor: pointer;
-    font-weight: 700; font-size: 13.5px; font-family: inherit;
+    padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line, #334155);
+    background: #11161f; color: var(--muted, #94a3b8); cursor: pointer;
+    font-weight: 750; font-size: 12px; font-family: inherit;
   }
-  .tab.active { background: var(--panel-2, #1e293b); color: var(--text, #e2e8f0); border-color: #38bdf8; }
+  .tab:hover { border-color: #475569; color: #e2e8f0; }
+  .tab.active { background: rgba(14, 165, 233, .09); color: #e0f2fe; border-color: #0ea5e9; }
   .tab .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; margin-right: 7px; vertical-align: 1px; opacity: 0; }
   .tab.running .dot { opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .25; } }
-  .spacer { flex: 1; }
-  .sendbar a { color: var(--muted, #94a3b8); text-decoration: none; font-size: 13px; }
-  .sendbar a:hover { color: var(--text, #e2e8f0); }
-
+  .tab-count {
+    display: inline-grid; place-items: center; min-width: 18px; margin-left: 7px;
+    padding: 1px 5px; border-radius: 999px; background: #163524; color: #4ade80;
+    font-size: 10px; line-height: 16px;
+  }
+  .tab-count.hidden { display:none; }
   /* 发送模式 —— 这台电脑的号码用什么节奏发 */
   .mode-pill {
     display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
@@ -42,6 +51,7 @@
   .mode-pill.mode-conservative { border-color: #3f6212; }
   .mode-pill.mode-normal { border-color: #0e7490; }
   .mode-pill.mode-crazy { border-color: #b91c1c; }
+  .mode-pill.mode-custom { border-color: #7c3aed; }
   .mode-pill .mode-emoji { font-size: 15px; }
   .mode-pill .mode-sub { color: var(--muted, #94a3b8); font-weight: 500; font-size: 11.5px; }
   .mode-pill .mode-caret { color: var(--muted, #64748b); font-size: 10px; }
@@ -52,7 +62,7 @@
   }
   .mode-pop.hidden { display: none; }
   .mode-sheet {
-    width: min(560px, calc(100vw - 48px)); padding: 22px;
+    width: min(640px, calc(100vw - 48px)); padding: 22px;
     border: 1px solid #334155; border-radius: 12px; background: #111827;
     color: #e5e7eb; box-shadow: 0 24px 70px rgba(0, 0, 0, .5);
   }
@@ -68,6 +78,7 @@
   .mode-number-cur.mode-conservative { border-color: #3f6212; color: #a3e635; }
   .mode-number-cur.mode-normal { border-color: #0e7490; color: #38bdf8; }
   .mode-number-cur.mode-crazy { border-color: #b91c1c; color: #fca5a5; }
+  .mode-number-cur.mode-custom { border-color: #7c3aed; color: #c4b5fd; }
   .mode-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .mode-choice {
     display: grid; gap: 2px; justify-items: center; padding: 11px 8px; cursor: pointer;
@@ -81,6 +92,30 @@
   .mode-choice.selected.normal { border-color: #38bdf8; background: #0e1a2b; }
   .mode-choice.selected.crazy { border-color: #ef4444; background: #1c1113; }
   .mode-choice.selected .mc2-label { color: #fff; }
+  .mode-custom {
+    display: grid; grid-template-columns: minmax(0, 1fr) 94px 18px 94px auto;
+    gap: 9px; align-items: end; margin-top: 10px; padding: 11px;
+    border: 1px solid #334155; border-radius: 8px; background: #111827;
+  }
+  .mode-custom.active { border-color: #7c3aed; background: #17122a; }
+  .mode-custom-copy strong { display: block; color: #e2e8f0; font-size: 12.5px; }
+  .mode-custom-copy span { display: block; margin-top: 3px; color: #7c8aa0; font-size: 10.5px; line-height: 1.4; }
+  .mode-custom label { display: grid; gap: 4px; color: #94a3b8; font-size: 10px; }
+  .mode-custom input {
+    width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 9px;
+    border: 1px solid #334155; border-radius: 7px; background: #0b1220;
+    color: #f8fafc; font: inherit; font-size: 12.5px;
+  }
+  .mode-custom-sep { align-self: center; color: #64748b; text-align: center; }
+  .mode-custom button {
+    padding: 9px 12px; border: 1px solid #7c3aed; border-radius: 7px;
+    background: #5b21b6; color: #fff; font: inherit; font-size: 11.5px;
+    font-weight: 800; cursor: pointer; white-space: nowrap;
+  }
+  @media (max-width: 680px) {
+    .mode-custom { grid-template-columns: 1fr 1fr 18px 1fr; }
+    .mode-custom-copy, .mode-custom button { grid-column: 1 / -1; }
+  }
   .mode-warn { margin-top: 14px; padding: 11px 13px; border-radius: 8px; background: #2a1517; color: #fca5a5; font-size: 12.5px; line-height: 1.55; }
   .mode-note { margin-top: 14px; color: #64748b; font-size: 11.5px; line-height: 1.5; }
   .monitor-toggle {
@@ -117,8 +152,30 @@
     background: #1f2937; color: #e5e7eb; font: inherit; cursor: pointer; white-space: nowrap;
   }
   .queuebar button.danger { border-color: #7f1d1d; color: #fca5a5; }
+  .monitor-page {
+    flex: 1 1 auto; min-height: 0; overflow: auto; background: #090e15;
+  }
+  .monitor-page.hidden { display: none; }
+  .monitor-page-head {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 15px 18px; border-bottom: 1px solid #1f2a3d; background: #0d131c;
+  }
   .campaign-monitors { display: grid; border-bottom: 1px solid var(--line, #1f2a3d); background: #0b1018; }
   .campaign-monitors.collapsed { display: none; }
+  .campaign-monitors[hidden], .monitor-detail.hidden, .monitor-toggle.hidden { display:none; }
+  .monitor-detail {
+    margin:18px; overflow:hidden; border:1px solid #26354a; border-radius:12px;
+    background:#0d131c; box-shadow:0 14px 34px rgba(0,0,0,.18);
+  }
+  .monitor-detail-head {
+    display:flex; align-items:center; justify-content:space-between; gap:18px;
+    padding:13px 18px; border-bottom:1px solid #26354a; background:#111927;
+  }
+  .monitor-detail-head strong { color:#f1f5f9; font-size:14px; }
+  .monitor-detail-head span { color:#7c8aa0; font-size:11.5px; text-align:right; }
+  .monitor-detail iframe {
+    display:block; width:100%; min-height:180px; border:0; background:#090e15;
+  }
   .campaign-monitor {
     display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(300px, 2fr);
     gap: 18px; padding: 12px 18px; border-bottom: 1px solid #1b2636;
@@ -247,11 +304,31 @@
     .sync-dock-head { grid-template-columns: 1fr auto; }
     .sync-now { grid-column: auto; justify-self: stretch; }
   }
-  .frames { flex: 1; position: relative; }
+  .frames { flex: 1; position: relative; min-height: 0; }
+  .frames.hidden { display: none; }
+  .campaign-planner-nav {
+    position:absolute; inset:0 0 auto; z-index:4; min-height:64px; box-sizing:border-box;
+    display:flex; align-items:center; justify-content:space-between; gap:18px;
+    padding:11px 22px; border-bottom:1px solid #26354a; background:#0d131c;
+  }
+  .campaign-planner-nav.hidden { display:none; }
+  .campaign-planner-copy { min-width:0; }
+  .campaign-planner-copy strong { display:block; color:#f1f5f9; font-size:13.5px; }
+  .campaign-planner-copy span { display:block; margin-top:3px; color:#7c8aa0; font-size:11.5px; }
+  .campaign-plan-switch { display:flex; gap:7px; flex:0 0 auto; }
+  .campaign-plan-switch button {
+    padding:7px 12px; border:1px solid #334155; border-radius:8px; background:#111827;
+    color:#94a3b8; font:inherit; font-size:11.5px; font-weight:800; cursor:pointer;
+  }
+  .campaign-plan-switch button:hover { border-color:#475569; color:#f8fafc; }
+  .campaign-plan-switch button.active { border-color:#0ea5e9; background:#0d2130; color:#e0f2fe; }
+  .campaign-plan-switch button.running::before { content:""; display:inline-block; width:6px; height:6px; margin-right:6px; border-radius:50%; background:#38bdf8; }
   .frames iframe {
     position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
     background: transparent;
   }
+  .frames #frame-flow1,
+  .frames #frame-next { top:64px; height:calc(100% - 64px); }
   .frames iframe.hidden { visibility: hidden; pointer-events: none; }
   .sync-overlay {
     position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
@@ -286,40 +363,60 @@
   }
   .sync-actions button.primary { border-color: #16a34a; background: #16a34a; color: #04130a; }
   .sync-actions button:disabled { opacity: .55; cursor: wait; }
+  @media (max-width: 760px) {
+    .campaign-page-head { align-items: flex-start; flex-direction: column; padding: 16px 14px; }
+    .campaign-page-actions { width: 100%; justify-content: flex-start; }
+    .tabs { width: 100%; justify-content: flex-start; overflow-x: auto; flex-wrap: nowrap; }
+    .tab { flex: 0 0 auto; padding: 7px 12px; }
+    .monitor-page-head { padding: 12px; }
+    .monitor-detail { margin:12px; }
+    .monitor-detail-head { align-items:flex-start; flex-direction:column; gap:4px; }
+    .monitor-detail-head span { text-align:left; }
+    .campaign-planner-nav { align-items:flex-start; flex-direction:column; gap:8px; min-height:96px; padding:10px 12px; }
+    .campaign-plan-switch { width:100%; }
+    .campaign-plan-switch button { flex:1; }
+    .frames #frame-flow1,
+    .frames #frame-next { top:96px; height:calc(100% - 96px); }
+  }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
 </head>
 <body>
-  <div class="sendbar">
-    <h1>📣 发送台</h1>
-    <div class="tabs">
-      <button class="tab active" id="tab-flow1" onclick="show('flow1')"><span class="dot"></span>① Flow 1 · 新名单群发</button>
-      <button class="tab" id="tab-next" onclick="show('next')"><span class="dot"></span>② Flow 2-10 · 跟进</button>
-      <button class="tab" id="tab-lanes" onclick="show('lanes')"><span class="dot"></span>🎚️ 多号码并行</button>
+  <header class="campaign-page-head">
+    <div class="campaign-page-copy">
+      <div class="campaign-page-kicker">Campaign Center</div>
+      <h1 id="workspaceTitle">📣 Campaign Center</h1>
+      <p id="workspaceSubtitle">新名单与 Flow 2–10 在同一个发送工作区。</p>
     </div>
-    <button type="button" class="mode-pill mode-normal" id="modePill" title="这台电脑的发送节奏">
-      <span class="mode-emoji" id="modePillEmoji">🐍</span>
-      <span><span id="modePillLabel">普通</span> <span class="mode-sub" id="modePillSub">45-75s</span></span>
-      <span class="mode-caret">▾</span>
-    </button>
-    <div class="spacer"></div>
-    <div class="queuebar hidden" id="queueBar">
-      <strong id="queueCount"></strong>
-      <span id="queueDetail"></span>
-      <button type="button" class="hidden" id="queueRelease">确认后启动</button>
-      <button type="button" class="danger" id="queueCancel">取消下一批</button>
+    <div class="campaign-page-actions">
+      <div class="tabs" aria-label="Campaign Center pages">
+        <button class="tab active" id="tab-campaign" onclick="show('campaign')"><span class="dot"></span>Campaign 安排</button>
+        <button class="tab" id="tab-lanes" onclick="show('lanes')"><span class="dot"></span>多号码并行</button>
+        <button class="tab" id="tab-monitor" onclick="show('monitor')"><span class="dot"></span>发送监控<span class="tab-count hidden" id="monitorTabCount">0</span></button>
+      </div>
+      <button type="button" class="mode-pill mode-normal" id="modePill" title="每个号码各自设置发送节奏">
+        <span class="mode-emoji" id="modePillEmoji">🐍</span>
+        <span>发送模式 · <span id="modePillLabel">普通</span> <span class="mode-sub" id="modePillSub">45-75s</span></span>
+        <span class="mode-caret">▾</span>
+      </button>
     </div>
-    <button type="button" class="monitor-toggle" id="monitorToggle" aria-controls="campaignMonitors" aria-expanded="true">
-      <span class="monitor-chevron">▴</span>
-      <span id="monitorToggleLabel">收起进度</span>
-      <span class="monitor-count" id="monitorCount">0</span>
-    </button>
-    <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已隐藏</button>
-    <button type="button" class="monitor-restore hidden" id="monitorClearDone" title="把所有已结束的 campaign 从清单移除；发送纪录仍会保留">移除已结束</button>
-    <a href="/knowledge">🧠 脑编辑器</a>
-    <a href="/bot-rules">Bot Rules</a>
-    <a href="/settings">Settings</a>
-  </div>
+  </header>
+  <section class="monitor-page hidden" id="monitorPage" aria-label="Campaign monitor page">
+    <div class="monitor-page-head">
+      <div class="queuebar hidden" id="queueBar">
+        <strong id="queueCount"></strong>
+        <span id="queueDetail"></span>
+        <button type="button" class="hidden" id="queueRelease">确认后启动</button>
+        <button type="button" class="danger" id="queueCancel">取消下一批</button>
+      </div>
+      <button type="button" class="monitor-toggle hidden" id="monitorToggle" aria-controls="campaignMonitors" aria-expanded="true">
+        <span class="monitor-chevron">▴</span>
+        <span id="monitorToggleLabel">收起进度</span>
+        <span class="monitor-count" id="monitorCount">0</span>
+      </button>
+      <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已隐藏</button>
+      <button type="button" class="monitor-restore hidden" id="monitorClearDone" title="把所有已结束的 campaign 从清单移除；发送纪录仍会保留">移除已结束</button>
+    </div>
   <section class="sync-dock" id="syncDock" aria-live="polite" aria-label="SQLite and Notion sync progress">
     <div class="sync-dock-head">
       <div class="sync-dock-title">资料同步进度</div>
@@ -343,10 +440,28 @@
     </div>
     <button type="button" class="sync-now" id="syncDockNow">⟳ 同步已完成资料</button>
   </section>
-  <section class="campaign-monitors" id="campaignMonitors" aria-label="Campaign live progress"></section>
+  <section class="campaign-monitors" id="campaignMonitors" aria-label="Campaign live progress" hidden></section>
+  <section class="monitor-detail hidden" id="campaignRunDetail" aria-label="Campaign detailed send tracking">
+    <div class="monitor-detail-head">
+      <strong id="campaignRunDetailTitle">Campaign 发送详情</strong>
+      <span>继续发送 · 异常重试 · CSV · 时间线 · 客户结果</span>
+    </div>
+    <iframe id="frame-campaign-monitor" title="Campaign 发送详情" data-src="/flow-1?embedded=1&amp;view=monitor"></iframe>
+  </section>
+  </section>
   <div class="frames">
-    <iframe id="frame-flow1" src="/flow-1"></iframe>
-    <iframe id="frame-next" class="hidden" data-src="/next-flow"></iframe>
+    <div class="campaign-planner-nav" id="campaignPlannerNav">
+      <div class="campaign-planner-copy">
+        <strong>安排 Campaign</strong>
+        <span id="campaignPlannerHint">建立新名单并完成 Flow 1 安全预览。</span>
+      </div>
+      <div class="campaign-plan-switch" aria-label="Campaign 类型">
+        <button type="button" class="active" id="planner-flow1" onclick="showCampaign('flow1')">新名单 · Flow 1</button>
+        <button type="button" id="planner-next" onclick="showCampaign('next')">到期跟进 · Flow 2–10</button>
+      </div>
+    </div>
+    <iframe id="frame-flow1" src="/flow-1?embedded=1&amp;view=setup"></iframe>
+    <iframe id="frame-next" class="hidden" data-src="/next-flow?embedded=1&amp;view=setup"></iframe>
     <iframe id="frame-lanes" class="hidden" data-src="/lanes"></iframe>
   </div>
   <!-- 发送模式选择。这台电脑的号码用什么节奏；每台各自设，不影响另一台。 -->
@@ -356,10 +471,10 @@
         <h2>发送模式 · 每个号码各自设</h2>
         <button type="button" id="modeClose" aria-label="关闭">×</button>
       </div>
-      <p>每个号码各自选一个节奏。老号可以开 Crazy 冲量，新号用保守养着，同时并行、互不影响。</p>
+      <p>每个号码可选预设，或自己填写客户与客户之间的随机间隔。设置会同时用于人工 Campaign 与 Scheduler 的下一批。</p>
       <div class="mode-options" id="modeOptions"></div>
       <div class="mode-warn" id="modeWarn" hidden>⚠️ Crazy 只给用了很久的老号。新号或刚被限制过的号用这个很容易被封 —— 那种请选「保守」。</div>
-      <div class="mode-note">改了之后，下一批 campaign 就会用新节奏。正在跑的那批不受影响。</div>
+      <div class="mode-note">自定义范围为 30–3600 秒。同一客户的 Part 间隔仍由安全预设管理；如果你指定了更宽的发送时间窗，实际等待可以更久但不会更快。改动只影响之后建立的 Campaign；正在跑的批次保留原节奏。</div>
     </div>
   </div>
 
@@ -381,24 +496,75 @@
   </div>
 
 <script>
-// 第二个 tab 懒加载 (第一次点才载入), 之后一直活着 — 切 tab 不打断任何进行中的发送。
+// Flow 1 / Flow 2–10 共用 Campaign 工作区。iframe 只在第一次打开时载入，
+// 之后保持存活，所以切去监控或 Refresh 不会清掉表单内容。
+let currentCampaignView = sessionStorage.getItem("mamba-campaign-workspace-view") === "next" ? "next" : "flow1";
+
+function showCampaign(which) {
+  currentCampaignView = which === "next" ? "next" : "flow1";
+  sessionStorage.setItem("mamba-campaign-workspace-view", currentCampaignView);
+  show("campaign");
+}
+
 function show(which) {
+  if (which === "flow1" || which === "next") {
+    currentCampaignView = which;
+    sessionStorage.setItem("mamba-campaign-workspace-view", currentCampaignView);
+    which = "campaign";
+  }
   const next = document.getElementById("frame-next");
   const lanes = document.getElementById("frame-lanes");
+  const frames = document.querySelector(".frames");
+  const monitorPage = document.getElementById("monitorPage");
+  const campaignMonitor = document.getElementById("frame-campaign-monitor");
+  const plannerNav = document.getElementById("campaignPlannerNav");
+  const isCampaign = which === "campaign";
   // iframe 懒加载：切到哪个 tab 才载入哪个页面。
-  if (which === "next" && !next.src) next.src = next.dataset.src;
+  if (isCampaign && currentCampaignView === "next" && !next.src) next.src = next.dataset.src;
   if (which === "lanes" && !lanes.src) lanes.src = lanes.dataset.src;
-  document.getElementById("frame-flow1").classList.toggle("hidden", which !== "flow1");
-  next.classList.toggle("hidden", which !== "next");
+  if (which === "monitor" && !document.getElementById("campaignRunDetail").classList.contains("hidden") && !campaignMonitor.getAttribute("src")) {
+    campaignMonitor.src = campaignMonitor.dataset.src;
+  }
+  document.getElementById("frame-flow1").classList.toggle("hidden", !isCampaign || currentCampaignView !== "flow1");
+  next.classList.toggle("hidden", !isCampaign || currentCampaignView !== "next");
   lanes.classList.toggle("hidden", which !== "lanes");
-  document.getElementById("tab-flow1").classList.toggle("active", which === "flow1");
-  document.getElementById("tab-next").classList.toggle("active", which === "next");
+  frames.classList.toggle("hidden", which === "monitor");
+  monitorPage.classList.toggle("hidden", which !== "monitor");
+  plannerNav.classList.toggle("hidden", !isCampaign);
   document.getElementById("tab-lanes").classList.toggle("active", which === "lanes");
-  try { history.replaceState(null, "", "#" + which); } catch {}
+  document.getElementById("tab-monitor").classList.toggle("active", which === "monitor");
+  document.getElementById("tab-campaign").classList.toggle("active", isCampaign);
+  document.getElementById("planner-flow1").classList.toggle("active", currentCampaignView === "flow1");
+  document.getElementById("planner-next").classList.toggle("active", currentCampaignView === "next");
+  document.getElementById("campaignPlannerHint").textContent = currentCampaignView === "next"
+    ? "选择已经到期的客户，并安排下一轮 Flow 2–10。"
+    : "建立新名单并完成 Flow 1 安全预览。";
+  const pageCopy = {
+    campaign: ["📣 Campaign Center", "在同一个工作区安排新名单与到期跟进；执行过程统一到发送监控查看。"],
+    lanes: ["🎚️ 多号码并行", "查看每个 WhatsApp sender 的独立工作车道。"],
+    monitor: ["📡 发送监控", "集中查看 Campaign、SQLite、Notion outbox 与号码队列。"],
+  }[which] || ["📣 Campaign Center", "新名单与 Flow 2–10 在同一个发送工作区。"];
+  document.getElementById("workspaceTitle").textContent = pageCopy[0];
+  document.getElementById("workspaceSubtitle").textContent = pageCopy[1];
+  const hash = isCampaign ? `campaign-${currentCampaignView}` : which;
+  try { history.replaceState(null, "", "#" + hash); } catch {}
 }
-// 深链接: /send#next 或 #lanes 直接开对应 tab
-if (location.hash === "#next") show("next");
-if (location.hash === "#lanes") show("lanes");
+
+window.addEventListener("message", (event) => {
+  const frame = document.getElementById("frame-campaign-monitor");
+  if (event.origin !== window.location.origin || event.source !== frame.contentWindow) return;
+  if (event.data?.type !== "mamba-campaign-monitor-height") return;
+  const height = Number(event.data.height);
+  if (!Number.isFinite(height)) return;
+  frame.style.height = Math.max(180, Math.min(1600, height)) + "px";
+});
+// 保留旧 #flow1 / #next 深链接，同时提供清楚的新 workspace / monitor URL。
+if (["#next", "#campaign-next"].includes(location.hash)) showCampaign("next");
+else if (["#flow1", "#campaign-flow1"].includes(location.hash)) showCampaign("flow1");
+else if (location.hash === "#refresh") window.location.replace("/refresh");
+else if (location.hash === "#lanes") show("lanes");
+else if (location.hash === "#monitor") show("monitor");
+else showCampaign(currentCampaignView);
 
 let syncBusy = false;
 let successTimer = null;
@@ -413,7 +579,7 @@ let dismissedCampaignRuns = loadDismissedCampaignRuns();
 
 const terminalStatuses = new Set([
   "SENT", "REPLIED_WARM", "FAILED", "SKIPPED_END_TIME", "SKIPPED_MANUAL",
-  "SKIPPED_SUPPRESSED", "SKIPPED_REPLIED", "SKIPPED_NO_WHATSAPP", "PART1_ONLY_END_TIME",
+  "SKIPPED_SUPPRESSED", "SKIPPED_REPLIED", "SKIPPED_NO_WHATSAPP", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME",
 ]);
 
 function monitorOutcomes(state, assignments, summary) {
@@ -425,7 +591,7 @@ function monitorOutcomes(state, assignments, summary) {
   );
   for (const item of items) {
     const status = String(item.status || "");
-    if (status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(status)) result.pending += 1;
+    if (status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(status) || ["SKIPPED_END_TIME", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME"].includes(status)) result.pending += 1;
     else if (status === "FAILED") result.failed += 1;
     else if (status === "SKIPPED_NO_WHATSAPP") { result.skipped += 1; result.noWhatsapp += 1; }
     else if (status.startsWith("SKIPPED_")) result.skipped += 1;
@@ -706,8 +872,59 @@ function monitorRunIsActive(run) {
   return run?.running === true || run?.state?.status === "RUNNING" || syncStatus === "RUNNING";
 }
 
+function monitorRunNeedsExecutionTracking(run) {
+  if (!run?.state) return false;
+  if (run?.running === true || run.state.status === "RUNNING") return true;
+  const status = String(run.state.status || "").toUpperCase();
+  if (!["STOPPED", "INTERRUPTED", "INCOMPLETE", "QUEUED_BATCH", "FAILED"].includes(status)) return false;
+  const hasPendingAssignment = (run.state.assignments || []).some((item) =>
+    item?.status === "QUEUED" ||
+    /^(WAITING|SENDING)_PART\d+$/.test(String(item?.status || "")) ||
+    ["SKIPPED_END_TIME", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME"].includes(item?.status)
+  );
+  const hasPendingSummary = Object.entries(run.state.summary || {}).some(([key, count]) =>
+    Number(count || 0) > 0 && (
+      key === "QUEUED" ||
+      /^(WAITING|SENDING)_PART\d+$/.test(key) ||
+      ["SKIPPED_END_TIME", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME"].includes(key)
+    )
+  );
+  return hasPendingAssignment || hasPendingSummary || Number(run.state.outcomes?.pending || 0) > 0 || Number(run.state.resumeProgress?.remaining || 0) > 0;
+}
+
+function monitorRunNeedsAttention(run) {
+  return monitorRunIsActive(run) || monitorRunNeedsExecutionTracking(run);
+}
+
+function campaignRunFlowLabel(state) {
+  if (state?.flowLabel) return String(state.flowLabel);
+  if (state?.templateFlow) return String(state.templateFlow);
+  if (state?.campaignType === "RECYCLE") return "Refresh · 旧客重联";
+  return "Flow 1 · Project Template";
+}
+
+function syncCampaignRunDetail(runs) {
+  const detail = document.getElementById("campaignRunDetail");
+  const frame = document.getElementById("frame-campaign-monitor");
+  const tracked = runs
+    .filter(monitorRunNeedsExecutionTracking)
+    .sort((a, b) => Number(b?.running === true) - Number(a?.running === true) || String(b?.state?.updatedAt || "").localeCompare(String(a?.state?.updatedAt || "")))[0];
+  detail.classList.toggle("hidden", !tracked);
+  if (!tracked) return;
+  const runId = tracked.state.runId;
+  const flowLabel = campaignRunFlowLabel(tracked.state);
+  const src = "/flow-1?embedded=1&view=monitor&runId=" + encodeURIComponent(runId);
+  document.getElementById("campaignRunDetailTitle").textContent = flowLabel + " · 发送详情";
+  frame.title = flowLabel + " · 发送详情";
+  frame.dataset.src = src;
+  if (!document.getElementById("monitorPage").classList.contains("hidden") && frame.dataset.runId !== runId) {
+    frame.dataset.runId = runId;
+    frame.src = src;
+  }
+}
+
 function monitorRunIsPreview(run) {
-  return run?.running !== true && ["READY", "READY_TEST"].includes(String(run?.state?.status || ""));
+  return run?.running !== true && ["READY", "READY_TEST", "PREPARED", "PREVIEW"].includes(String(run?.state?.status || "").toUpperCase());
 }
 
 document.getElementById("monitorToggle").addEventListener("click", () => {
@@ -720,24 +937,30 @@ function renderCampaignMonitor(status, queue) {
   // Preview stays in the lower confirmation area; show a top card only after it is queued or started.
   const runs = (supplied.length ? supplied : (status?.state ? [status] : []))
     .filter((item) => !monitorRunIsPreview(item));
+  syncCampaignRunDetail(runs);
   const dismissedNow = runs.filter((item) => item?.state?.runId && dismissedCampaignRuns[item.state.runId]);
   const visible = runs.filter((item) => !item?.state?.runId || !dismissedCampaignRuns[item.state.runId]);
   const container = document.getElementById("campaignMonitors");
+  const toggle = document.getElementById("monitorToggle");
   const restoreButton = document.getElementById("monitorRestore");
   document.getElementById("monitorCount").textContent = String(visible.filter((item) => item?.state).length);
   restoreButton.classList.toggle("hidden", dismissedNow.length === 0);
   restoreButton.textContent = dismissedNow.length ? `恢复已隐藏 (${dismissedNow.length})` : "恢复已隐藏";
   // 「清掉已结束」只在真的有已结束的 campaign 时才出现。
-  const finished = runs.filter((item) => item?.state && !monitorRunIsActive(item));
+  const finished = runs.filter((item) => item?.state && !monitorRunNeedsAttention(item));
   const clearButton = document.getElementById("monitorClearDone");
   clearButton.classList.toggle("hidden", finished.length === 0);
   clearButton.textContent = `移除已结束 (${finished.length})`;
-  const shouldAutoCollapse = !visible.some(monitorRunIsActive) && !queue?.count;
+  const shouldAutoCollapse = !visible.some(monitorRunNeedsAttention) && !queue?.count;
   setCampaignMonitorsCollapsed(monitorDisplayChoice === null ? shouldAutoCollapse : monitorDisplayChoice === "collapsed");
   if (!runs.length) {
-    container.innerHTML = '<div class="campaign-monitor"><div class="monitor-summary"><div class="monitor-kicker">Campaign Ready</div><div class="monitor-title">没有正在运行的 Batch</div><div class="monitor-track"><span style="width:0"></span></div></div><div class="flow-steps"><div class="flow-step"><small>01 Prepared</small><strong>等待 Batch</strong></div><div class="flow-step"><small>02 Sending</small><strong>尚未开始</strong></div><div class="flow-step"><small>03 Notion</small><strong>等待发送完成</strong></div><div class="flow-step"><small>04 Next Batch</small><strong>Queue 空</strong></div></div></div>';
+    container.innerHTML = "";
+    container.hidden = true;
+    toggle.classList.add("hidden");
     return;
   }
+  container.hidden = false;
+  toggle.classList.toggle("hidden", visible.length === 0);
   if (!visible.length) {
     container.innerHTML = "";
     setCampaignMonitorsCollapsed(true);
@@ -760,7 +983,7 @@ function renderCampaignLane(status, queue) {
   const failed = outcomes.failed;
   const waiting = outcomes.pending;
   const running = status?.running === true || state?.status === "RUNNING";
-  const resumable = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "") || (state.localCheckpointMode === "PER_CUSTOMER_V1" && item.status === "SENT" && item.localCheckpoint?.status !== "SUCCEEDED")).length;
+  const resumable = assignments.filter((item) => item.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(item.status || "") || ["SKIPPED_END_TIME", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME"].includes(item.status) || (state.localCheckpointMode === "PER_CUSTOMER_V1" && item.status === "SENT" && item.localCheckpoint?.status !== "SUCCEEDED")).length;
   const displayStatus = !running && state.status === "COMPLETED" && resumable > 0 ? "INCOMPLETE" : state.status;
   const percent = outcomes.percent;
   const resumeProgress = state.resumeProgress || null;
@@ -863,8 +1086,8 @@ let modeState = null;
 function modeByKey(key) {
   return (modeState?.modes || []).find((m) => m.key === key) || (modeState?.modes || [])[0];
 }
-function paceLabel(mode) {
-  const g = mode?.contactGapSeconds || {};
+function paceLabel(mode, row = null) {
+  const g = row?.contactGapSeconds || mode?.contactGapSeconds || {};
   return `${g.min}-${g.max}s`;
 }
 
@@ -893,7 +1116,7 @@ function renderModePill() {
   if (list.length === 1) {
     const m = modeByKey(list[0].mode);
     pill.className = `mode-pill mode-${m.key}`;
-    emoji.textContent = m.emoji; label.textContent = m.label; sub.textContent = list[0].instance;
+    emoji.textContent = m.emoji; label.textContent = m.label; sub.textContent = `${list[0].instance} · ${paceLabel(m, list[0])}`;
     return;
   }
   // 多个号码：药丸显示「N 个号」，各自颜色在弹窗里看。
@@ -915,10 +1138,10 @@ function renderModeOptions() {
     <div class="mode-number">
       <div class="mode-number-head">
         <b>${escapeModeHtml(row.instance)}</b>
-        <span class="mode-number-cur mode-${row.mode}">${modeByKey(row.mode).emoji} ${modeByKey(row.mode).label}${row.explicit ? "" : "（预设）"}</span>
+        <span class="mode-number-cur mode-${row.mode}">${modeByKey(row.mode).emoji} ${modeByKey(row.mode).label} · ${paceLabel(modeByKey(row.mode), row)}${row.explicit ? "" : "（预设）"}</span>
       </div>
       <div class="mode-choices">
-        ${(modeState.modes || []).map((m) => `
+        ${(modeState.modes || []).filter((m) => m.key !== "custom").map((m) => `
           <button type="button" class="mode-choice ${m.key} ${m.key === row.mode ? "selected" : ""}"
             data-instance="${escapeModeHtml(row.instance)}" data-mode="${m.key}"
             title="${escapeModeHtml(m.description)}">
@@ -927,11 +1150,24 @@ function renderModeOptions() {
             <span class="mc2-pace">${paceLabel(m)}</span>
           </button>`).join("")}
       </div>
+      <div class="mode-custom ${row.mode === "custom" ? "active" : ""}">
+        <div class="mode-custom-copy">
+          <strong>⚙️ 自定义客户间隔</strong>
+          <span>上一位客户所有 Part 完成后，再等待随机时间才开始下一位。</span>
+        </div>
+        <label>最短（秒）<input type="number" min="30" max="3600" step="1" value="${Number(row.customGapSeconds?.min || 120)}" data-custom-min="${escapeModeHtml(row.instance)}"></label>
+        <span class="mode-custom-sep">–</span>
+        <label>最长（秒）<input type="number" min="30" max="3600" step="1" value="${Number(row.customGapSeconds?.max || 240)}" data-custom-max="${escapeModeHtml(row.instance)}"></label>
+        <button type="button" data-custom-save="${escapeModeHtml(row.instance)}">使用自定义</button>
+      </div>
     </div>`).join("");
   const crazyPicked = list.some((row) => row.mode === "crazy");
   document.getElementById("modeWarn").hidden = !crazyPicked;
   container.querySelectorAll(".mode-choice").forEach((btn) => {
     btn.addEventListener("click", () => selectMode(btn.dataset.instance, btn.dataset.mode));
+  });
+  container.querySelectorAll("[data-custom-save]").forEach((btn) => {
+    btn.addEventListener("click", () => saveCustomMode(btn.dataset.customSave));
   });
 }
 
@@ -953,9 +1189,37 @@ async function selectMode(instance, key) {
     modeState = result;
     renderModePill();
     renderModeOptions();
+    notifyModeFrames();
   } catch (error) {
     alert(error.message);
   }
+}
+
+async function saveCustomMode(instance) {
+  const minInput = document.querySelector(`[data-custom-min="${CSS.escape(instance)}"]`);
+  const maxInput = document.querySelector(`[data-custom-max="${CSS.escape(instance)}"]`);
+  const min = Number(minInput?.value);
+  const max = Number(maxInput?.value);
+  try {
+    const r = await fetch("/api/campaign/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance, mode: "custom", customGapSeconds: { min, max } }),
+    });
+    const result = await r.json();
+    if (!r.ok || !result.ok) throw new Error(result.error || "保存自定义间隔失败");
+    modeState = result;
+    renderModePill();
+    renderModeOptions();
+    notifyModeFrames();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+function notifyModeFrames() {
+  const lanes = document.getElementById("frame-lanes");
+  lanes?.contentWindow?.postMessage({ type: "mamba-campaign-mode-updated" }, window.location.origin);
 }
 
 function openModePop() {
@@ -1157,7 +1421,7 @@ document.getElementById("syncClose").addEventListener("click", () => {
     sessionStorage.setItem(key, "1");
   }
   hideSyncOverlay();
-  show("flow1");
+  show("monitor");
 });
 
 async function postSyncRecovery(path, body, button) {
@@ -1173,7 +1437,7 @@ async function postSyncRecovery(path, body, button) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
     hideSyncOverlay();
-    show("flow1");
+    show("monitor");
     return data;
   } catch (error) {
     document.getElementById("syncDetail").textContent = `恢复失败：${error.message}。本机发送记录仍然安全，请检查 Phone Health 后再试。`;
@@ -1215,10 +1479,15 @@ async function pollRunning() {
     const d = await r.json().catch(() => ({}));
     latestCampaignStatus = d;
     const runs = Array.isArray(d?.runs) ? d.runs : [d];
-    const runningFlow1 = runs.some((item) => item?.running && !item?.state?.flowLabel);
+    const runningFlow1 = runs.some((item) => item?.running && !item?.state?.flowLabel && item?.state?.campaignType !== "RECYCLE");
     const runningNext = runs.some((item) => item?.running && item?.state?.flowLabel);
-    document.getElementById("tab-flow1").classList.toggle("running", runningFlow1);
-    document.getElementById("tab-next").classList.toggle("running", runningNext);
+    const trackedRuns = runs.filter(monitorRunNeedsAttention).length;
+    document.getElementById("tab-campaign").classList.toggle("running", runningFlow1 || runningNext);
+    document.getElementById("planner-flow1").classList.toggle("running", runningFlow1);
+    document.getElementById("planner-next").classList.toggle("running", runningNext);
+    document.getElementById("tab-monitor").classList.toggle("running", trackedRuns > 0);
+    document.getElementById("monitorTabCount").textContent = String(trackedRuns);
+    document.getElementById("monitorTabCount").classList.toggle("hidden", trackedRuns === 0);
     renderNotionSync(d?.state?.notionSync, d?.state?.runId, d?.state);
     renderSyncDock(latestCampaignStatus, latestOutboxStatus);
   } catch { /* console 自己会显示, 这里只是点缀 */ }

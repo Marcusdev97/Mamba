@@ -35,6 +35,7 @@
 - `campaign-app/campaign_core.mjs`
 - `campaign-app/lib/inbox-send-service.mjs`
 - `campaign-app/lib/evolution-history-sync.mjs`
+- `campaign-app/lib/evolution-reconnect-service.mjs`
 - `campaign-app/routes/instances.routes.mjs`
 
 ### 资料方向
@@ -79,6 +80,17 @@ WhatsApp → Evolution webhook/history → Mamba
   操作员再次确认，且发送结果写入本机 conversation ledger。
 - Evolution 的 PostgreSQL 不存放 Mamba 业务 schema。
 - Instance name 不是客户或 sender 的永久业务 ID。
+- Settings 的「重新扫码」只对未连接 instance 开放：先 logout 失效的 Baileys
+  session，再向 `/instance/connect/<name>` 请求新 QR。它不得调用 instance delete，
+  因此原 instance name、Mamba connection key 与本机 conversation ledger 保持不变。
+- LIVE Campaign 正在发送时禁止重置 session。Evolution logout 回报错误时，只有重新
+  查询确认 instance 已非 OPEN 才能继续取 QR；状态不明确时 fail closed。
+- 重新扫码只能恢复已登出或损坏的 session，不能绕过 WhatsApp 账号的 Restricted
+  状态。账号仍受限时必须先通过 WhatsApp 官方流程恢复。
+- WhatsApp 发送 pacing 属于 Mamba domain/config，不由 Evolution 决定。每个 sender
+  可选择预设或自定义客户 gap；保存后由 Campaign prepare 读取，Scheduler 与人工
+  Campaign 共用同一规则。这个设置用于控制合规发送节奏，不能替代 opt-in、STOP、
+  suppression、回复检查或 WhatsApp 官方限制。
 
 ### 本机健康与睡眠边界
 
@@ -132,6 +144,22 @@ Mamba 不再把所有 `fetch failed` 都显示成「Evolution 掉线」，而是
 
 “加入 outbox”不代表“已经同步到 Notion”。UI 和日志必须区分
 `PENDING`、`RUNNING`、`RETRY`、`FAILED` 和 `COMPLETED`。
+
+### Refresh Campaign Sync
+
+Refresh (`campaignType=RECYCLE`) 使用独立 outbox key
+`LOCAL_TO_NOTION:campaign_run:<runId>:refresh_sync`。它不是 Flow 1 upload，也
+不是 Flow advance：
+
+- 每位客户发送完成后先把 Refresh send job 与最新 sender 写入 SQLite。
+- Campaign 未结束时 outbox 继续 defer。
+- 最终 Notion PATCH 只允许 `Last Blast At`、`Sender Instance`、
+  `Assigned/Last Sender Key`、`Last Sender Phone`、`Last Sent By Device` 与
+  `Campaign Run ID`。
+- PATCH 不得包含 `Last Flow Sent`、`Next Flow`、`Sequence Status` 或
+  `Follow Up Due`。
+- 找不到 Notion page 时保留 SQLite 证据并进入明确失败／重试，不得建立一个会
+  重置 Flow 的新客户 row。
 
 ### 人工 Quick Remark
 

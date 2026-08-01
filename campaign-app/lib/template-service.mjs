@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { REFRESH_TEMPLATE_FLOW } from "../domain/refresh-campaign-eligibility.mjs";
 
 const FLOW_META = [
+  { no: 0, topic: REFRESH_TEMPLATE_FLOW, day: "" },
   { no: 1, topic: "Project Template", day: "Day 0" },
   { no: 2, topic: "Layout", day: "Day 2" },
   { no: 3, topic: "Location", day: "Day 4" },
@@ -18,6 +20,7 @@ const FIRST_FLOW_LABEL = "Flow 1 - Project Template";
 
 function flowTopicOf(flowLabel) {
   const text = String(flowLabel || "");
+  if (text.trim() === REFRESH_TEMPLATE_FLOW) return REFRESH_TEMPLATE_FLOW;
   return text.includes(" - ") ? text.split(" - ").slice(1).join(" - ").trim() : text.trim();
 }
 
@@ -81,7 +84,9 @@ export async function createTemplateService({
 
   function buildTemplateTitle({ project, flowTopic, language, part, version = "v1" }) {
     const meta = flowMetaByTopic(flowTopic);
-    const flowLabel = meta ? `Flow ${String(meta.no).padStart(2, "0")} - ${meta.topic}` : (flowTopic || "Flow");
+    const flowLabel = meta?.topic === REFRESH_TEMPLATE_FLOW
+      ? REFRESH_TEMPLATE_FLOW
+      : meta ? `Flow ${String(meta.no).padStart(2, "0")} - ${meta.topic}` : (flowTopic || "Flow");
     return `[${project || "?"}][${flowLabel}][${String(language || "EN").toUpperCase()}][${part || "Part 1"}][${version}]`;
   }
 

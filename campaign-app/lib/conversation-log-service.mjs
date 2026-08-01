@@ -652,6 +652,29 @@ GROUP BY v.contact_key;`);
     }]));
   }
 
+  // Refresh Campaign 的名单检查一次读取完整活动摘要。这里把人工发送与
+  // Campaign blast 分开，因为人工跟进过的人不能再进入旧客重联批次。
+  async function refreshActivity(phones) {
+    const keys = [...new Set((phones ?? []).map(digits).filter(Boolean))];
+    if (!keys.length) return new Map();
+    const database = await cli();
+    const rows = await database.query(`
+SELECT
+  v.contact_key AS contactKey,
+  MAX(CASE WHEN m.direction='inbound' THEN m.sent_at END) AS lastInboundAt,
+  MAX(CASE WHEN m.direction='outbound' AND m.source='blast' THEN m.sent_at END) AS lastBlastAt,
+  MAX(CASE WHEN m.direction='outbound' AND m.source<>'blast' THEN m.sent_at END) AS lastNonBlastOutboundAt
+FROM messages m
+JOIN conversations v ON v.id = m.conversation_id
+WHERE v.contact_key IN (${keys.map(sqlValue).join(", ")})
+GROUP BY v.contact_key;`);
+    return new Map(rows.map((row) => [row.contactKey, {
+      lastInboundAt: row.lastInboundAt || null,
+      lastBlastAt: row.lastBlastAt || null,
+      lastNonBlastOutboundAt: row.lastNonBlastOutboundAt || null,
+    }]));
+  }
+
   // 聊天室的客户列表：某个号码底下、有回复过，或由人工在 Chat Room
   // 主动开始过对话，而且没被 STOP 的客户。
   // 每个带最后一条讯息预览，按最近活动排序 —— 越新的排越前面。
@@ -793,6 +816,7 @@ ON CONFLICT(key) DO UPDATE SET
     recentThread,
     sentFlowSince,
     sentBlastHistory,
+    refreshActivity,
     inboxThreads,
     fullThread,
     isKnownLead,

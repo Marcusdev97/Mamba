@@ -103,6 +103,51 @@ function makeRunner() {
 }
 
 {
+  const writes = [];
+  const patches = [];
+  const service = makeService(() => {}, {
+    localDatabase: {
+      async recordRefreshCampaignProgress(payload) {
+        writes.push(payload);
+        return { recorded: payload.assignments.length, skipped: 0 };
+      },
+    },
+    notion: async (method, pathname, body) => {
+      if (method === "PATCH") patches.push({ pathname, properties: body.properties });
+      return {};
+    },
+  });
+  const runner = makeRunner();
+  runner.state = {
+    runId: "run-refresh",
+    deviceId: "upstairs-mac",
+    mode: "LIVE",
+    status: "COMPLETED",
+    campaignType: "RECYCLE",
+    projectId: "binastra",
+    project: "Binastra",
+    templateFlow: "Refresh - Reconnect",
+    instances: [{ name: "wa_03", owner: "60148801997" }],
+    assignments: [{
+      status: "SENT",
+      instanceName: "wa_03",
+      lead: { id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", name: "Old Lead", phone: "60123456789" },
+      part1: { sentAt: "2026-07-30T08:00:00.000Z" },
+    }],
+  };
+  const local = await service.recordLocalFlowProgress(runner);
+  assert.equal(local.recorded, 1);
+  assert.equal(writes[0].assignments[0].phone, "60123456789");
+  await service.syncRefreshCampaignToNotion(runner);
+  assert.equal(runner.state.notionSync.status, "SUCCEEDED");
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].properties["Last Blast At"].date.start, "2026-07-30T08:00:00.000Z");
+  assert.equal(patches[0].properties["Next Flow"], undefined, "Refresh Notion sync must preserve Next Flow");
+  assert.equal(patches[0].properties["Last Flow Sent"], undefined, "Refresh Notion sync must preserve Last Flow Sent");
+  assert.equal(patches[0].properties["Sequence Status"], undefined, "Refresh Notion sync must preserve Sequence Status");
+}
+
+{
   let notionCalled = false;
   const localWrites = [];
   const service = makeService(() => { notionCalled = true; }, {

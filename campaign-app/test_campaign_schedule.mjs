@@ -3,6 +3,7 @@ import {
   buildAssignments,
   CampaignRunner,
   RecipientNotOnWhatsAppError,
+  campaignHasActiveResumeSession,
   campaignOutcomeSummary,
   campaignRestartDecision,
   campaignResumeSummary,
@@ -11,6 +12,8 @@ import {
   isRecipientNotOnWhatsAppError,
   isUnconfirmedSendOutcome,
   isResumableJobStatus,
+  restoreTimeWindowResumeJob,
+  startCampaignResumeSession,
 } from "./campaign_core.mjs";
 import {
   AUTO_SCHEDULE,
@@ -51,6 +54,39 @@ assert.equal(isResumableJobStatus("WAITING_PART3"), true);
 assert.equal(isResumableJobStatus("SENDING_PART2"), true);
 assert.equal(isResumableJobStatus("SENT"), false);
 assert.equal(isResumableJobStatus("FAILED"), false);
+
+{
+  const skipped = { id: "window-p1", status: "SKIPPED_END_TIME", part1: null };
+  const partial = {
+    id: "window-p2",
+    status: "PART1_ONLY_END_TIME",
+    part1: { sentAt: "2026-07-30T10:00:00.000Z" },
+    part2Text: "Part 2",
+  };
+  assert.equal(restoreTimeWindowResumeJob(skipped), true);
+  assert.equal(skipped.status, "QUEUED", "a customer never contacted before cutoff can be explicitly resumed");
+  assert.equal(restoreTimeWindowResumeJob(partial), true);
+  assert.equal(partial.status, "WAITING_PART2", "a cutoff after Part 1 resumes from Part 2, never Part 1");
+  const laterPartial = {
+    id: "window-p3",
+    status: "PARTIAL_END_TIME",
+    part1: { sentAt: "2026-07-30T10:00:00.000Z" },
+    part2Text: "Part 2",
+    part2: { sentAt: "2026-07-30T10:01:00.000Z" },
+    extraParts: [{ text: "Part 3", sentInfo: null }],
+  };
+  assert.equal(restoreTimeWindowResumeJob(laterPartial), true);
+  assert.equal(laterPartial.status, "WAITING_PART3", "a later cutoff must never masquerade as a fully SENT customer");
+
+  const state = {
+    startAt: "2026-07-30T08:00:00.000Z",
+    endAt: "2026-07-30T10:00:00.000Z",
+    assignments: [skipped, partial],
+  };
+  state.resumeSession = startCampaignResumeSession(state, state.assignments, "2026-08-01T07:00:00.000Z");
+  assert.equal(campaignHasActiveResumeSession(state), true);
+  assert.equal(state.resumeSession.originalEndAt, "2026-07-30T10:00:00.000Z");
+}
 assert.equal(isRecipientNotOnWhatsAppError(new Error('send failed: {"exists":false}')), true);
 assert.equal(isRecipientNotOnWhatsAppError({ error: "不是 WhatsApp 号码 (not on WhatsApp)" }), true);
 assert.equal(isRecipientNotOnWhatsAppError(new Error("HTTP 500 provider unavailable")), false);
@@ -191,6 +227,89 @@ function queuedAssignments(count) {
     lead: { name: `Lead ${index + 1}` },
     status: "QUEUED",
   }));
+}
+
+{
+  const runner = new CampaignRunner({ config, env: {} });
+  runner.state = {
+    mode: "LIVE",
+    scheduleMode: "FIXED",
+    startAt: "2026-07-30T08:00:00.000Z",
+    endAt: "2026-07-30T10:00:00.000Z",
+    assignments: queuedAssignments(2),
+  };
+  runner.state.resumeSession = startCampaignResumeSession(
+    runner.state,
+    runner.state.assignments,
+    "2026-08-01T07:00:00.000Z",
+  );
+  const before = Date.now();
+  runner.rebaseSchedule();
+  const times = runner.state.assignments.map((job) => new Date(job.scheduledAt).getTime());
+  assert.ok(times[0] >= before, "an expired fixed window must resume from the current clock");
+  assert.ok(times[1] - times[0] >= 120_000, "recovery keeps the campaign pacing floor");
+  assert.ok(new Date(runner.state.endAt).getTime() > times[1], "recovery replaces the expired execution cutoff");
+  assert.equal(runner.state.resumeSession.originalEndAt, "2026-07-30T10:00:00.000Z");
+  assert.equal(runner.state.resumeSession.recoveryWindow.endAt, runner.state.endAt);
+}
+
+{
+  const outcomes = campaignOutcomeSummary([
+    { status: "SKIPPED_END_TIME" },
+    { status: "PART1_ONLY_END_TIME", part1: { sentAt: "2026-07-30T10:00:00.000Z" } },
+    { status: "PARTIAL_END_TIME", part1: { sentAt: "2026-07-30T10:00:00.000Z" } },
+  ]);
+  assert.equal(outcomes.pending, 3, "time-window stops remain visible behind the Continue button");
+  assert.equal(outcomes.processed, 0);
+}
+
+{
+  const runner = new CampaignRunner({ config, env: {} });
+  runner.state = {
+    mode: "LIVE",
+    scheduleMode: "FIXED",
+    startAt: new Date(0).toISOString(),
+    endAt: new Date(Date.now() + 1_000).toISOString(),
+    assignments: queuedAssignments(2).map((job) => ({ ...job, scheduledAt: new Date(0).toISOString() })),
+  };
+  runner.state.resumeSession = startCampaignResumeSession(runner.state, runner.state.assignments);
+  runner.saveState = async () => {};
+  runner.processJob = async (job) => { job.status = "SENT"; };
+  await runner.runQueue();
+  const secondAt = new Date(runner.state.assignments[1].scheduledAt).getTime();
+  assert.ok(
+    new Date(runner.state.endAt).getTime() >= secondAt + 120_000,
+    "a resumed fixed run must extend its recovery cutoff when real execution pushes the second customer later",
+  );
+}
+
+{
+  const runner = new CampaignRunner({ config, env: {} });
+  const job = {
+    id: "cutoff-before-part3",
+    status: "WAITING_PART3",
+    scheduledAt: new Date(0).toISOString(),
+    instanceName: "wa_01",
+    lead: { name: "Part 3 Lead", phone: "60123456789" },
+    part1: { sentAt: "2026-07-30T10:00:00.000Z" },
+    part2Text: "Part 2",
+    part2: { sentAt: "2026-07-30T10:01:00.000Z" },
+    extraParts: [{ text: "Part 3", media: "", sentInfo: null }],
+  };
+  runner.state = {
+    mode: "LIVE",
+    scheduleMode: "FIXED",
+    endAt: new Date(Date.now() + 60_000).toISOString(),
+    assignments: [job],
+  };
+  runner.suppression = new Set();
+  runner.saveState = async () => {};
+  runner.waitBetweenParts = async () => {};
+  let cutoffChecks = 0;
+  runner.pastFixedEnd = () => ++cutoffChecks > 1;
+  runner.sendMediaWithRetry = async () => { throw new Error("Part 3 must not send after the cutoff"); };
+  await runner.processJob(job);
+  assert.equal(job.status, "PARTIAL_END_TIME", "a Part 3 cutoff must stay resumable instead of becoming SENT");
 }
 
 {

@@ -16,6 +16,7 @@ import { registerNextFlowRoutes } from "../routes/next-flow.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerProjectBrainRoutes } from "../routes/project-brain.routes.mjs";
 import { registerRemoteMambaRoutes } from "../routes/remote-mamba.routes.mjs";
+import { registerRefreshCampaignRoutes } from "../routes/refresh-campaign.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
 import { registerSystemLogsRoutes } from "../routes/system-logs.routes.mjs";
@@ -40,6 +41,7 @@ export function createApp(runtime) {
   registerBrainLearningRoutes(router);
   registerKnowledgeRoutes(router);
   registerCampaignRoutes(router);
+  registerRefreshCampaignRoutes(router);
   registerNextFlowRoutes(router);
   registerConversationsRoutes(router);
   registerInboxRoutes(router);

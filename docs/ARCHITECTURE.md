@@ -50,6 +50,32 @@ campaign-app/server.mjs
 运行中修改磁盘代码不会让旧 API router 配上新版 UI；新版本必须在没有 LIVE
 Campaign 运行时重启后一起生效。Campaign 图片等业务资料仍按请求读取。
 
+### Campaign Center UI shell
+
+`campaign-app/send.html` 只负责发送台的工作区导航与共同状态展示。页面结构保持
+单一标题区，右侧只保留一个 Campaign planning 入口：
+
+- Flow 1 与 Flow 2–10 是同一个 Campaign planning workspace 内的两种安排类型；
+  顶层不得再为两个 Flow 建立独立 page control。现有 iframe 保持存活，内部切换
+  不会重建表单，embedded 页面不得重复自己的标题和导航。
+- Multi-sender 是 Campaign Center 的平级工具。Refresh Customers 属于 Customers
+  Sidebar，并使用独立 `/refresh` 页面；不得在 Campaign Center 再建立 Refresh tab
+  或嵌入第二份 Refresh iframe。
+- Monitor 是独立视图，集中显示 Campaign、SQLite、Notion outbox、sender queue，
+  以及实际 run 的继续发送、异常重试、导出、时间线与逐位客户结果。
+- Flow 1 与 Flow 2–10 的 setup 只选择客户、时间、sender 与模板；embedded setup
+  不得显示运行日志或恢复控件。Monitor detail 按稳定 `runId` 使用同一套 status／
+  resume／retry API，并从 run state 的 `flowLabel`／`templateFlow` 显示真实 Flow。
+- 通用 monitor renderer 使用 `console.html` 的明确 view mode；setup 不得复制进度
+  逻辑，Monitor 也不得复制发送规则。
+- `READY`／`PREPARED` 只代表预览，不是正在执行的 Campaign。Monitor 没有运行中、
+  排队中或可恢复 run 时必须隐藏详细执行区，不得显示 0% 假进度或空 Batch 卡。
+- 发送模式入口保持在 shell 顶部，并按 sender 保存节奏；真正的 interval validation
+  和 Campaign snapshot 仍由后端 service 负责。
+
+UI shell 不得复制 eligibility、suppression、resume 或 sync 规则。Monitor 只读取状态
+并触发已有的明确操作，不可以成为 Campaign 状态的事实来源。
+
 ### 主要本机进程
 
 | 组件 | 默认位置／端口 | 责任 |
@@ -160,6 +186,33 @@ Transport Guard 每 15 秒分别检查 Docker daemon、Evolution API 和本批�
 instance；连续两次异常会把 run 标为 `INTERRUPTED`。恢复连接后仍必须由操作员
 人工继续，系统不得自动重连号码或恢复发送。
 
+### Refresh Campaign（RECYCLE）
+
+Refresh 是与 Flow 1–10 分开的手动 Campaign：
+
+```text
+Force-refresh Notion mirror
+  → domain eligibility（STOP / reply / follow-up / private / cooldown）
+  → create device-scoped local lead group
+  → dedicated Refresh template preview
+  → start-time eligibility recheck + LIVE recipient-risk token
+  → per-recipient SQLite checkpoint
+  → deferred Notion evidence-only sync
+```
+
+资格规则唯一来源是
+`campaign-app/domain/refresh-campaign-eligibility.mjs`，编排位于
+`campaign-app/lib/refresh-campaign-service.mjs`。Route 和 UI 不得复制规则。
+
+Refresh 的不变量：
+
+- `campaignType = RECYCLE`，模板必须是 `Refresh - Reconnect`。
+- 不由 Flow 2–10 Scheduler 自动建立或启动。
+- Notion／suppression／本机活动读取失败时 fail closed。
+- SQLite checkpoint 只更新发送证据、最后发送时间与 sender ownership。
+- 不得修改 `Last Flow Sent`、`Next Flow`、`Sequence Status` 或 `Follow Up Due`。
+- 开始 LIVE 前必须重新跑 eligibility；预览 token 不一致就要求重新建批次。
+
 ## 6. TEST 与 LIVE
 
 TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和安全确认。
@@ -196,6 +249,18 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
   等待原任务，不能建立另一条发送执行链。
 - 每个 Part 在 run recovery state 保存稳定 `sendKey` 与 attempt history。
   `DISPATCHING`／`UNKNOWN` 没有操作员明确确认时不得再次调用 Evolution。
+- 每个 sender 的发送节奏由 `campaign-mode-service.mjs` 单一管理并保存在本机。
+  自定义客户 gap 只能是 30–3600 的完整秒数，且 `max >= min`；API request 不得
+  临时覆盖已保存的 sender 设置。独立 sender lane 各自使用自己的节奏；旧式多
+  sender 共用一个 queue 时采用所有已选号码中最慢的安全边界。
+- 节奏在 Campaign prepare 时冻结进 run config。修改设置只影响之后建立的批次，
+  不得在运行中重算时间或改变已经排好的 `scheduledAt`。
+- 电脑休眠、关机或断线后的 LIVE run 不得自动续发。操作员明确按「继续发送」后，
+  系统才为尚未完成的客户建立从当前时间开始的 recovery window；旧 `startAt/endAt`
+  保存在 `resumeSession` 供审计，已完成或状态不明确的 Part 不得因此重发。
+- Custom gap 是当前客户全部 Part 完成后到下一位开始前的随机等待范围。明确指定的
+  fixed window 或 transport delay 可以令实际间隔更长，但任何 schedule calculation
+  都不得为了赶上结束时间而把间隔压到配置下限以下。
 
 ## 7. 数据所有权
 
@@ -217,8 +282,9 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 - Telegram Filter 只关闭 Telegram 通知，Tracker 与 Notion 行为不变。
 - 私人联系人仍保留本机消息证据，但不进入 ChatRoom、Sales Brain、STOP 判断或
   Notion 客户回复同步。
-- STOP／Suppression 才会阻止 Campaign 发送；把朋友加入私人联系人不会改变
-  Campaign eligibility，也不会删除历史对话。
+- 一般 Flow Campaign 仍只由 STOP／Suppression 阻止；把朋友加入私人联系人不会
+  删除历史对话或加入全局 STOP。Refresh Campaign 例外：它会把私人联系人当成
+  本批 eligibility 排除项，避免旧客重联误发给朋友／家人。
 
 ChatRoom／Customer Desk 的人工 Quick Remark 属于操作员即时决定，不等待
 Campaign 收尾：先写 SQLite，再把相同的 Status、Sequence、Next Action 与

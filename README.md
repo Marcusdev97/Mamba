@@ -22,8 +22,9 @@ Mamba 不只是“批量发送工具”。它的核心目标是：
 | 模块 | 主要能力 |
 |---|---|
 | Control Center | 查看今日发送、回复、Follow-up、AI 待审核、系统健康与当前 Campaign |
-| Campaign Center | Flow 1 新名单群发、Flow 2–10 跟进、TEST／LIVE、预览、排队与恢复 |
+| Campaign Center | 同一个 Campaign 工作区内安排 Flow 1 与 Flow 2–10；另有 Multi-sender 与独立发送监控视图 |
 | Multi-sender | 同一台电脑管理多个 OPEN WhatsApp sender，并保留客户原 sender 归属 |
+| Refresh Customers | 从 Customers Sidebar 检查长期未回复的旧客并建立安全重联名单 |
 | Scheduler | 在已明确 arm 的情况下，自动处理进入 Sequence 的 Flow 2–10 |
 | Customer Inbox | 汇总客户回复、待处理状态与人工工作队列 |
 | Chat Room | 查看文字、图片、影片，人工发消息，建立 Follow-up 与 Quick Remark |
@@ -109,6 +110,17 @@ Flow 1 Project Template
 ```
 
 Flow 5（Furnished）与 Flow 9（Rental）是条件型模板，不属于默认自动序列。
+
+### Refresh Campaign
+
+`③ Refresh · 旧客重联` 是独立的 `RECYCLE` Campaign，不属于 Flow 1–10
+Scheduler。它会强制刷新 Notion，并排除 STOP、Not Interested、已有回复、已人工
+Follow-up、私人联系人、预约／成交、正在其他 Campaign，以及 14／21／30 天冷却期
+内刚联系过的人。
+
+Refresh 必须使用 Notion 中独立的 `Refresh - Reconnect` Active 模板。发送结果先
+写入 SQLite，最终同步只更新 `Last Blast At`、sender 与 Run ID，不修改客户原本的
+`Last Flow Sent`、`Next Flow`、`Sequence Status` 或 `Follow Up Due`。
 
 | Flow | Cohort | 下一轮间隔 |
 |---|---:|---:|
@@ -201,6 +213,41 @@ LIVE 启动前必须：
 - 由操作员确认与本批实际名单绑定的 confirmation token。
 
 维护工具、同步操作或页面刷新不得自动恢复一个中断的 LIVE Campaign。
+
+### 每个号码的发送节奏
+
+在发送台顶部打开「发送模式」，每个 WhatsApp sender 可以选择保守、普通、Crazy，
+或填写自定义客户间隔。自定义范围是 30–3600 秒，例如 `120–240` 表示一位客户的
+所有 Part 完成后，随机等待 120–240 秒才开始下一位。
+
+设置存在本机并由人工 Campaign 与 Scheduler 共用，只影响之后建立的批次。已经
+RUNNING／QUEUED 的 Campaign 会继续使用建立时冻结的节奏。多个号码如果使用独立
+Lane，会各走自己的范围；共用同一个旧式队列时采用其中最慢的安全范围。
+
+如果电脑在发送途中关机或休眠，Mamba 不会自行恢复 LIVE 发送。重新打开后按
+「继续发送」，系统会从当前时间为剩余客户建立新的恢复时间窗，并继续使用该 run
+已冻结的客户间隔。旧时间窗仍保留在记录里；已发送的客户、已完成的 Part，以及
+结果不明确但未经人工确认的请求都不会自动重发。
+
+### 发送台工作区
+
+`/send` 保留 Control Center Sidebar。顶部只有一个「Campaign 安排」入口，Flow 1
+新名单与 Flow 2–10 跟进作为该工作区内的两种安排类型，不再占用两个顶层页面。
+两者使用内部切换，不会因为换页面而清掉已经填写的表单。
+Multi-sender 仍是独立 Campaign 工具；发送进度、SQLite 落盘、Notion outbox 和
+号码队列集中放在 `/send#monitor`，避免监控卡片长期占用 Campaign 操作空间。
+Refresh Customers 属于 Customers Sidebar，并以独立 `/refresh` 页面管理旧客重联，
+不再出现在 Campaign Center 顶部。
+
+Flow 1 与 Flow 2–10 的操作页都只负责选择客户、发送配置和最终预览。启动或排入
+队列后，页面会切到「发送监控」；继续发送、异常重试、CSV 导出、运行时间线和逐位
+客户结果都在该处处理。监控视图按 `runId` 读取实际 Flow 名称并复用原有组件与 API，
+不另建第二套发送状态或恢复规则。
+只生成预览、尚未启动的 `PREPARED` 批次不会出现在监控；没有运行中、排队中或可以
+恢复的 Campaign 时，详细进度区域完全隐藏，不显示 0% 占位卡。
+
+顶部「发送模式」属于整个发送台，不绑定某一个 Flow。每个 WhatsApp sender 仍可
+独立选择预设或填写自定义随机间隔；设置只影响之后建立的 Campaign。
 
 ---
 
@@ -442,8 +489,9 @@ LIVE Campaign 完成或明确停止，再重启 Mamba 才会完整生效。
 4. 查看 suppression、历史 Blast、本机号码与私人联系人风险。
 5. 先运行 TEST。
 6. LIVE 时确认 opt-in 与最终收件人名单。
-7. 发送期间保持 Mamba、Docker 与电脑在线。
-8. 完成后由 SQLite outbox 等待 Notion 同步。
+7. 启动后到「发送监控」查看进度、异常与逐位客户结果；需要恢复时也在该处操作。
+8. 发送期间保持 Mamba、Docker 与电脑在线。
+9. 完成后由 SQLite outbox 等待 Notion 同步。
 
 ### Flow 2–10
 
@@ -475,6 +523,10 @@ LIVE Campaign 完成或明确停止，再重启 Mamba 才会完整生效。
 ### Evolution / WhatsApp
 
 - Instance login、健康、消息发送、webhook、history 与媒体。
+- 未连接的既有 instance 可在 Settings → Phone Setup 使用「重新扫码」；系统只
+  重置旧 session 并生成新 QR，不删除 instance 或 Mamba 本机对话资料。
+- 正在发送 LIVE Campaign 时禁止重置 session；WhatsApp 账号仍处于 Restricted
+  时，重新扫码不能解除官方限制。
 - 入站接收覆盖本机所有 OPEN instance，包括辅助 sender。
 - `MESSAGES_UPSERT` 写消息，`MESSAGES_UPDATE` 更新 delivery evidence。
 - `SERVER_ACK` 不是客户已收到；`DELIVERY_ACK` 才代表送达客户装置。
@@ -524,13 +576,15 @@ Secret 只放 `.env`；远端删除属于破坏性操作，不在普通同步中
 | 页面 | URL |
 |---|---|
 | Control Center | `/control-center` |
-| Campaign Center | `/send` |
+| Campaign Center（Flow 1–10） | `/send#campaign-flow1`、`/send#campaign-next` |
+| Campaign Monitor | `/send#monitor` |
 | Flow 1 legacy view | `/flow-1` |
 | Multi-sender lanes | `/lanes` |
 | Customer Inbox | `/conversations` |
 | Chat Room | `/inbox` |
 | Follow-up Desk | `/follow-up` |
 | Customer Search | `/lookup` |
+| Refresh Customers | `/refresh` |
 | Templates & Flows | `/templates` |
 | Campaign Automations | `/campaign-todo` |
 | Project Brain | `/project-brain` |

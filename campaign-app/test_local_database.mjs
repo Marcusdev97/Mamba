@@ -188,6 +188,42 @@ const localRunRows = JSON.parse(execFileSync(detected.binary, [
 ], { encoding: "utf8" }));
 assert.deepEqual(localRunRows, [{ runs: 1, jobs: 2, requested: 4, sent: 1, failed: 1, status: "STOPPED" }]);
 
+const refreshCheckpoint = await service.recordRefreshCampaignProgress({
+  runId: "run_refresh_preserves_flow",
+  projectCode: "binastra",
+  projectName: "Binastra",
+  mode: "LIVE",
+  runStatus: "COMPLETED",
+  deviceId: device.id,
+  requestedCount: 1,
+  assignments: [{
+    phone: "60123456789",
+    name: "Alice",
+    instanceName: "wa_01",
+    senderPhone: senderPolicy.expectedSenderPhone,
+    senderKey: "mamba-test-device::60168568756",
+    part1SentAt: "2026-07-23T08:01:00.000Z",
+    part2SentAt: "2026-07-23T08:02:00.000Z",
+    sentAt: "2026-07-23T08:02:00.000Z",
+  }],
+  notionSyncJob: {
+    entityType: "campaign_run",
+    entityId: "run_refresh_preserves_flow",
+    idempotencyKey: "LOCAL_TO_NOTION:campaign_run:run_refresh_preserves_flow:refresh_sync",
+    payload: { runId: "run_refresh_preserves_flow", campaignType: "RECYCLE" },
+  },
+});
+assert.equal(refreshCheckpoint.recorded, 1);
+const refreshedAlice = (await service.readLeadCache()).records.find((row) => row.id === "page-local-1");
+assert.equal(refreshedAlice.lastFlowSent, "Flow 2 - Layout", "Refresh must preserve Last Flow Sent");
+assert.equal(refreshedAlice.nextFlow, "Flow 3 - Location", "Refresh must preserve Next Flow");
+assert.equal(refreshedAlice.lastBlastAt, "2026-07-23T08:02:00.000Z");
+const refreshRows = JSON.parse(execFileSync(detected.binary, [
+  "-batch", "-json", service.databasePath,
+  "SELECT (SELECT COUNT(*) FROM send_jobs WHERE run_id='run_refresh_preserves_flow') AS jobs, (SELECT COUNT(*) FROM sync_jobs WHERE idempotency_key='LOCAL_TO_NOTION:campaign_run:run_refresh_preserves_flow:refresh_sync') AS queued;",
+], { encoding: "utf8" }));
+assert.deepEqual(refreshRows, [{ jobs: 2, queued: 1 }]);
+
 const emptyTerminal = await service.recordCampaignFlowProgress({
   runId: "run_no_sent_terminal",
   projectCode: "binastra",

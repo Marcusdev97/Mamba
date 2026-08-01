@@ -23,6 +23,7 @@ import { createCampaignRecipientRiskService } from "./lib/campaign-recipient-ris
 import { createCampaignAwakeService } from "./lib/campaign-awake-service.mjs";
 import { createCampaignTransportGuard, transportFailure } from "./lib/campaign-transport-guard.mjs";
 import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs";
+import { createEvolutionReconnectService } from "./lib/evolution-reconnect-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
@@ -40,6 +41,8 @@ import { createOutboundFollowUpService } from "./lib/outbound-follow-up-service.
 import { createProjectService } from "./lib/project-service.mjs";
 import { createReplyServiceManager } from "./lib/reply-service-manager.mjs";
 import { createRemoteMambaService } from "./lib/remote-mamba-service.mjs";
+import { createRefreshCampaignService } from "./lib/refresh-campaign-service.mjs";
+import { REFRESH_TEMPLATE_FLOW } from "./domain/refresh-campaign-eligibility.mjs";
 import { createSettingsService } from "./lib/settings-service.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createTemplateService } from "./lib/template-service.mjs";
@@ -55,6 +58,7 @@ import {
   openInstances,
   createInstance,
   instanceQr,
+  logoutInstanceSession,
   deleteInstance,
   applyTemplateOverrides,
   firstFlowVariants,
@@ -77,7 +81,7 @@ import {
 } from "./flow_sequence.mjs";
 import { collectMessageObjects, extractText, phoneFromJid, messageTime } from "./morning_followup.mjs";
 import { describeMessage, resolvePhone } from "./reply_intake.mjs";
-import { addLocalStop } from "./suppression.mjs";
+import { addLocalStop, syncSuppressionList } from "./suppression.mjs";
 import { createNotionSync } from "./notion_sync.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -146,6 +150,11 @@ const campaignModeService = createCampaignModeService({ dataDir: paths.dataDir }
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
 const campaignRunnerRegistry = createCampaignRunnerRegistry({ rootDir: paths.rootDir });
 const remoteMambaService = createRemoteMambaService({ rootDir: paths.rootDir, consolePort: PORT });
+const evolutionReconnectService = createEvolutionReconnectService({
+  listInstances: deviceListInstances,
+  logoutInstanceSession: (name) => logoutInstanceSession(api, name),
+  requestQr: (name) => instanceQr(api, name),
+});
 
 function setCurrentRunner(value, { latest = true } = {}) {
   if (!value) return;
@@ -328,6 +337,7 @@ const {
   checkpointCompletedCustomer,
   autoAdvanceFlow,
   autoNotionUpload,
+  syncRefreshCampaignToNotion,
   recoverPendingUpdates,
   incPageNumber,
   creditSentCounts,
@@ -360,7 +370,7 @@ const outboundFollowUpService = createOutboundFollowUpService({
   filterRecords: (records) => filterRecordsForDevice(records, { device: deviceIdentity }).records,
   writeCache: writeLeadStore,
   history: conversationHistoryService,
-  conversationLog: conversationLogService,
+  conversationLog,
   systemLogs: systemLogService,
   intervalMs: followUpSyncMinutes * 60 * 1000,
 });
@@ -406,6 +416,26 @@ const telegramFilterService = createTelegramFilterService({
 });
 const workInboxIgnoreService = createWorkInboxIgnoreService({
   rootDir: paths.rootDir,
+});
+const refreshCampaignService = createRefreshCampaignService({
+  getProject,
+  syncLeadStore,
+  normalizePhone: nfNormalizePhone,
+  loadSuppressedPhones: async () => {
+    const result = await syncSuppressionList();
+    const unsafeFailures = (result.report || []).filter((item) => (
+      item.error && !/validation_error|property.*does not exist|could not find property/i.test(item.error)
+    ));
+    if (unsafeFailures.length) {
+      throw new Error(`全局 STOP 名单有 ${unsafeFailures.length} 个来源读取失败；Refresh 已停止，避免误发。`);
+    }
+    return result.set;
+  },
+  workInboxIgnore: workInboxIgnoreService,
+  conversationLog,
+  listRunners: () => campaignRunnerRegistry.list(),
+  createLeadGroup: (options) => localDatabaseService.createLeadGroup(options),
+  setLeadsCache: (value) => { leadsCache = value; },
 });
 const campaignRecipientRiskService = createCampaignRecipientRiskService({
   conversationLog,
@@ -529,9 +559,11 @@ const runtime = await loadRuntime({
   telegramHub,
   telegramFilters: telegramFilterService,
   workInboxIgnore: workInboxIgnoreService,
+  refreshCampaign: refreshCampaignService,
   replyServices: replyServiceManager,
   dailyCampaign: dailyCampaignService,
   evolutionHealth: evolutionHealthService,
+  evolutionReconnect: evolutionReconnectService,
   campaignAwake: campaignAwakeService,
   campaignTransportGuard,
   remoteMamba: remoteMambaService,
@@ -703,6 +735,8 @@ const runtime = await loadRuntime({
     },
     queue: campaignQueueService,
     recipientRisk: campaignRecipientRiskService,
+    refreshCampaign: refreshCampaignService,
+    refreshTemplateFlow: REFRESH_TEMPLATE_FLOW,
     applyNotionFlowTemplatesToState,
     firstFlowLabel: FIRST_FLOW_LABEL,
     applyTemplateOverrides,
@@ -712,6 +746,7 @@ const runtime = await loadRuntime({
     recordLocalFlowProgress,
     creditSentCounts,
     autoNotionUpload,
+    syncRefreshCampaignToNotion,
     recoverPendingUpdates,
     emptySnapshot,
     buildCsv,
@@ -837,7 +872,14 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
     // 而 flowLabel 是这个 run 的事实。Flow 1 没有 flowLabel 走上传，
     // Flow 2-10 有 flowLabel 走推进。
     const flowLabel = runner.state.flowLabel || "";
-    if (flowLabel) {
+    if (runner.state.campaignType === "RECYCLE") {
+      await syncRefreshCampaignToNotion(runner);
+      if (runner.state.notionSync?.status !== "SUCCEEDED") {
+        throw new Error(runner.state.notionSync?.error || "Refresh Notion sync failed");
+      }
+      await creditSentCounts(runner);
+    }
+    else if (flowLabel) {
       await autoAdvanceFlow(runner);
       if (runner.state.advanceStatus !== "SUCCEEDED") {
         throw new Error(runner.state.advanceError || `Notion Flow 推进状态是 ${runner.state.advanceStatus || "UNKNOWN"}`);
@@ -852,8 +894,11 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
       level: "info",
       area: "notion",
       event: "outbox_finalise_retried",
-      message: `Notion 回写重试成功：${flowLabel || "Flow 1"} · ${runId}`,
-      context: { runId, flowLabel: flowLabel || "Flow 1 - Project Template" },
+      message: `Notion 回写重试成功：${runner.state.campaignType === "RECYCLE" ? "Refresh - Reconnect" : flowLabel || "Flow 1"} · ${runId}`,
+      context: {
+        runId,
+        flowLabel: runner.state.campaignType === "RECYCLE" ? "Refresh - Reconnect" : flowLabel || "Flow 1 - Project Template",
+      },
     }).catch(() => {});
     return true;
   },
@@ -912,24 +957,27 @@ async function restoreActiveCampaign() {
             context: { runId: saved.runId, project: saved.project || null },
           }).catch(() => {});
         } else if (decision.action === "RESUME") {
-          restored.state.resumeSession = {
-            startedAt: new Date().toISOString(),
-            total: decision.safe,
+          // A process restart can happen long after the operator's approved window.
+          // Restore evidence only; explicit Continue creates a fresh recovery window.
+          restored.state.status = "INTERRUPTED";
+          restored.state.resumeSession = null;
+          restored.state.interruption = {
+            code: "MANUAL_RESUME_REQUIRED_AFTER_RESTART",
+            message: `${decision.safe} 位客户仍可安全继续。请检查 sender 与当前时间后按「继续发送」；系统不会在重启后自行发送。`,
             jobIds: decision.safeJobIds,
-            source: "restart-auto-resume",
+            interruptedAt: new Date().toISOString(),
+            requiresManualResume: true,
           };
-          restored.state.interruption = null;
-          restored.pushLog(`重启检查：${decision.safe} 位都有明确安全状态，已自动继续；已完成的客户不会重发。`);
+          restored.pushLog(`重启检查：已保留 ${decision.safe} 位待继续客户；请人工按「继续发送」，已完成的客户不会重发。`);
           await restored.saveState();
           await systemLogService.write({
             level: "info",
             area: "campaign",
-            event: "campaign_restart_auto_resumed",
-            message: "Restart recovery automatically resumed only customers with unambiguous local state.",
-            context: { runId: saved.runId, project: saved.project || null, resumed: decision.safe, jobIds: decision.safeJobIds },
+            event: "campaign_restart_manual_resume_required",
+            message: "Restart recovery preserved unfinished customers and now requires explicit operator confirmation.",
+            context: { runId: saved.runId, project: saved.project || null, pending: decision.safe, jobIds: decision.safeJobIds },
           }).catch(() => {});
-          runCampaignInBackground(runtime, restored, Boolean(restored.state.flowLabel), "campaign_restart_auto_resume_failed");
-          results.push({ runId: saved.runId, restored: true, autoResumed: true, decision });
+          results.push({ runId: saved.runId, restored: true, manualResumeRequired: true, decision });
           continue;
         } else {
           restored.state.status = "INTERRUPTED";
@@ -978,8 +1026,8 @@ async function restoreActiveCampaign() {
     if (latest) setCurrentRunner(latest, { latest: true });
   }
   await campaignRunnerRegistry.persist().catch(() => {});
-  // Queue 已经由使用者确认过。程序重启后重新检查号码车道：安全就自动接着跑；
-  // 若旧 run 有 SENDING 未确认状态，campaignQueueBlockReason 仍会维持暂停。
+  // Queue 中尚未开始的批次已经由使用者确认过；这不包含上面被中断的旧 LIVE run。
+  // 旧 run 必须人工 Continue，未开始的 queue item 则重新经过号码车道安全检查。
   await startNextQueued(runtime).catch(async (error) => {
     await campaignQueueService.setHold(`重启后启动下一批失败: ${error.message}`).catch(() => {});
     await systemLogService.write({

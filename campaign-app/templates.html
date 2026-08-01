@@ -164,6 +164,7 @@ const FLOWS = [
   { flow: "Flow 8", topic: "Invitation", day: "Day 15" },
   { flow: "Flow 9", topic: "Rental", day: "Conditional" },
   { flow: "Flow 10", topic: "Surrounding", day: "Day 18" },
+  { flow: "Refresh", topic: "Refresh - Reconnect", day: "Manual", manual: true },
 ];
 
 let TEMPLATES = [];
@@ -487,10 +488,10 @@ function render() {
           <span class="drop-hint">拖模板到这里移动</span>
         </div>
       </div>` +
-      (i < FLOWS.length - 1 ? `<div class="connector">↓ 没回复,${FLOWS[i + 1].day} 继续</div>` : "");
+      (i < FLOWS.length - 1 && !FLOWS[i + 1].manual ? `<div class="connector">↓ 没回复,${FLOWS[i + 1].day} 继续</div>` : "");
   }).join("");
   root.innerHTML = html;
-  document.getElementById("summary").textContent = `${ok}/${FLOWS.length} 轮有 Active · 缺 ${missing} 轮`;
+  document.getElementById("summary").textContent = `${ok}/${FLOWS.length} 个模板组有 Active · 缺 ${missing} 组`;
 }
 
 async function addProject() {

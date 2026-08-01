@@ -148,6 +148,38 @@ export function registerInstancesRoutes(router) {
     json(res, 200, { ok: true, qr });
   });
 
+  router.post("/api/instance/reconnect", async (req, res, runtime) => {
+    if (!runtime.evolutionReconnect?.begin) {
+      throw httpError(500, "Evolution reconnect service 没有载入。请重启 Mamba server。");
+    }
+    const body = await readJson(req);
+    const name = String(body.name ?? "").trim();
+    if (!name) throw httpError(400, "缺少号码标签 name。");
+    assertInstanceName(name);
+
+    const runner = runtime.getRunner?.();
+    const result = await runtime.evolutionReconnect.begin({
+      instanceName: name,
+      isCampaignRunning: Boolean(runner?.running),
+    });
+    if (result.qrError) {
+      await runtime.systemLogs?.write({
+        level: "warn",
+        area: "evolution",
+        event: "instance_reconnect_qr_pending",
+        message: `${name} session 已重置，但新二维码尚未准备完成。`,
+        context: { instanceName: name, error: result.qrError },
+      }).catch(() => {});
+    }
+    json(res, 200, {
+      ok: true,
+      ...result,
+      message: result.pending
+        ? `${name} 已保留并清除旧 session；Evolution 正在准备二维码，请保持页面开启。`
+        : `${name} 已保留并生成新的登录二维码。`,
+    });
+  });
+
   router.post("/api/instance/delete", async (req, res, runtime) => {
     const whatsapp = requireWhatsapp(runtime);
     const runner = runtime.getRunner?.();

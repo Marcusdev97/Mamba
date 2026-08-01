@@ -414,10 +414,17 @@
         <tbody id="instBody"><tr><td colspan="4" class="muted">读取中...</td></tr></tbody>
       </table>
 
+      <div class="database-note" style="margin-top:14px">
+        <b style="color:var(--text)">号码被登出／session 失效？</b>
+        对未连接号码按「重新扫码」。Mamba 会保留原本的 instance 名称、本机对话与数据库关联，只重置登录 session；不会删除再建立。
+        如果 WhatsApp 账号本身仍是 Restricted，重新扫码不能解除官方限制，请先等待账号恢复。
+      </div>
+
       <div id="qrPanel" class="hidden" style="margin-top:16px; border-top:1px solid var(--line); padding-top:16px">
         <div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap">
           <div style="background:#fff; padding:10px; border-radius:10px; width:230px; height:230px; display:flex; align-items:center; justify-content:center">
-            <img id="qrImg" alt="QR" style="width:210px; height:210px; image-rendering:pixelated" />
+            <div id="qrWaiting" style="color:#334155; text-align:center; font-size:13px; line-height:1.5; padding:18px">Evolution 正在准备二维码…</div>
+            <img id="qrImg" class="hidden" alt="QR" style="width:210px; height:210px; image-rendering:pixelated" />
           </div>
           <div style="flex:1; min-width:240px">
             <div style="font-weight:700; font-size:15px; margin-bottom:8px">为 <span id="qrName" style="color:var(--green)"></span> 扫码登录</div>
@@ -732,6 +739,27 @@ function badge(status) {
   return '<span class="badge ' + cls + '">' + status + "</span>";
 }
 
+function openQrPanel(name, qr, statusText) {
+  qrName = name;
+  $("qrName").textContent = name;
+  $("qrErr").textContent = "";
+  $("qrStatus").textContent = statusText || "等待扫描...（二维码每 25 秒自动刷新）";
+  if (qr) {
+    $("qrImg").src = qr;
+    $("qrImg").classList.remove("hidden");
+    $("qrWaiting").classList.add("hidden");
+  } else {
+    $("qrImg").removeAttribute("src");
+    $("qrImg").classList.add("hidden");
+    $("qrWaiting").classList.remove("hidden");
+  }
+  $("qrPanel").classList.remove("hidden");
+  $("qrPanel").scrollIntoView({ behavior: "smooth" });
+  if (qrTimer) clearInterval(qrTimer);
+  qrTicks = 0;
+  qrTimer = setInterval(qrTick, 5000);
+}
+
 function renderPhoneHealth(data, instances) {
   const open = instances.filter((i) => i.status === "OPEN").length;
   const closed = Math.max(0, instances.length - open);
@@ -795,16 +823,25 @@ async function refreshInstances() {
     body.innerHTML = '<tr><td colspan="4" class="muted">' + (data.online ? "暂无号码，点添加号码扫码" : (data.error || "Evolution API 离线")) + "</td></tr>";
     return;
   }
-  body.innerHTML = instances.map((i) =>
-    "<tr><td><b>" + i.name + "</b></td><td>" + badge(i.status) + (i.allowedOnThisDevice === false ? ' <span class="pill bad">BLOCKED</span>' : "") + "</td><td>" + i.number +
-    '</td><td style="text-align:right"><button class="btn" style="padding:4px 12px; font-size:12.5px" data-del="' + i.name + '">删除</button></td></tr>'
-  ).join("");
+  body.innerHTML = instances.map((i) => {
+    const blockedOnDevice = i.allowedOnThisDevice === false;
+    const reconnect = i.status !== "OPEN" && !blockedOnDevice
+      ? '<button class="btn" style="padding:4px 12px; font-size:12.5px" data-reconnect="' + i.name + '">重新扫码</button>'
+      : "";
+    return "<tr><td><b>" + i.name + "</b></td><td>" + badge(i.status) + (blockedOnDevice ? ' <span class="pill bad">BLOCKED</span>' : "") + "</td><td>" + i.number +
+      '</td><td style="text-align:right"><div class="actions" style="justify-content:flex-end; margin-top:0">' + reconnect + '<button class="btn" style="padding:4px 12px; font-size:12.5px" data-del="' + i.name + '">删除</button></div></td></tr>';
+  }).join("");
 }
 
 async function refreshQr() {
   if (!qrName) return;
   const r = await api("/api/instance/qr?name=" + encodeURIComponent(qrName)).catch((e) => ({ ok: false, error: e.message }));
-  if (r.ok) { $("qrImg").src = r.qr; $("qrErr").textContent = ""; }
+  if (r.ok) {
+    $("qrImg").src = r.qr;
+    $("qrImg").classList.remove("hidden");
+    $("qrWaiting").classList.add("hidden");
+    $("qrErr").textContent = "";
+  }
   else $("qrErr").textContent = r.error || "刷新二维码失败";
 }
 
@@ -818,7 +855,9 @@ async function qrTick() {
     refreshInstances();
     return;
   }
-  if (qrTicks % 5 === 0) refreshQr();
+  // A reset session may need a few seconds before Evolution exposes its first
+  // QR. Poll quickly until one appears, then use the normal 25-second refresh.
+  if ($("qrImg").classList.contains("hidden") || qrTicks % 5 === 0) refreshQr();
 }
 
 $("btnSave").addEventListener("click", async () => {
@@ -1092,16 +1131,7 @@ $("btnAddNumber").addEventListener("click", async () => {
   $("btnAddNumber").disabled = true;
   try {
     const r = await api("/api/instance/create", { name: label || undefined });
-    qrName = r.instanceName;
-    $("qrName").textContent = qrName;
-    $("qrImg").src = r.qr;
-    $("qrErr").textContent = "";
-    $("qrStatus").textContent = "等待扫描...（二维码每 25 秒自动刷新）";
-    $("qrPanel").classList.remove("hidden");
-    $("qrPanel").scrollIntoView({ behavior: "smooth" });
-    if (qrTimer) clearInterval(qrTimer);
-    qrTicks = 0;
-    qrTimer = setInterval(qrTick, 5000);
+    openQrPanel(r.instanceName, r.qr, "等待扫描...（二维码每 25 秒自动刷新）");
   } catch (e) {
     message("", e.message);
   } finally {
@@ -1117,6 +1147,24 @@ $("btnQrClose").addEventListener("click", () => {
 });
 
 $("instBody").addEventListener("click", async (e) => {
+  const reconnectBtn = e.target.closest("[data-reconnect]");
+  if (reconnectBtn) {
+    const name = reconnectBtn.dataset.reconnect;
+    if (!confirm("重新连接 " + name + "？\n\n会登出失效的 WhatsApp session 并生成新二维码，但保留 instance 名称和 Mamba 本机资料。正在发送 Campaign 时系统会拒绝操作。")) return;
+    reconnectBtn.disabled = true;
+    reconnectBtn.textContent = "准备中...";
+    try {
+      const result = await api("/api/instance/reconnect", { name });
+      openQrPanel(name, result.qr, result.pending ? "旧 session 已清除，正在等待 Evolution 生成二维码..." : "请用原号码重新扫描登录。" );
+      message(result.message || (name + " 已准备重新扫码。"), "");
+      refreshInstances();
+    } catch (err) {
+      message("", err.message);
+      reconnectBtn.disabled = false;
+      reconnectBtn.textContent = "重新扫码";
+    }
+    return;
+  }
   const btn = e.target.closest("[data-del]");
   if (!btn) return;
   const name = btn.dataset.del;

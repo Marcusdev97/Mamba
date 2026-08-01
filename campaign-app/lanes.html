@@ -119,15 +119,16 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let modeCatalog = [];
-let modeByInstance = {};   // wa_01 -> "crazy"
+let modeByInstance = {};   // wa_01 -> { mode, contactGapSeconds }
 let groups = [];
 let currentProject = "";
 
 async function jget(url) { const r = await fetch(url, { cache: "no-store" }); return r.json(); }
 
-function paceOf(key) {
+function paceOf(setting) {
+  const key = setting?.mode || "normal";
   const m = modeCatalog.find((x) => x.key === key);
-  const g = m && m.contactGapSeconds || {};
+  const g = setting?.contactGapSeconds || (m && m.contactGapSeconds) || {};
   return { emoji: m ? m.emoji : "🐍", label: m ? m.label : "普通", pace: g.min ? g.min + "-" + g.max + "s" : "" };
 }
 
@@ -143,7 +144,9 @@ async function loadModes() {
   if (!data || !data.ok) return;
   modeCatalog = data.modes || [];
   modeByInstance = {};
-  (data.instances || []).forEach((i) => { modeByInstance[i.instance] = i.mode; });
+  (data.instances || []).forEach((i) => {
+    modeByInstance[i.instance] = { mode: i.mode, contactGapSeconds: i.contactGapSeconds };
+  });
   return data.instances || [];
 }
 
@@ -173,8 +176,9 @@ function renderLanes(instances) {
     return;
   }
   container.innerHTML = instances.map((inst) => {
-    const key = modeByInstance[inst.name] || "normal";
-    const p = paceOf(key);
+    const setting = modeByInstance[inst.name] || { mode: "normal" };
+    const key = setting.mode;
+    const p = paceOf(setting);
     return `
       <div class="lane mode-${key}" data-instance="${escapeHtml(inst.name)}" data-mode="${key}">
         <div class="lane-top">
@@ -232,6 +236,9 @@ function wireLanes() {
     group.addEventListener("change", () => updateStartEnabled(lane));
     lane.querySelector('[data-act="start"]').addEventListener("click", () => launchLane(lane));
     lane.querySelector('[data-act="stop"]').addEventListener("click", () => stopLane(lane));
+    lane.querySelector('[data-act="mode"]').addEventListener("click", () => {
+      window.parent?.document?.getElementById("modePill")?.click();
+    });
     updateStartEnabled(lane);
   });
 }
@@ -406,6 +413,9 @@ async function boot() {
   pollLanes();
   setInterval(pollLanes, 3000);
 }
+window.addEventListener("message", (event) => {
+  if (event.origin === window.location.origin && event.data?.type === "mamba-campaign-mode-updated") refreshAll();
+});
 boot();
 </script>
 </body>

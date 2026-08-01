@@ -47,6 +47,21 @@ export function isResumableJobStatus(status) {
   const value = String(status || "");
   return value === "QUEUED" || /^WAITING_PART\d+$/.test(value) || /^SENDING_PART\d+$/.test(value);
 }
+export function isTimeWindowResumeStatus(status) {
+  return ["SKIPPED_END_TIME", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME"].includes(String(status || ""));
+}
+
+export function restoreTimeWindowResumeJob(job) {
+  if (!job || !isTimeWindowResumeStatus(job.status)) return false;
+  const nextPartNumber = firstUnsentPartNumber(job);
+  job.status = nextPartNumber === null
+    ? "SENT"
+    : nextPartNumber === 1 ? "QUEUED" : `WAITING_PART${nextPartNumber}`;
+  job.waitingUntil = null;
+  job.waitingGapSeconds = null;
+  job.error = null;
+  return true;
+}
 // 同一个 flow 在这几天内已经发过就不再发。7 天足够涵盖「今天停、明天重开」这种
 // 情况，又不会挡住正常的 flow 节奏(cadence 以周/月为单位)。
 const DEFAULT_RESEND_COOLDOWN_DAYS = 7;
@@ -130,7 +145,7 @@ export function campaignOutcomeSummary(assignments = []) {
   };
   for (const job of assignments) {
     const status = String(job?.status || "");
-    if (isResumableJobStatus(status)) {
+    if (isResumableJobStatus(status) || isTimeWindowResumeStatus(status)) {
       result.pending += 1;
     } else if (status === "FAILED") {
       result.failed += 1;
@@ -154,9 +169,28 @@ export function campaignOutcomeSummary(assignments = []) {
 
 export function isCampaignResumeCandidate(state, job) {
   return isResumableJobStatus(job?.status)
+    || isTimeWindowResumeStatus(job?.status)
     || (state?.localCheckpointMode === "PER_CUSTOMER_V1"
       && job?.status === "SENT"
       && job?.localCheckpoint?.status !== "SUCCEEDED");
+}
+
+export function startCampaignResumeSession(state, jobs, startedAt = new Date().toISOString()) {
+  const targets = Array.isArray(jobs) ? jobs : [];
+  return {
+    startedAt,
+    total: targets.length,
+    jobIds: targets.map((job) => job.id),
+    originalStartAt: state?.startAt ?? null,
+    originalEndAt: state?.endAt ?? null,
+    recoveryWindow: null,
+  };
+}
+
+export function campaignHasActiveResumeSession(state) {
+  const jobIds = new Set(state?.resumeSession?.jobIds || []);
+  return jobIds.size > 0
+    && (state?.assignments || []).some((job) => jobIds.has(job.id) && isResumableJobStatus(job.status));
 }
 
 export function sentEvidenceForPart(job, partNumber) {
@@ -415,9 +449,13 @@ export async function instanceQr(api, instanceName) {
   return body?.base64 ?? body?.qrcode?.base64 ?? null;
 }
 
+export async function logoutInstanceSession(api, instanceName) {
+  return api(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" });
+}
+
 export async function deleteInstance(api, instanceName) {
   try {
-    await api(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" });
+    await logoutInstanceSession(api, instanceName);
   } catch {
     // already logged out / not connected — continue to delete
   }
@@ -993,10 +1031,15 @@ export class CampaignRunner {
   // 这一批算哪个 flow。防重发就是比对这个值 —— 同一个 flow 才算重发，
   // Flow 2 不该因为客户收过 Flow 1 就被挡。
   flowTopic() {
+    if (this.state?.campaignType === "RECYCLE") return this.state.templateFlow || "Refresh - Reconnect";
     return this.state?.templateFlow || this.state?.flowLabel || this.state?.campaignId || "";
   }
 
   resendCooldownDays() {
+    if (this.state?.campaignType === "RECYCLE") {
+      const refreshDays = Number(this.state.refreshCooldownDays);
+      if ([14, 21, 30].includes(refreshDays)) return refreshDays;
+    }
     const value = Number(this.config?.delivery?.resendCooldownDays ?? DEFAULT_RESEND_COOLDOWN_DAYS);
     return Number.isFinite(value) && value >= 0 ? value : DEFAULT_RESEND_COOLDOWN_DAYS;
   }
@@ -1004,7 +1047,9 @@ export class CampaignRunner {
   // 回传 null = 可以发；回传物件 = 要跳过，附上人看得懂的原因。
   async recentSendSkip(job) {
     const days = this.resendCooldownDays();
-    const flow = this.flowTopic();
+    // Refresh 不是普通 Flow 重试；冷却期内任何我方讯息都代表客户最近
+    // 已经被联系过，不能只比较 Refresh 的 flow topic。
+    const flow = this.state?.campaignType === "RECYCLE" ? "" : this.flowTopic();
     try {
       const hits = await this.conversationLog.sentFlowSince([job.lead.phone], { flowTopic: flow, sinceDays: days });
       const hit = [...hits.values()][0];
@@ -1289,7 +1334,13 @@ export class CampaignRunner {
           this.showProgress(`Reply detected → ${job.lead.name}; remaining parts cancelled`);
           return;
         }
-        if (this.pastFixedEnd()) { job.status = "SENT"; await this.saveState(); return; }
+        if (this.pastFixedEnd()) {
+          // A fixed-window cutoff is not evidence that the remaining Part was sent.
+          // Keep the customer resumable and block the per-customer Flow checkpoint.
+          job.status = "PARTIAL_END_TIME";
+          await this.saveState();
+          return;
+        }
         await this.assertTransport(job.instanceName);
         job.status = `SENDING_PART${k + 3}`;
         // Part 3+ 也必须跟 Part 1/2 一样，在呼叫 WhatsApp 前先记录 SENDING。
@@ -1449,7 +1500,7 @@ export class CampaignRunner {
       const scheduled = Math.max(new Date(next.scheduledAt).getTime(), earliestAfterPrevious);
       next.scheduledAt = new Date(scheduled).toISOString();
       next.contactGapSeconds = contactGapSeconds;
-      if (this.state.scheduleMode === AUTO_SCHEDULE) {
+      if (this.state.scheduleMode === AUTO_SCHEDULE || campaignHasActiveResumeSession(this.state)) {
         const parts = Math.max(...this.state.assignments.filter((job) => isResumableJobStatus(job.status)).map(jobMessagePartCount), 1);
         const { floorMs } = campaignPacing(this.config, parts);
         if (scheduled + floorMs > new Date(this.state.endAt).getTime()) {
@@ -1497,7 +1548,8 @@ export class CampaignRunner {
     // TEST runs shouldn't be stretched across the whole window — pace the few
     // test contacts by the floor gap so the test completes promptly.
     const isAutoSchedule = this.state.scheduleMode === AUTO_SCHEDULE;
-    const baseInterval = this.state.mode === "TEST" || isAutoSchedule
+    const isResumeRecovery = campaignHasActiveResumeSession(this.state);
+    const baseInterval = this.state.mode === "TEST" || isAutoSchedule || isResumeRecovery
       ? floorMs
       : Math.max(evenInterval, floorMs);
     // Human-like jitter, capped by the contact-gap range and never below floor.
@@ -1513,15 +1565,23 @@ export class CampaignRunner {
     // If the floor pushed the last send past the window, extend endAt so the
     // end-time cutoff doesn't skip those leads (safety beats the strict window).
     const lastScheduled = new Date(queued[n - 1].scheduledAt).getTime();
-    if (isAutoSchedule || lastScheduled + Math.max(0, maxPartCount - 1) * partGapMaxMs > endMs) {
+    if (isAutoSchedule || isResumeRecovery || lastScheduled + Math.max(0, maxPartCount - 1) * partGapMaxMs > endMs) {
       this.state.endAt = new Date(lastScheduled + floorMs).toISOString();
+    }
+
+    if (isResumeRecovery) {
+      this.state.resumeSession.recoveryWindow = {
+        rebasedAt: new Date(now).toISOString(),
+        startAt: new Date(startMs).toISOString(),
+        endAt: this.state.endAt,
+      };
     }
 
     const perMin = Math.round(baseInterval / 6000) / 10; // minutes, 1 decimal
     const hhmm = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour12: false });
     const waitMin = Math.max(0, Math.round((startMs - now) / 60000));
     this.showProgress(
-      `${isAutoSchedule ? "AUTO pacing" : "Fixed-window pacing"} ${n} leads × ${maxPartCount} part(s) ~${perMin} min apart (floor ${Math.round(floorMs / 1000)}s), ` +
+      `${isResumeRecovery ? "Resume recovery pacing" : isAutoSchedule ? "AUTO pacing" : "Fixed-window pacing"} ${n} leads × ${maxPartCount} part(s) ~${perMin} min apart (floor ${Math.round(floorMs / 1000)}s), ` +
       `first at ${hhmm(startMs)}${waitMin > 0 ? ` (waiting ~${waitMin} min)` : ""}, ` +
       `last around ${hhmm(new Date(this.state.endAt).getTime())}.`
     );
@@ -1626,6 +1686,7 @@ export class CampaignRunner {
             runId: this.state.runId,
             project: this.state.project ?? null,
             mode: this.state.mode,
+            campaignType: this.state.campaignType ?? "NEW",
             localCheckpointMode: this.state.localCheckpointMode ?? null,
             status: this.state.status,
             createdAt: this.state.createdAt ?? null,

@@ -5,8 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>选人发下一轮 · Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
+<script>
+  const nextFlowView = new URLSearchParams(window.location.search).get("view");
+  if (window.self !== window.top) document.documentElement.classList.add("mamba-embedded");
+  if (nextFlowView === "setup") document.documentElement.classList.add("mamba-setup-view");
+</script>
 <style>
   .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 18px 120px; }
+  html.mamba-embedded .page-intro { display:none; }
+  html.mamba-embedded .wrap { padding-top:18px; }
+  /* Campaign planning selects recipients and timing. Runtime controls and logs
+     belong to Send Monitor, but remain available on the standalone legacy page. */
+  html.mamba-setup-view #statusPanel { display:none !important; }
   h1 { margin: 0 0 2px; font-size: 22px; }
   .sub { color: #94a3b8; margin-bottom: 16px; font-size: 13px; }
   a { color: #7dd3fc; }
@@ -97,8 +107,10 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>📣 发送台 · ② Flow 2-10 跟进</h1>
-  <div class="sub"><a href="/flow-1" style="color:#7dd3fc;text-decoration:none" onclick="if(window.top!==window.self&&window.parent.show){window.parent.show('flow1');return false}">① Flow 1 新名单群发</a> · <b style="color:#e2e8f0">② Flow 2-10 跟进(本页)</b> — 列出今天该发下一条的人,勾选后直接发</div>
+  <div class="page-intro">
+    <h1>📣 发送台 · ② Flow 2-10 跟进</h1>
+    <div class="sub"><a href="/flow-1" style="color:#7dd3fc;text-decoration:none" onclick="if(window.top!==window.self&&window.parent.show){window.parent.show('flow1');return false}">① Flow 1 新名单群发</a> · <b style="color:#e2e8f0">② Flow 2-10 跟进(本页)</b> — 列出今天该发下一条的人,勾选后直接发</div>
+  </div>
 
   <div class="warn">发送会<b>自动按 Cohort Day 取模板</b>(Templates 库里 Status=Active、对应 Day 的那条)。一次只发一组(同一个 Next Flow)。请先把那一轮的模板放好并设 Active。</div>
 
@@ -666,6 +678,9 @@ async function doSend(mode, proj, rows, flow, limitCount) {
       runId: activeNextRunId,
       recipientRiskToken: mode === "LIVE" ? recipientRiskToken : undefined,
     });
+    if (document.documentElement.classList.contains("mamba-setup-view")) {
+      try { window.parent?.show?.("monitor"); } catch {}
+    }
     setTimeout(() => toast(mode === "LIVE" ? `已开始发送 ${flow} 🚀 发完自动推进到下一轮` : "已发测试给自己 🧪"), 800);
     setTimeout(pollStatus, 1800);
   } catch (e) {
@@ -740,10 +755,36 @@ let wasRunning = false;      // was the run active on the previous poll?
 let activeNextRunId = null;  // 精确追踪本页启动的号码通道，不会串到另一台 WhatsApp。
 let postDoneChecks = 0;      // how many times we've polled after it stopped
 let scanTick = 0;            // throttle Evolution scans (~every 3rd poll)
+
+function replacementRunningRun(status) {
+  if (!activeNextRunId || status?.running || !status?.state) return null;
+  const expectedProject = String(status.state.project || "");
+  const expectedFlow = String(status.state.flowLabel || "");
+  const expectedInstances = new Set((status.state.instances || []).map((item) =>
+    String(typeof item === "string" ? item : item?.name || "")
+  ).filter(Boolean));
+  return (status.runs || []).find((candidate) => {
+    if (!candidate?.running || !candidate?.state?.runId) return false;
+    if (expectedProject && String(candidate.state.project || "") !== expectedProject) return false;
+    if (expectedFlow && String(candidate.state.flowLabel || "") !== expectedFlow) return false;
+    const instances = (candidate.state.instances || []).map((item) =>
+      String(typeof item === "string" ? item : item?.name || "")
+    ).filter(Boolean);
+    return !expectedInstances.size || instances.some((name) => expectedInstances.has(name));
+  }) || null;
+}
+
 async function pollStatus() {
   const box = document.getElementById("statusPanel");
   try {
-    const s = await api("/api/status" + (activeNextRunId ? `?runId=${encodeURIComponent(activeNextRunId)}` : ""));
+    let s = await api("/api/status" + (activeNextRunId ? `?runId=${encodeURIComponent(activeNextRunId)}` : ""));
+    // A preview can be superseded by the real queued runner. Following the old
+    // READY run made every QUEUED customer look "已暂停" while WhatsApp was sending.
+    const replacement = replacementRunningRun(s);
+    if (replacement && replacement.state.runId !== activeNextRunId) {
+      activeNextRunId = replacement.state.runId;
+      s = await api(`/api/status?runId=${encodeURIComponent(activeNextRunId)}`);
+    }
     if (!activeNextRunId && s?.state?.flowLabel) activeNextRunId = s.state.runId;
     if (!s || !s.state) {
       rememberRunAssignments(null, false);
@@ -756,7 +797,7 @@ async function pollStatus() {
     const fallbackOutcomes = {
       total:a.length,
       contacted:a.filter((j) => j.part1At || ["SENT","REPLIED_WARM","PART1_ONLY_END_TIME"].includes(j.status)).length,
-      pending:a.filter((j) => j.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(j.status || "")).length,
+      pending:a.filter((j) => j.status === "QUEUED" || /^(WAITING|SENDING)_PART\d+$/.test(j.status || "") || ["SKIPPED_END_TIME", "PART1_ONLY_END_TIME", "PARTIAL_END_TIME"].includes(j.status)).length,
       skipped:a.filter((j) => String(j.status || "").startsWith("SKIPPED_")).length,
       noWhatsapp:a.filter((j) => j.status === "SKIPPED_NO_WHATSAPP").length,
       failed:a.filter((j) => j.status === "FAILED").length,

@@ -71,6 +71,16 @@ assert.ok(settingsEnvCount <= 7, "Do not increase the legacy process.env baselin
 
 const serverSource = await fs.readFile(path.join(appDir, "server.mjs"), "utf8");
 assert.doesNotMatch(serverSource, ddlPattern, "server.mjs must not own schema changes");
+assert.doesNotMatch(
+  serverSource,
+  /campaign_restart_auto_resumed|restart-auto-resume|autoResumed:\s*true/,
+  "A restarted LIVE campaign must wait for explicit operator Continue",
+);
+assert.match(
+  serverSource,
+  /MANUAL_RESUME_REQUIRED_AFTER_RESTART/,
+  "Restart recovery must expose an auditable manual-resume state",
+);
 await fs.access(path.join(rootDir, "docs", "DATA_OWNERSHIP.md"));
 await fs.access(path.join(rootDir, "docs", "RUNTIME_DATA_RETENTION.md"));
 console.log("✅ Architecture boundary regression tests passed");

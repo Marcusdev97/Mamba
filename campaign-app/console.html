@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>首轮群发（Flow 1）· Mamba</title>
 <link rel="stylesheet" href="/assets/mamba.css" />
+<script>
+  const flowOneView = new URLSearchParams(window.location.search).get("view");
+  const campaignRunId = new URLSearchParams(window.location.search).get("runId");
+  if (window.self !== window.top) document.documentElement.classList.add("mamba-embedded");
+  if (flowOneView === "setup") document.documentElement.classList.add("mamba-setup-view");
+  if (flowOneView === "monitor") document.documentElement.classList.add("mamba-monitor-view");
+</script>
 <style>
   body {
     background:
@@ -12,6 +19,15 @@
       var(--bg);
   }
   .wrap { max-width:1180px; }
+  html.mamba-embedded .top { display:none; }
+  html.mamba-embedded .wrap { padding-top:18px; }
+  /* Campaign setup stays in Campaign Center, while the same run renderer supplies
+     live controls and recipient evidence to the monitoring workspace. */
+  html.mamba-setup-view #progressCard { display:none !important; }
+  html.mamba-monitor-view .setup-only,
+  html.mamba-monitor-view #outboxCard { display:none !important; }
+  html.mamba-monitor-view .wrap { max-width:none; padding:14px 18px 22px; }
+  html.mamba-monitor-view #progressCard { margin:0; }
   .project-context {
     display:grid; grid-template-columns:minmax(180px,240px) minmax(0,1fr); gap:18px; align-items:center;
     padding:14px 16px; border-color:rgba(74,158,255,.22);
@@ -184,7 +200,7 @@
   </header>
 
   <!-- Project selector -->
-  <div class="card project-context">
+  <div class="card project-context setup-only">
     <div class="project-control">
       <label for="projectSel">Project</label>
       <select id="projectSel"></select>
@@ -195,7 +211,7 @@
     </div>
   </div>
 
-  <div class="grid setup-grid">
+  <div class="grid setup-grid setup-only">
     <!-- Step 1: customer groups -->
     <div class="card flow-card">
       <div class="flow-section-head">
@@ -375,7 +391,7 @@
   </div>
 
   <!-- Step 3: preview + confirm -->
-  <div class="card hidden" id="previewCard">
+  <div class="card hidden setup-only" id="previewCard">
     <h2><span class="step-no">3</span>预览与确认</h2>
     <div class="chips" id="previewChips"></div>
     <div id="testNote" class="notice">TEST 模式只发给你填写的测试收件人，不会使用 Excel 名单。</div>
@@ -408,11 +424,11 @@
     <div class="err" id="outboxErr"></div>
   </div>
 
-  <!-- Step 4: progress -->
+  <!-- Runtime progress: rendered inside Send Monitor for the selected Campaign run. -->
   <div class="card hidden progress-card" id="progressCard">
     <div class="progress-head">
       <div>
-        <h2><span class="step-no">4</span>发送进度</h2>
+        <h2>发送进度</h2>
         <div class="muted">先看发送结果，再按需要查看运行记录与客户明细。</div>
       </div>
       <div class="progress-status"><span class="badge b-go" id="progressStateLabel">准备中</span><strong class="progress-percent" id="progressPercent">0%</strong></div>
@@ -1033,10 +1049,17 @@ async function startCampaign(optIn, recipientRiskToken = "") {
     $("btnStartTest").disabled = true;
     $("btnStartLive").disabled = true;
     try { window.parent?.refreshCampaignQueue?.(); } catch {}
+    if (document.documentElement.classList.contains("mamba-setup-view")) {
+      try { window.parent?.show?.("monitor"); } catch {}
+    }
     return;
   }
   $("progressCard").classList.remove("hidden");
-  $("progressCard").scrollIntoView({ behavior: "smooth" });
+  if (document.documentElement.classList.contains("mamba-setup-view")) {
+    try { window.parent?.show?.("monitor"); } catch {}
+  } else {
+    $("progressCard").scrollIntoView({ behavior: "smooth" });
+  }
   startPolling();
 }
 $("btnStartTest").addEventListener("click", () => {
@@ -1249,13 +1272,27 @@ setInterval(refreshOutbox, 30000);
 loadProjects().then(refreshInstances);
 setInterval(refreshInstances, 10000); // 从 Settings / Phone Setup 回来时自动更新 senders
 // if a run is already in progress (server restarted page), show it
-get("/api/status").then((snap) => {
+get("/api/status" + (campaignRunId ? "?runId=" + encodeURIComponent(campaignRunId) : "")).then((snap) => {
   if (snap && snap.state) {
     preparedRunId = snap.state.runId || preparedRunId;
     $("progressCard").classList.remove("hidden");
     startPolling();
   }
 });
+
+// The monitor shell owns scrolling. Reporting the same-origin document height keeps
+// the detailed card readable without adding a second nested page scrollbar.
+if (document.documentElement.classList.contains("mamba-monitor-view") && window.parent !== window) {
+  const reportMonitorHeight = () => {
+    window.parent.postMessage({
+      type: "mamba-campaign-monitor-height",
+      height: Math.ceil(document.documentElement.scrollHeight),
+    }, window.location.origin);
+  };
+  window.addEventListener("load", reportMonitorHeight);
+  if (window.ResizeObserver) new ResizeObserver(reportMonitorHeight).observe(document.documentElement);
+  setTimeout(reportMonitorHeight, 0);
+}
 </script>
 </body>
 </html>

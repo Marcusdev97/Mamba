@@ -11,6 +11,7 @@
       { code: "CR", label: "Chat Room", href: "/inbox", paths: ["/inbox"] },
       { code: "FU", label: "Follow-up & Appointments", href: "/follow-up", paths: ["/follow-up"] },
       { code: "CS", label: "Customer Search", href: "/lookup", paths: ["/lookup"] },
+      { code: "RF", label: "Refresh Customers", href: "/refresh", paths: ["/refresh"] },
     ] },
     { title: "Campaigns", links: [
       { code: "CP", label: "Campaign Center", href: "/send", paths: ["/send", "/flow-1", "/next-flow"] },

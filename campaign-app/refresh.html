@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Refresh Customers · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css">
+<script src="/assets/live-recipient-confirmation.js" defer></script>
+<script>if (window.self !== window.top) document.documentElement.classList.add("mamba-embedded");</script>
+<style>
+  body{background:radial-gradient(circle at 50% -160px,rgba(245,158,11,.09),transparent 440px),var(--bg)}
+  .wrap{max-width:1180px}
+  .top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}
+  html.mamba-embedded .top{display:none}
+  html.mamba-embedded .wrap{padding-top:18px}
+  .hero{padding:20px;border-color:rgba(245,158,11,.3);background:linear-gradient(135deg,rgba(245,158,11,.09),rgba(24,27,33,.98) 48%)}
+  .hero h1{margin:0 0 6px;font-size:24px}.hero p{margin:0;color:var(--muted);line-height:1.65}
+  .safety{margin-top:14px;padding:11px 13px;border:1px solid rgba(34,197,94,.3);border-radius:9px;color:#bbf7d0;background:rgba(34,197,94,.06);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr);gap:16px;margin-top:16px;align-items:start}
+  .card{padding:18px}.card h2{margin:0 0 4px;font-size:16px}.sub{color:var(--muted);font-size:12px;line-height:1.55}
+  .fields{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:15px}.fields .full{grid-column:1/-1}
+  label span{display:block;color:var(--muted);font-size:11.5px;margin-bottom:6px}select,input{width:100%}
+  .days{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.days button{padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);color:var(--muted);cursor:pointer}
+  .days button.active{border-color:#f59e0b;color:#fbbf24;background:rgba(245,158,11,.1)}
+  .actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:15px}.actions .btn{cursor:pointer}.actions .btn:disabled{opacity:.45;cursor:not-allowed}
+  .err{color:#f87171;font-size:12px;margin-top:9px;white-space:pre-wrap}.ok{color:#86efac;font-size:12px;margin-top:9px}
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}.kpi{padding:13px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)}
+  .kpi span{display:block;color:var(--muted);font-size:11px}.kpi b{display:block;margin-top:3px;font-size:22px}.kpi.good b{color:#4ade80}.kpi.warn b{color:#fbbf24}
+  .reasons{margin-top:14px;display:flex;gap:7px;flex-wrap:wrap}.reason{padding:5px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px}
+  .table-wrap{margin-top:14px;max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}th{position:sticky;top:0;background:var(--panel-2);color:var(--muted)}
+  .empty{padding:28px;color:var(--muted);text-align:center}.stage{display:none}.stage.show{display:block}
+  .template-note{margin-top:13px;padding:11px;border:1px solid rgba(56,189,248,.25);border-radius:9px;color:#bae6fd;background:rgba(14,165,233,.06);font-size:12px;line-height:1.55}
+  .check{display:flex;align-items:flex-start;gap:8px;margin-top:13px;color:var(--muted);font-size:12px}.check input{width:auto;margin-top:2px}
+  .preview-list{margin-top:12px;max-height:280px;overflow:auto}.preview-row{display:grid;grid-template-columns:1fr auto;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:12px}.preview-row small{display:block;color:var(--muted);margin-top:3px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.fields .full{grid-column:auto}.top{display:block}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="top">
+    <div>
+      <h1 style="margin:0">♻️ Refresh Customers</h1>
+      <div class="sub">从 Notion 重新挑选长期没有回复、没有跟进的旧客户，交给另一个号码重新联系。</div>
+    </div>
+  </div>
+
+  <section class="card hero">
+    <h1>旧客重新联系，不重置原本 Flow</h1>
+    <p>系统会先刷新 Notion，再排除 STOP、Not Interested、曾回复、曾人工 Follow-up、私人联系人、预约／成交客户、正在其他 Campaign 的号码，以及冷却期内刚联系过的人。</p>
+    <div class="safety">SQLite 仍是发送事实来源。Refresh 完成后，Notion 只更新最后发送时间、发送号码和 Run ID；不会改 Next Flow、Sequence Status 或 Follow Up Due。</div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1. 检查旧客户</h2>
+      <div class="sub">每次检查都会重新读取 Notion。资料拉取失败时不会使用过期名单。</div>
+      <div class="fields">
+        <label><span>Project</span><select id="project"></select></label>
+        <label><span>最少多久没联系</span><div class="days" id="days"><button class="active" data-days="14">14 天</button><button data-days="21">21 天</button><button data-days="30">30 天</button></div></label>
+        <label class="full"><span>客户群名称（可留空）</span><input id="groupName" placeholder="例如：Binastra · July Refresh"></label>
+      </div>
+      <div class="actions">
+        <button class="btn" id="check">从 Notion 检查</button>
+        <button class="btn" id="create" disabled>建立 Refresh Campaign</button>
+        <span class="sub" id="syncAt"></span>
+      </div>
+      <div class="err" id="checkErr"></div><div class="ok" id="checkOk"></div>
+
+      <div id="report" class="stage">
+        <div class="kpis">
+          <div class="kpi"><span>Notion 旧客</span><b id="total">0</b></div>
+          <div class="kpi good"><span>可重新联系</span><b id="eligible">0</b></div>
+          <div class="kpi warn"><span>安全排除</span><b id="excluded">0</b></div>
+        </div>
+        <div class="reasons" id="reasons"></div>
+        <div class="table-wrap"><table><thead><tr><th>客户</th><th>号码</th><th>上次发送</th><th>相隔</th><th>之前号码</th></tr></thead><tbody id="leads"></tbody></table></div>
+      </div>
+    </section>
+
+    <aside class="card">
+      <div id="setupEmpty" class="empty">先完成左边的 Notion 安全检查，再建立这次 Refresh 客户群。</div>
+      <div id="setup" class="stage">
+        <h2>2. 安排发送</h2>
+        <div class="sub" id="groupSummary"></div>
+        <div class="fields">
+          <label><span>发送号码</span><select id="sender"></select></label>
+          <label><span>模式</span><select id="mode"><option value="TEST">TEST（建议先跑）</option><option value="LIVE">LIVE</option></select></label>
+          <label><span>开始时间</span><input id="startTime" placeholder="now 或 HH:MM"></label>
+          <label><span>结束时间</span><input id="endTime" placeholder="留空 = 自动尽快完成"></label>
+        </div>
+        <div class="template-note">必须在 Notion Templates 建立 Flow Topic = <b>Refresh - Reconnect</b> 且 Status = Active。缺少专用模板时预览会停止，不会借用 Flow 1 话术。</div>
+        <div class="actions"><button class="btn" id="prepare">生成发送预览</button></div>
+        <div class="err" id="prepareErr"></div>
+      </div>
+
+      <div id="prepared" class="stage">
+        <h2 style="margin-top:20px">3. 最后确认</h2>
+        <div class="sub" id="preparedSummary"></div>
+        <div class="preview-list" id="assignments"></div>
+        <label class="check" id="optInWrap"><input type="checkbox" id="optIn">我确认这些旧客户允许再次接收联系，并了解 LIVE 会真实发送。</label>
+        <div class="actions"><button class="btn" id="start">开始</button><a class="btn" href="/send">打开发送监控</a></div>
+        <div class="err" id="startErr"></div><div class="ok" id="startOk"></div>
+      </div>
+    </aside>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let cooldownDays = 14;
+let latestReport = null;
+let leadGroupId = "";
+let preparedRunId = "";
+let preparedMode = "";
+
+async function request(url, options = {}) {
+  const response = await fetch(url, {headers:{"Content-Type":"application/json"}, ...options});
+  const data = await response.json().catch(() => ({}));
+  data._httpStatus = response.status;
+  if (!response.ok || data.ok === false) throw Object.assign(new Error(data.error || `HTTP ${response.status}`), {status: response.status});
+  return data;
+}
+const post = (url, body) => request(url, {method:"POST", body:JSON.stringify(body)});
+const esc = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[char]));
+const dateText = (value) => value ? new Date(value).toLocaleString("en-MY", {timeZone:"Asia/Kuala_Lumpur",day:"2-digit",month:"2-digit",year:"numeric"}) : "—";
+
+const reasonLabels = {
+  INVALID_PHONE:"号码无效",DUPLICATE_PHONE:"重复号码",NEVER_BLASTED:"从未发送",TOO_RECENT:"仍在冷却期",
+  STOPPED:"STOP",NOT_INTERESTED:"Not Interested",REPLIED:"已经回复",FOLLOWED_UP:"已经 Follow-up",
+  PRIVATE_CONTACT:"私人联系人",ACTIVE_CAMPAIGN:"正在其他 Campaign",CLOSED_OR_APPOINTMENT:"预约／成交／关闭"
+};
+
+async function boot() {
+  try {
+    const [projects, instances] = await Promise.all([request("/api/projects"), request("/api/instances")]);
+    $("project").innerHTML = projects.projects.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
+    const open = (instances.instances || []).filter((item) => item.status === "OPEN" && item.allowedOnThisDevice !== false);
+    $("sender").innerHTML = open.length
+      ? open.map((item) => `<option value="${esc(item.name)}">${esc(item.name)}${item.number ? " · "+esc(item.number) : ""}</option>`).join("")
+      : '<option value="">没有 OPEN 号码</option>';
+  } catch (error) {
+    $("checkErr").textContent = error.message;
+  }
+}
+
+$("days").addEventListener("click", (event) => {
+  const button = event.target.closest("button"); if (!button) return;
+  cooldownDays = Number(button.dataset.days);
+  [...$("days").children].forEach((item) => item.classList.toggle("active", item === button));
+  latestReport = null; $("create").disabled = true; $("report").classList.remove("show");
+});
+
+$("check").addEventListener("click", async () => {
+  $("checkErr").textContent = ""; $("checkOk").textContent = ""; $("create").disabled = true;
+  $("check").disabled = true; $("check").textContent = "正在刷新 Notion…";
+  try {
+    const data = await request(`/api/refresh/preview?project=${encodeURIComponent($("project").value)}&cooldownDays=${cooldownDays}`);
+    latestReport = data.report;
+    $("total").textContent = latestReport.total;
+    $("eligible").textContent = latestReport.eligible.length;
+    $("excluded").textContent = latestReport.excluded.length;
+    $("syncAt").textContent = latestReport.sourceSyncedAt ? `Notion mirror ${dateText(latestReport.sourceSyncedAt)}` : "";
+    $("reasons").innerHTML = Object.entries(latestReport.exclusionCounts).map(([key,count]) => `<span class="reason">${esc(reasonLabels[key] || key)} · ${count}</span>`).join("");
+    $("leads").innerHTML = latestReport.eligible.length ? latestReport.eligible.map((item) =>
+      `<tr><td>${esc(item.name)}</td><td>${esc(item.phone)}</td><td>${dateText(item.lastBlastAt)}</td><td>${item.ageDays} 天</td><td>${esc(item.previousSender || "—")}</td></tr>`
+    ).join("") : '<tr><td colspan="5" class="empty">目前没有符合全部安全规则的客户。</td></tr>';
+    $("report").classList.add("show");
+    $("create").disabled = !latestReport.eligible.length;
+    $("checkOk").textContent = `检查完成：${latestReport.eligible.length} 位可以进入 Refresh。`;
+  } catch (error) {
+    $("checkErr").textContent = error.message;
+  } finally {
+    $("check").disabled = false; $("check").textContent = "从 Notion 检查";
+  }
+});
+
+$("create").addEventListener("click", async () => {
+  if (!latestReport) return;
+  $("checkErr").textContent = ""; $("create").disabled = true;
+  try {
+    const data = await post("/api/refresh/create", {
+      project:$("project").value,cooldownDays,previewToken:latestReport.previewToken,name:$("groupName").value.trim()
+    });
+    leadGroupId = data.group.id;
+    $("setupEmpty").style.display = "none"; $("setup").classList.add("show");
+    $("groupSummary").textContent = `${data.group.name} · ${data.group.memberCount} 位 · 冷却 ${cooldownDays} 天`;
+    $("checkOk").textContent = "客户群已安全建立。现在选择另一个 OPEN 号码并生成预览。";
+  } catch (error) {
+    $("checkErr").textContent = error.message;
+    if (error.status === 409) latestReport = null;
+  } finally {
+    $("create").disabled = !latestReport;
+  }
+});
+
+$("prepare").addEventListener("click", async () => {
+  $("prepareErr").textContent = ""; $("prepared").classList.remove("show"); $("prepare").disabled = true;
+  try {
+    if (!leadGroupId) throw new Error("请先建立 Refresh 客户群。");
+    if (!$("sender").value) throw new Error("没有 OPEN 的发送号码。");
+    const sameSender = (latestReport?.eligible || []).filter((item) => item.previousSender === $("sender").value).length;
+    if (sameSender && !confirm(`${sameSender} 位客户上次也是由 ${$("sender").value} 联系。你原本计划换另一个号码，仍要继续生成预览吗？`)) return;
+    const data = await post("/api/prepare", {
+      project:$("project").value,leadGroupId,mode:$("mode").value,instances:[$("sender").value],
+      startTime:$("startTime").value.trim(),endTime:$("endTime").value.trim(),campaignType:"RECYCLE"
+    });
+    const state = data.snapshot.state;
+    preparedRunId = state.runId;
+    preparedMode = state.mode;
+    $("preparedSummary").textContent = `${state.mode} · ${state.total} 位 · ${state.templateFlow} · ${$("sender").value}`;
+    $("assignments").innerHTML = state.assignments.slice(0, 40).map((item) =>
+      `<div class="preview-row"><div><b>${esc(item.name)}</b><small>${esc(item.phone)} · Template ${esc(item.part1Variant || "Active")}</small></div><span>${new Date(item.scheduledAt).toLocaleTimeString("en-MY",{hour:"2-digit",minute:"2-digit"})}</span></div>`
+    ).join("") + (state.assignments.length > 40 ? `<div class="sub" style="padding-top:9px">另有 ${state.assignments.length-40} 位</div>` : "");
+    $("optInWrap").style.display = state.mode === "LIVE" ? "flex" : "none";
+    $("optIn").checked = false;
+    $("start").textContent = state.mode === "LIVE" ? "确认并开始 LIVE" : "开始 TEST";
+    $("prepared").classList.add("show");
+  } catch (error) {
+    $("prepareErr").textContent = error.message;
+  } finally {
+    $("prepare").disabled = false;
+  }
+});
+
+$("start").addEventListener("click", async () => {
+  $("startErr").textContent = ""; $("startOk").textContent = "";
+  const live = preparedMode === "LIVE";
+  if (live && !$("optIn").checked) { $("startErr").textContent = "请先勾选 LIVE 收件人确认。"; return; }
+  if (!confirm(`${live ? "LIVE 会真实发送" : "开始 TEST"}：确认要启动这次 Refresh Campaign？`)) return;
+  $("start").disabled = true;
+  try {
+    let token = "";
+    if (live) {
+      const riskData = await post("/api/campaign/recipient-risk", {project:$("project").value,runId:preparedRunId,skipIds:[]});
+      const confirmed = await window.MambaLiveRecipientConfirm.open(riskData.risk, {actionLabel:"确认 Refresh LIVE 发送"});
+      if (!confirmed) return;
+      token = riskData.risk.confirmationToken;
+    }
+    const result = await post("/api/start", {
+      project:$("project").value,runId:preparedRunId,optIn:live,overrides:[],skipIds:[],recipientRiskToken:token || undefined
+    });
+    $("startOk").textContent = result.queued
+      ? `已加入等待队列，第 ${result.position} 批；轮到时会自动开始。`
+      : "Refresh Campaign 已启动。可打开发送监控查看进度。";
+  } catch (error) {
+    $("startErr").textContent = error.message;
+  } finally {
+    $("start").disabled = false;
+  }
+});
+
+boot();
+</script>
+</body>
+</html>

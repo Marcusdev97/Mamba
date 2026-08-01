@@ -7,7 +7,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createCampaignModeService, deliveryForMode, MODE_ORDER, isValidMode } from "./lib/campaign-mode-service.mjs";
+import {
+  createCampaignModeService,
+  deliveryForMode,
+  MODE_ORDER,
+  isValidMode,
+  validateCustomGap,
+} from "./lib/campaign-mode-service.mjs";
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-mode-"));
 const svc = createCampaignModeService({ dataDir, clock: () => new Date("2026-07-23T00:00:00Z") });
@@ -42,13 +48,32 @@ assert.equal(byName.wa_01.mode, "crazy");
 assert.equal(byName.wa_01.explicit, true, "设过的标 explicit");
 assert.equal(byName.wa_04.mode, "normal");
 assert.equal(byName.wa_04.explicit, false, "没设过的标非 explicit（用的是预设）");
-assert.equal(snap.modes.length, 3, "三个模式的目录都在");
+assert.equal(snap.modes.length, 4, "三个预设和自定义模式的目录都在");
 assert.deepEqual(snap.modes.map((m) => m.key), MODE_ORDER);
+
+// --- 每个号码可保存自己的自定义客户 gap ---
+await svc.setMode("wa_03", "custom", { customGapSeconds: { min: 120, max: 240 } });
+assert.equal(await svc.getMode("wa_03"), "custom");
+assert.deepEqual(await svc.deliveryForInstance("wa_03"), {
+  contactGapSeconds: { min: 120, max: 240 },
+  partGapSeconds: { min: 8, max: 20 },
+  minBlastGapSeconds: 120,
+});
+const customSnapshot = await svc.snapshot(["wa_03"]);
+assert.deepEqual(customSnapshot.instances.find((item) => item.instance === "wa_03").contactGapSeconds, { min: 120, max: 240 });
+const reopenedCustom = createCampaignModeService({ dataDir });
+assert.deepEqual((await reopenedCustom.getSetting("wa_03")).customGapSeconds, { min: 120, max: 240 }, "自定义 gap 重开后仍保留");
+
+assert.deepEqual(validateCustomGap({ min: 30, max: 3600 }), { min: 30, max: 3600 });
+assert.throws(() => validateCustomGap({ min: 29, max: 60 }), /不能低于 30/);
+assert.throws(() => validateCustomGap({ min: 120, max: 60 }), /最长间隔/);
+assert.throws(() => validateCustomGap({ min: 60.5, max: 120 }), /完整秒数/);
 
 // --- 乱值挡下来 ---
 await assert.rejects(() => svc.setMode("wa_01", "turbo"), /不认识的发送模式/);
 await assert.rejects(() => svc.setMode("", "crazy"), /哪个号码/);
 assert.equal(isValidMode("normal"), true);
+assert.equal(isValidMode("custom"), true);
 assert.equal(isValidMode("turbo"), false);
 
 // --- 从旧的 v1 单一 mode 档迁移（以前每台电脑一个）---
@@ -83,6 +108,16 @@ assert.equal(crazyCfg.delivery.resendCooldownDays, 5, "防重发冷却要保留"
 const consCfg = applyModeDelivery(baseConfig, "conservative");
 assert.deepEqual(contactGapRange(consCfg), { minSeconds: 90, maxSeconds: 150 }, "保守 90-150s");
 assert.ok(campaignPacing(consCfg).floorMs > campaignPacing(crazyCfg).floorMs, "保守比 crazy 慢");
+
+const customCfg = applyModeDelivery(baseConfig, "custom", { min: 180, max: 300 });
+assert.equal(customCfg.campaignMode, "custom");
+assert.deepEqual(contactGapRange(customCfg), { minSeconds: 180, maxSeconds: 300 });
+assert.deepEqual(partGapRange(customCfg), { minSeconds: 8, maxSeconds: 20 }, "自定义只改客户 gap，Part 仍走安全预设");
+
+// 旧式多 sender 共用单一 queue 时用最慢的设置，不能让保守号被 crazy 拖快。
+const aggregate = await svc.applyToConfig(baseConfig, ["wa_01", "wa_02"]);
+assert.equal(aggregate.mode, "mixed-safe");
+assert.deepEqual(contactGapRange(aggregate.config), { minSeconds: 90, maxSeconds: 150 });
 
 // 原 config 不能被改动（回的是新物件）
 assert.equal(baseConfig.delivery.contactGapSeconds, undefined, "applyModeDelivery 不可以改到原 config");

@@ -84,7 +84,19 @@ function buildRuntime() {
     getRunner: () => null,
     queue: { async setHold() {} },
   };
-  return { campaign, systemLogs: { async write() {} }, host: "127.0.0.1", port: 8787 };
+  return {
+    campaign,
+    campaignMode: {
+      async getSetting(instance) {
+        return instance === "wa_03"
+          ? { mode: "crazy", customGapSeconds: { min: 120, max: 240 }, contactGapSeconds: { min: 20, max: 30 } }
+          : { mode: "normal", customGapSeconds: { min: 120, max: 240 }, contactGapSeconds: { min: 45, max: 75 } };
+      },
+    },
+    systemLogs: { async write() {} },
+    host: "127.0.0.1",
+    port: 8787,
+  };
 }
 
 const runtime = buildRuntime();
@@ -101,7 +113,8 @@ async function post(url, body) {
 
 // --- LIVE 车道：绑 wa_03、群 A、crazy 节奏 ---
 const launch = await post("/api/campaign/lane/launch", {
-  project: "binastra", instance: "wa_03", pace: "crazy", mode: "LIVE",
+  // Request 故意带 normal；后端必须忽略临时覆盖并读取中央 sender 设置 crazy。
+  project: "binastra", instance: "wa_03", pace: "normal", mode: "LIVE",
   leadGroupId: "group-A", optIn: true, recipientRiskToken: "lane-risk-ok",
 });
 assert.equal(launch.status, 200, JSON.stringify(launch.body));

@@ -1179,6 +1179,151 @@ WHERE project_code=${sqlText(code)} AND phone IN (${phoneList});`);
     };
   }
 
+  // Refresh Campaign 只是一轮重新联系，不是客户 Flow 的下一步。
+  // 所以这里只更新发送证据与 sender ownership，绝不改 Next Flow、
+  // Last Flow Sent、Follow Up Due 或 Sequence Status。
+  async function recordRefreshCampaignProgress({
+    runId,
+    projectCode,
+    projectName = "",
+    mode = "LIVE",
+    runStatus = "PARTIAL",
+    deviceId = "",
+    startedAt = null,
+    finishedAt = null,
+    requestedCount = null,
+    failedCount = 0,
+    assignments = [],
+    notionSyncJob = null,
+  } = {}) {
+    const id = clean(runId);
+    const code = clean(projectCode);
+    const checkpointDeviceKey = clean(deviceId || device?.id);
+    if (!id || !code || clean(mode).toUpperCase() !== "LIVE") {
+      return { recorded: 0, skipped: Array.isArray(assignments) ? assignments.length : 0, reason: "not_live_refresh_run" };
+    }
+    const rows = (Array.isArray(assignments) ? assignments : []).map((item) => {
+      const phone = normalizePhone(item?.phone);
+      const sentAt = item?.sentAt || item?.part2SentAt || item?.part1SentAt || null;
+      if (!phone || !sentAt || !Number.isFinite(new Date(sentAt).getTime())) return null;
+      return {
+        phone,
+        name: clean(item?.name),
+        sentAt: new Date(sentAt).toISOString(),
+        senderKey: clean(item?.senderKey) || buildSenderKey(checkpointDeviceKey, item?.senderPhone),
+        senderPhone: normalizePhone(item?.senderPhone),
+        instanceName: clean(item?.instanceName),
+        part1SentAt: item?.part1SentAt || null,
+        part2SentAt: item?.part2SentAt || null,
+      };
+    }).filter(Boolean);
+    const binary = await requireV3Database();
+    const now = new Date().toISOString();
+    const allowedRunStatus = ["QUEUED", "RUNNING", "PARTIAL", "COMPLETED", "FAILED", "STOPPED"].includes(clean(runStatus).toUpperCase())
+      ? clean(runStatus).toUpperCase()
+      : "PARTIAL";
+    const senderSet = [...new Set(rows.map((row) => row.instanceName).filter(Boolean))].join(",");
+    const totalRequested = Number.isFinite(Number(requestedCount))
+      ? Math.max(rows.length, Math.trunc(Number(requestedCount)))
+      : Math.max(rows.length, Array.isArray(assignments) ? assignments.length : 0);
+    const totalFailed = Number.isFinite(Number(failedCount)) ? Math.max(0, Math.trunc(Number(failedCount))) : 0;
+    const statements = ["PRAGMA foreign_keys = ON;", "BEGIN IMMEDIATE;", `
+INSERT INTO projects(project_code, project_name, aliases_json, active, created_at, updated_at)
+VALUES (${sqlText(code)}, ${sqlText(projectName || code)}, '[]', 1, ${sqlText(now)}, ${sqlText(now)})
+ON CONFLICT(project_code) DO UPDATE SET
+  project_name=CASE WHEN excluded.project_name<>'' THEN excluded.project_name ELSE projects.project_name END,
+  active=1, updated_at=excluded.updated_at;
+
+INSERT INTO campaign_runs(
+  run_id, notion_page_id, name, project_code, flow_topic, flow_no, sender_set, mode,
+  status, requested_count, sent_count, failed_count, device_key, started_at,
+  finished_at, payload_json
+) VALUES (
+  ${sqlText(id)}, NULL, ${sqlText(`${projectName || code} · Refresh`)}, ${sqlText(code)},
+  'Refresh - Reconnect', NULL, ${sqlText(senderSet)}, 'LIVE', ${sqlText(allowedRunStatus)},
+  ${sqlNumber(totalRequested)}, ${sqlNumber(rows.length)}, ${sqlNumber(totalFailed)},
+  ${sqlNullable(checkpointDeviceKey)}, ${sqlText(startedAt || rows[0]?.sentAt || now)},
+  ${sqlNullable(finishedAt)}, ${sqlText(JSON.stringify({ source: "refresh-campaign", localFirst: true, campaignType: "RECYCLE" }))}
+)
+ON CONFLICT(run_id) DO UPDATE SET
+  status=excluded.status,
+  requested_count=MAX(campaign_runs.requested_count, excluded.requested_count),
+  sent_count=MAX(campaign_runs.sent_count, excluded.sent_count),
+  failed_count=MAX(campaign_runs.failed_count, excluded.failed_count),
+  finished_at=COALESCE(excluded.finished_at, campaign_runs.finished_at),
+  payload_json=excluded.payload_json;`];
+
+    for (const row of rows) {
+      const leadKey = `${code}:${row.phone}`;
+      statements.push(`
+UPDATE project_leads SET
+  name=CASE WHEN name='' AND ${sqlText(row.name)}<>'' THEN ${sqlText(row.name)} ELSE name END,
+  last_blast_at=CASE WHEN COALESCE(last_blast_at,'')<=${sqlText(row.sentAt)} THEN ${sqlText(row.sentAt)} ELSE last_blast_at END,
+  assigned_sender_key=CASE WHEN COALESCE(last_blast_at,'')<=${sqlText(row.sentAt)} THEN COALESCE(${sqlNullable(row.senderKey)},assigned_sender_key) ELSE assigned_sender_key END,
+  last_sender_key=CASE WHEN COALESCE(last_blast_at,'')<=${sqlText(row.sentAt)} THEN COALESCE(${sqlNullable(row.senderKey)},last_sender_key) ELSE last_sender_key END,
+  last_sender_phone=CASE WHEN COALESCE(last_blast_at,'')<=${sqlText(row.sentAt)} AND ${sqlText(row.senderPhone)}<>'' THEN ${sqlText(row.senderPhone)} ELSE last_sender_phone END,
+  last_sent_by_device=CASE WHEN COALESCE(last_blast_at,'')<=${sqlText(row.sentAt)} THEN COALESCE(${sqlNullable(checkpointDeviceKey)},last_sent_by_device) ELSE last_sent_by_device END,
+  campaign_run_id=CASE WHEN COALESCE(last_blast_at,'')<=${sqlText(row.sentAt)} THEN ${sqlText(id)} ELSE campaign_run_id END,
+  updated_at=${sqlText(now)}
+WHERE project_lead_key=${sqlText(leadKey)};
+
+INSERT INTO send_jobs(
+  id, run_id, project_lead_key, connection_key, flow_topic, part_no, template_key,
+  status, scheduled_at, sent_at, error_code, error_message, created_at, updated_at
+)
+SELECT ${sqlText(`${id}:${row.phone}:1`)}, ${sqlText(id)}, project_lead_key,
+       ${sqlNullable(row.senderKey)}, 'Refresh - Reconnect', 1, NULL, 'SENT', NULL,
+       ${sqlNullable(row.part1SentAt || row.sentAt)}, '', '', ${sqlText(now)}, ${sqlText(now)}
+FROM project_leads WHERE project_lead_key=${sqlText(leadKey)}
+ON CONFLICT(id) DO UPDATE SET status='SENT', sent_at=excluded.sent_at, updated_at=excluded.updated_at;`);
+      if (row.part2SentAt) {
+        statements.push(`
+INSERT INTO send_jobs(
+  id, run_id, project_lead_key, connection_key, flow_topic, part_no, template_key,
+  status, scheduled_at, sent_at, error_code, error_message, created_at, updated_at
+)
+SELECT ${sqlText(`${id}:${row.phone}:2`)}, ${sqlText(id)}, project_lead_key,
+       ${sqlNullable(row.senderKey)}, 'Refresh - Reconnect', 2, NULL, 'SENT', NULL,
+       ${sqlText(row.part2SentAt)}, '', '', ${sqlText(now)}, ${sqlText(now)}
+FROM project_leads WHERE project_lead_key=${sqlText(leadKey)}
+ON CONFLICT(id) DO UPDATE SET status='SENT', sent_at=excluded.sent_at, updated_at=excluded.updated_at;`);
+      }
+    }
+    if (rows.length && notionSyncJob?.idempotencyKey && notionSyncJob?.entityType && notionSyncJob?.entityId) {
+      statements.push(`
+INSERT INTO sync_jobs(
+  idempotency_key, direction, entity_type, entity_id, status, attempt_count,
+  available_at, last_error_code, last_error_message, payload_json, created_at, updated_at
+) VALUES (
+  ${sqlText(notionSyncJob.idempotencyKey)}, 'LOCAL_TO_NOTION', ${sqlText(notionSyncJob.entityType)},
+  ${sqlText(notionSyncJob.entityId)}, 'PENDING', 0, ${sqlText(notionSyncJob.availableAt || now)}, '', '',
+  ${sqlText(JSON.stringify(notionSyncJob.payload || {}))}, ${sqlText(now)}, ${sqlText(now)}
+)
+ON CONFLICT(idempotency_key) DO UPDATE SET
+  payload_json=excluded.payload_json,
+  status=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE sync_jobs.status END,
+  attempt_count=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN 0 ELSE sync_jobs.attempt_count END,
+  available_at=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN excluded.available_at ELSE sync_jobs.available_at END,
+  last_error_code=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE sync_jobs.last_error_code END,
+  last_error_message=CASE WHEN sync_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE sync_jobs.last_error_message END,
+  updated_at=excluded.updated_at;`);
+    }
+    statements.push("COMMIT;");
+    await runProcess(binary, ["-batch", databasePath], statements.join("\n"), 120000);
+    if (!rows.length) return { recorded: 0, skipped: 0, runId: id, campaignType: "RECYCLE" };
+    const phoneList = rows.map((row) => sqlText(row.phone)).join(",");
+    const [result] = await queryJson(binary, `
+SELECT COUNT(*) AS recorded FROM project_leads
+WHERE project_code=${sqlText(code)} AND phone IN (${phoneList}) AND campaign_run_id=${sqlText(id)};`);
+    const recorded = Number(result?.recorded || 0);
+    return {
+      recorded,
+      skipped: Math.max(0, rows.length - recorded),
+      runId: id,
+      campaignType: "RECYCLE",
+    };
+  }
+
   async function setLeadFlowState({ targets = [], nextFlow, lastFlowSent = "", cohortDay = null, followUpDue = null } = {}) {
     const normalized = (Array.isArray(targets) ? targets : []).map((target) => ({
       pageId: clean(target?.pageId).replace(/-/g, ""),
@@ -1737,6 +1882,7 @@ COMMIT;
     readLeadCache,
     syncWhatsAppConnections,
     recordCampaignFlowProgress,
+    recordRefreshCampaignProgress,
     setLeadFlowState,
     recordLeadReply,
     recordConversationDisposition,

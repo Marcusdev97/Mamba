@@ -23,6 +23,7 @@ export function createBlastCacheService({
       project: nfSelect(page, "Project") || "",
       name: nfTitle(page, "Name") || "",
       phone: props["Phone"]?.phone_number || "",
+      language: nfSelect(page, "Language") || "",
       firstBlastAt: props["First Blast At"]?.date?.start || null,
       lastBlastAt: props["Last Blast At"]?.date?.start || null,
       lastFlowSent: nfSelect(page, "Last Flow Sent") || "",
