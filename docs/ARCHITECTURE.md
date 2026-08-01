@@ -70,6 +70,10 @@ Campaign 运行时重启后一起生效。Campaign 图片等业务资料仍按�
   逻辑，Monitor 也不得复制发送规则。
 - `READY`／`PREPARED` 只代表预览，不是正在执行的 Campaign。Monitor 没有运行中、
   排队中或可恢复 run 时必须隐藏详细执行区，不得显示 0% 假进度或空 Batch 卡。
+- Monitor 的“隐藏全部”只是浏览器显示过滤，不改变 Campaign／Queue／Notion。
+  “取消并清理全部”必须明确二次确认，只处理当时 UI 列出的 runId：先移除
+  Queue，再把未结束 run 持久化为 `CANCELLED`，最后从 active monitor 移除。
+  `campaign-data/runs/` 发送审计档、SQLite 证据和防重发资料不得删除。
 - 发送模式入口保持在 shell 顶部，并按 sender 保存节奏；真正的 interval validation
   和 Campaign snapshot 仍由后端 service 负责。
 

@@ -1614,9 +1614,11 @@ export class CampaignRunner {
     try {
       await this.runQueue();
       const incomplete = this.state.assignments.some((job) => isResumableJobStatus(job.status));
-      this.state.status = this.interrupted
-        ? "INTERRUPTED"
-        : this.stopped || incomplete ? "STOPPED" : "COMPLETED";
+      this.state.status = this.state.status === "CANCELLED"
+        ? "CANCELLED"
+        : this.interrupted
+          ? "INTERRUPTED"
+          : this.stopped || incomplete ? "STOPPED" : "COMPLETED";
     } finally {
       await this.saveState();
       this.running = false;
@@ -1653,6 +1655,17 @@ export class CampaignRunner {
       this.state.status = "STOPPED";
       this.saveState().catch(() => {});
     }
+  }
+
+  async cancel({ reason = "Cancelled by operator" } = {}) {
+    this.stopped = true;
+    if (!this.state) return false;
+    this.state.status = "CANCELLED";
+    this.state.cancelledAt = new Date().toISOString();
+    this.state.cancelReason = String(reason || "Cancelled by operator");
+    this.pushLog(`Campaign CANCELLED: ${this.state.cancelReason}`);
+    await this.saveState();
+    return true;
   }
 
   async interruptForTransportFailure({

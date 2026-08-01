@@ -137,6 +137,8 @@
     font-weight: 800; cursor: pointer; white-space: nowrap;
   }
   .monitor-restore:hover { border-color: #38bdf8; color: #f8fafc; }
+  .monitor-restore.danger { border-color:#7f1d1d; background:#241216; color:#fca5a5; }
+  .monitor-restore.danger:hover { border-color:#ef4444; color:#fecaca; }
   .monitor-restore.hidden { display: none; }
   .queuebar {
     display: flex; align-items: center; gap: 10px; min-width: 0;
@@ -173,6 +175,11 @@
   }
   .monitor-detail-head strong { color:#f1f5f9; font-size:14px; }
   .monitor-detail-head span { color:#7c8aa0; font-size:11.5px; text-align:right; }
+  .monitor-detail-close {
+    border:1px solid #475569; border-radius:7px; padding:6px 9px;
+    background:#18212f; color:#cbd5e1; font:inherit; font-size:11px; font-weight:800; cursor:pointer;
+  }
+  .monitor-detail-close:hover { border-color:#64748b; color:#fff; }
   .monitor-detail iframe {
     display:block; width:100%; min-height:180px; border:0; background:#090e15;
   }
@@ -415,7 +422,9 @@
         <span class="monitor-count" id="monitorCount">0</span>
       </button>
       <button type="button" class="monitor-restore hidden" id="monitorRestore">恢复已隐藏</button>
+      <button type="button" class="monitor-restore hidden" id="monitorHideAll" title="只隐藏监控卡片，不停止发送，也不删除发送纪录">隐藏全部</button>
       <button type="button" class="monitor-restore hidden" id="monitorClearDone" title="把所有已结束的 campaign 从清单移除；发送纪录仍会保留">移除已结束</button>
+      <button type="button" class="monitor-restore danger hidden" id="monitorCancelAll" title="取消当前监控中的未完成批次与 Queue；已发送纪录仍会保留">取消并清理全部</button>
     </div>
   <section class="sync-dock" id="syncDock" aria-live="polite" aria-label="SQLite and Notion sync progress">
     <div class="sync-dock-head">
@@ -445,6 +454,7 @@
     <div class="monitor-detail-head">
       <strong id="campaignRunDetailTitle">Campaign 发送详情</strong>
       <span>继续发送 · 异常重试 · CSV · 时间线 · 客户结果</span>
+      <button type="button" class="monitor-detail-close" id="campaignRunDetailClose" title="只关闭这批详情，不停止发送或删除纪录">关闭详情</button>
     </div>
     <iframe id="frame-campaign-monitor" title="Campaign 发送详情" data-src="/flow-1?embedded=1&amp;view=monitor"></iframe>
   </section>
@@ -910,7 +920,13 @@ function syncCampaignRunDetail(runs) {
     .filter(monitorRunNeedsExecutionTracking)
     .sort((a, b) => Number(b?.running === true) - Number(a?.running === true) || String(b?.state?.updatedAt || "").localeCompare(String(a?.state?.updatedAt || "")))[0];
   detail.classList.toggle("hidden", !tracked);
-  if (!tracked) return;
+  if (!tracked) {
+    if (frame.dataset.runId) {
+      frame.dataset.runId = "";
+      frame.src = "about:blank";
+    }
+    return;
+  }
   const runId = tracked.state.runId;
   const flowLabel = campaignRunFlowLabel(tracked.state);
   const src = "/flow-1?embedded=1&view=monitor&runId=" + encodeURIComponent(runId);
@@ -937,15 +953,24 @@ function renderCampaignMonitor(status, queue) {
   // Preview stays in the lower confirmation area; show a top card only after it is queued or started.
   const runs = (supplied.length ? supplied : (status?.state ? [status] : []))
     .filter((item) => !monitorRunIsPreview(item));
-  syncCampaignRunDetail(runs);
   const dismissedNow = runs.filter((item) => item?.state?.runId && dismissedCampaignRuns[item.state.runId]);
   const visible = runs.filter((item) => !item?.state?.runId || !dismissedCampaignRuns[item.state.runId]);
+  // Hiding a card must also close its large Flow detail panel.
+  syncCampaignRunDetail(visible);
   const container = document.getElementById("campaignMonitors");
   const toggle = document.getElementById("monitorToggle");
   const restoreButton = document.getElementById("monitorRestore");
+  const hideAllButton = document.getElementById("monitorHideAll");
+  const cancelAllButton = document.getElementById("monitorCancelAll");
   document.getElementById("monitorCount").textContent = String(visible.filter((item) => item?.state).length);
   restoreButton.classList.toggle("hidden", dismissedNow.length === 0);
   restoreButton.textContent = dismissedNow.length ? `恢复已隐藏 (${dismissedNow.length})` : "恢复已隐藏";
+  hideAllButton.classList.toggle("hidden", visible.length === 0);
+  hideAllButton.textContent = visible.length ? `隐藏全部 (${visible.length})` : "隐藏全部";
+  const monitoredRunIds = new Set(runs.map((item) => item?.state?.runId).filter(Boolean));
+  for (const item of queue?.items || []) if (item?.runId) monitoredRunIds.add(item.runId);
+  cancelAllButton.classList.toggle("hidden", monitoredRunIds.size === 0);
+  cancelAllButton.textContent = monitoredRunIds.size ? `取消并清理全部 (${monitoredRunIds.size})` : "取消并清理全部";
   // 「清掉已结束」只在真的有已结束的 campaign 时才出现。
   const finished = runs.filter((item) => item?.state && !monitorRunNeedsAttention(item));
   const clearButton = document.getElementById("monitorClearDone");
@@ -1053,6 +1078,61 @@ document.getElementById("monitorRestore").addEventListener("click", () => {
   monitorDisplayChoice = "expanded";
   sessionStorage.setItem("mamba-send-monitor-display", monitorDisplayChoice);
   renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+});
+
+document.getElementById("campaignRunDetailClose").addEventListener("click", () => {
+  const runId = document.getElementById("frame-campaign-monitor").dataset.runId;
+  if (!runId) return;
+  dismissCampaignRun(runId);
+  renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+});
+
+document.getElementById("monitorHideAll").addEventListener("click", () => {
+  const supplied = Array.isArray(latestCampaignStatus?.runs) ? latestCampaignStatus.runs : [];
+  const runs = (supplied.length ? supplied : (latestCampaignStatus?.state ? [latestCampaignStatus] : []))
+    .filter((item) => !monitorRunIsPreview(item));
+  const visible = runs.filter((item) => item?.state?.runId && !dismissedCampaignRuns[item.state.runId]);
+  if (!visible.length) return;
+  const active = visible.filter(monitorRunIsActive).length;
+  if (!confirm(active
+    ? `隐藏 ${visible.length} 张监控卡片？其中 ${active} 批仍在工作；隐藏不会停止发送或 Notion 收尾。`
+    : `隐藏 ${visible.length} 张监控卡片？Campaign 资料和未发送进度都会保留，可随时恢复显示。`)) return;
+  for (const run of visible) dismissCampaignRun(run.state.runId);
+  renderCampaignMonitor(latestCampaignStatus, latestCampaignQueue);
+});
+
+document.getElementById("monitorCancelAll").addEventListener("click", async (event) => {
+  const supplied = Array.isArray(latestCampaignStatus?.runs) ? latestCampaignStatus.runs : [];
+  const runs = (supplied.length ? supplied : (latestCampaignStatus?.state ? [latestCampaignStatus] : []))
+    .filter((item) => !monitorRunIsPreview(item));
+  const runIds = [...new Set([
+    ...runs.map((item) => item?.state?.runId),
+    ...(latestCampaignQueue?.items || []).map((item) => item?.runId),
+  ].filter(Boolean))];
+  if (!runIds.length) return;
+  const active = runs.filter(monitorRunIsActive).length;
+  if (!confirm(`取消并清理 ${runIds.length} 批 Campaign？${active ? `其中 ${active} 批仍在工作，会在当前发送动作结束后停止。` : ""}\n\n未发送客户将不会发送；已经发出的消息无法撤回。SQLite 发送纪录、防重发资料与 run 审计档不会删除。`)) return;
+  const button = event.currentTarget;
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "取消中…";
+  try {
+    const response = await fetch("/api/campaign/runs/cancel-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runIds, confirmation: "CANCEL_MONITOR_RUNS" }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "批量取消失败。");
+    restoreDismissedCampaignRuns(result.removed.map((item) => item.runId));
+    await pollRunning();
+    alert(result.message);
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = previous;
+  }
 });
 
 document.getElementById("monitorClearDone").addEventListener("click", async (event) => {

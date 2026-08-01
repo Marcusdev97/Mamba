@@ -11,6 +11,10 @@ import { instanceSetsOverlap, runnerInstanceNames } from "../lib/campaign-runner
 import { campaignExecutionLease } from "../lib/campaign-execution-lease.mjs";
 import { applyModeDelivery } from "../lib/campaign-mode-service.mjs";
 import {
+  CANCEL_MONITOR_RUNS_CONFIRMATION,
+  createCampaignMonitorCleanupService,
+} from "../lib/campaign-monitor-cleanup-service.mjs";
+import {
   AUTO_SCHEDULE,
   FIXED_SCHEDULE,
   estimateAutoEnd,
@@ -1059,6 +1063,35 @@ export function registerCampaignRoutes(router) {
       ok: true,
       removed,
       message: `已从清单移除 ${removed.length} 个 campaign。发送纪录仍保留在 campaign-data/runs/，防重发照常运作。`,
+    });
+  });
+
+  router.post("/api/campaign/runs/cancel-all", async (req, res, runtime) => {
+    const campaign = requireCampaign(runtime);
+    const body = await readJson(req);
+    if (body?.confirmation !== CANCEL_MONITOR_RUNS_CONFIRMATION) {
+      throw httpError(400, "取消全部 Campaign 需要明确确认。", "CAMPAIGN_CANCEL_CONFIRMATION_REQUIRED");
+    }
+    const service = createCampaignMonitorCleanupService({
+      listRunners: () => campaignRunners(campaign),
+      forgetRunner: (runId) => campaign.forgetRunner?.(runId) === true,
+      persistRunners: () => campaign.persistRunners?.(),
+      queue: campaign.queue,
+    });
+    const result = await service.cancelRuns({
+      runIds: body.runIds,
+      confirmation: body.confirmation,
+    });
+    await writeCampaignLog(runtime, "warn", "campaign_monitor_runs_cancelled", "Campaign runs cancelled and removed from active monitor.", {
+      requested: result.requested,
+      cancelledRunIds: result.cancelled.map((item) => item.runId),
+      removedRunIds: result.removed.map((item) => item.runId),
+      queueRemovedRunIds: result.queueRemoved,
+    });
+    json(res, 200, {
+      ok: true,
+      ...result,
+      message: `已取消 ${result.cancelled.length} 批，并从监控移除 ${result.removed.length} 批。发送纪录与防重发资料仍保留。`,
     });
   });
 
