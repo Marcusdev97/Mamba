@@ -64,6 +64,11 @@ const emptySettings = createSettingsService({
 }).snapshot();
 assert.deepEqual(emptySettings.testRecipients, [], "Settings must never invent default TEST recipients");
 assert.equal(emptySettings.testLeadsEnv.configured, false);
+assert.deepEqual(emptySettings.watchdog, {
+  checkIntervalSeconds: 30,
+  failureDelayMinutes: 1,
+  reminderMinutes: 0,
+});
 
 const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-settings-"));
 const envPath = path.join(settingsDir, ".env");
@@ -75,9 +80,19 @@ const writableSettings = createSettingsService({
   notion: async () => ({}),
 });
 await writableSettings.writeEnvValues({ TEST_LEADS: "Test User:60123456789:en" });
+await writableSettings.writeEnvValues({
+  MAMBA_WATCHDOG_INTERVAL_SECONDS: "60",
+  MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES: "5",
+  MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES: "0",
+});
 assert.match(await fs.readFile(envPath, "utf8"), /^TEST_LEADS=Test User:60123456789:en$/m);
 assert.equal((await fs.stat(envPath)).mode & 0o777, 0o600, "Settings env must remain private");
 assert.equal(writableSettings.snapshot().testLeadsEnv.count, 1);
+assert.deepEqual(writableSettings.snapshot().watchdog, {
+  checkIntervalSeconds: 60,
+  failureDelayMinutes: 5,
+  reminderMinutes: 0,
+});
 await fs.rm(settingsDir, { recursive: true, force: true });
 
 console.log("✅ AI change log page tests passed");

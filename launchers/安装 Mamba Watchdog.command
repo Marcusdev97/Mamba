@@ -3,7 +3,7 @@
 # Mamba Watchdog — 双击一次安装，登录 Mac 后常驻。
 # 独立检查 Mamba / Docker / Evolution / WhatsApp / Tracker / Brain；只监控和报警，
 # 不自动重启 Mamba，避免 Scheduler 或中断的 Campaign 在无人确认时恢复发送。
-# 并把掉线、恢复和每小时心跳发去 Telegram 系统台。
+# Telegram 时间由 Settings 管理；默认同一次异常只报一次，恢复时再报一次。
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -84,9 +84,9 @@ EOF
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
 if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
-  echo "安装完成。Watchdog 已经常驻，每 30 秒检查 Docker / Evolution / WhatsApp。"
+  echo "安装完成。Watchdog 已经常驻；检查与 Telegram 通知时间可在 Mamba Settings 调整。"
   echo "安全模式：只报警，不会自动重启 Mamba 或恢复 Campaign。"
-  echo "Telegram 会收到启动心跳、掉线、恢复和每小时心跳。"
+  echo "默认不会发送正常心跳，也不会重复发送同一次异常。"
 else
   echo "launchctl 挂载失败。重启 Mac 后再双击一次。"
 fi

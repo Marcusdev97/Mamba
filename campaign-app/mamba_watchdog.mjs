@@ -8,6 +8,7 @@ import { listInstances, loadEnv, makeApi } from "./campaign_core.mjs";
 import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs";
 import { makeHub } from "./telegram_hub.mjs";
 import { makeTelegram, escapeHtml } from "./telegram.mjs";
+import { watchdogSettingsFromEnv } from "./config/watchdog-config.mjs";
 import {
   formatWatchdogStatus,
   summarizeWatchdogHealth,
@@ -25,7 +26,6 @@ const serverScript = path.join(rootDir, "campaign-app", "server.mjs");
 const env = await loadEnv().catch(() => ({}));
 const serverUrl = String(env.MAMBA_WATCHDOG_SERVER_URL || process.env.MAMBA_WATCHDOG_SERVER_URL || "http://127.0.0.1:8787").replace(/\/$/, "");
 const deviceName = String(env.MAMBA_DEVICE_NAME || process.env.MAMBA_DEVICE_NAME || os.hostname()).trim();
-const checkIntervalMs = Math.max(15_000, Number(env.MAMBA_WATCHDOG_INTERVAL_SECONDS || process.env.MAMBA_WATCHDOG_INTERVAL_SECONDS || 30) * 1000);
 const externalHeartbeatUrl = String(env.MAMBA_HEALTHCHECK_URL || process.env.MAMBA_HEALTHCHECK_URL || "").trim();
 const autoRestart = String(process.env.MAMBA_WATCHDOG_AUTO_RESTART ?? env.MAMBA_WATCHDOG_AUTO_RESTART ?? "0") === "1";
 const once = process.argv.includes("--once");
@@ -41,6 +41,8 @@ let state = await readJson(statusPath, {});
 let restartAttemptAt = 0;
 let externalPingAt = 0;
 let runningCheck = false;
+let timing = watchdogSettingsFromEnv({ ...process.env, ...env });
+let timer = null;
 
 async function readJson(file, fallback) {
   try { return JSON.parse(await fsp.readFile(file, "utf8")); }
@@ -52,6 +54,12 @@ async function atomicWrite(file, value) {
   const temp = `${file}.tmp.${process.pid}`;
   await fsp.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`);
   await fsp.rename(temp, file);
+}
+
+async function reloadTiming() {
+  const latest = await loadEnv().catch(() => ({}));
+  timing = watchdogSettingsFromEnv({ ...process.env, ...latest });
+  return timing;
 }
 
 async function notify(text) {
@@ -123,6 +131,7 @@ async function checkOnce() {
   if (runningCheck) return;
   runningCheck = true;
   try {
+    await reloadTiming();
     let snapshot = await fetchHealth();
     let restarted = false;
     if (!snapshot.reachable) {
@@ -133,12 +142,18 @@ async function checkOnce() {
       }
     }
 
-    const transition = watchdogTransition(state, snapshot, { failureThreshold: 2 });
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const transition = watchdogTransition(state, snapshot, {
+      failureDelayMs: timing.failureDelayMinutes * 60_000,
+      reminderIntervalMs: timing.reminderMinutes * 60_000,
+      nowMs,
+    });
+    const now = new Date(nowMs).toISOString();
 
     let reportSent = false;
-    if (transition.shouldReportFailure) {
-      reportSent = await notify(`🔴 <b>服务异常</b>\n${escapeHtml(formatWatchdogStatus(snapshot))}${restarted ? "\n已尝试自动重启 Mamba。" : ""}`)
+    if (transition.shouldReportFailure || transition.shouldReportReminder) {
+      const title = transition.shouldReportReminder ? "持续异常提醒" : "服务异常";
+      reportSent = await notify(`🔴 <b>${title}</b>\n${escapeHtml(formatWatchdogStatus(snapshot))}${restarted ? "\n已尝试自动重启 Mamba。" : ""}`)
         .then(() => true)
         .catch((error) => {
           console.log(`[watchdog] Telegram failure alert failed: ${error.message}`);
@@ -155,7 +170,7 @@ async function checkOnce() {
 
     await pingExternal(snapshot);
     state = {
-      version: 1,
+      version: 2,
       deviceName,
       pid: process.pid,
       startedAt: state.startedAt || now,
@@ -166,11 +181,14 @@ async function checkOnce() {
       components: snapshot.components,
       notion: snapshot.notion,
       consecutiveFailures: transition.consecutiveFailures,
-      reportedSignature: reportSent ? transition.signature : state.reportedSignature || "",
+      failureStartedAt: snapshot.healthy ? null : transition.failureStartedAt,
+      lastFailureAlertAt: snapshot.healthy ? null : (reportSent ? now : state.lastFailureAlertAt || null),
+      reportedSignature: snapshot.healthy ? "" : (reportSent ? transition.signature : state.reportedSignature || ""),
+      timing,
       lastRestartAttemptAt: restarted ? now : state.lastRestartAttemptAt || null,
       externalHeartbeatConfigured: Boolean(externalHeartbeatUrl),
     };
-    await atomicWrite(statusPath, state);
+    if (!dryRun) await atomicWrite(statusPath, state);
     console.log(`[watchdog] ${now} ${snapshot.healthy ? "HEALTHY" : "CHECK"} · ${formatWatchdogStatus(snapshot).replaceAll("\n", " · ")}`);
   } finally {
     runningCheck = false;
@@ -178,19 +196,26 @@ async function checkOnce() {
 }
 
 console.log(`Mamba Watchdog · ${deviceName}`);
-console.log(`Watching ${serverUrl} every ${Math.round(checkIntervalMs / 1000)} seconds.`);
-console.log("Telegram only reports confirmed failures and recovery transitions.");
+console.log(`Watching ${serverUrl}; timing is managed in Mamba Settings.`);
+console.log("Telegram reports after the configured failure delay; reminders are off unless enabled.");
 console.log(externalHeartbeatUrl ? "External dead-man heartbeat enabled." : "External dead-man heartbeat not configured.");
 
 await checkOnce();
 if (once) process.exit(0);
-const timer = setInterval(() => {
-  checkOnce().catch((error) => console.log(`[watchdog] Check failed: ${error.message}`));
-}, checkIntervalMs);
+
+async function scheduleNextCheck() {
+  await reloadTiming();
+  timer = setTimeout(async () => {
+    await checkOnce().catch((error) => console.log(`[watchdog] Check failed: ${error.message}`));
+    await scheduleNextCheck();
+  }, timing.checkIntervalSeconds * 1000);
+}
+
+await scheduleNextCheck();
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.once(signal, () => {
-    clearInterval(timer);
+    clearTimeout(timer);
     process.exit(0);
   });
 }

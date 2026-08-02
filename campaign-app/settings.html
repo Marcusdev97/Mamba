@@ -72,6 +72,20 @@
   }
   .settings-grid textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .12); }
   .filter-panel { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+  .telegram-layout { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 16px; align-items: stretch; }
+  .telegram-panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 16px; min-width: 0; }
+  .telegram-panel-head { margin-bottom: 16px; }
+  .telegram-panel-head h3 { margin: 0 0 5px; font-size: 15px; }
+  .telegram-panel-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+  .watchdog-settings { display: grid; gap: 10px; }
+  .watchdog-setting { display: grid; grid-template-columns: minmax(0, 1fr) minmax(164px, .55fr); gap: 16px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+  .watchdog-setting:first-child { border-top: 0; padding-top: 0; }
+  .watchdog-setting-title { display: block; color: var(--text); font-size: 13px; font-weight: 800; }
+  .watchdog-setting-sub { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.5; margin-top: 3px; }
+  .watchdog-control { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(76px, auto); gap: 8px; align-items: center; }
+  .watchdog-control input, .watchdog-control select { width: 100%; min-width: 0; margin: 0; }
+  .watchdog-unit { min-height: 42px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); background: var(--panel); font-size: 12px; font-weight: 800; }
+  .watchdog-summary { margin-top: 14px; padding: 11px 12px; border: 1px solid rgba(59,130,246,.35); border-radius: var(--radius); background: rgba(59,130,246,.08); color: var(--text); font-size: 12px; line-height: 1.55; }
   .check-row { display: flex; align-items: flex-start; gap: 9px; color: var(--text); font-size: 13px; line-height: 1.5; }
   .check-row input { width: 16px; min-height: 16px; margin-top: 2px; flex: 0 0 auto; }
   .settings-grid select { appearance: auto; }
@@ -153,6 +167,7 @@
   .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
   @media (max-width: 1050px) {
     .notion-card, .database-card, .telegram-card, .private-contacts-card, .ai-card, .save-card, .test-card, .safety-card { grid-column: 1 / -1; }
+    .telegram-layout { grid-template-columns: 1fr; }
     .phone-overview { grid-template-columns: 1fr; }
     .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
     .ai-provider + .ai-provider { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 20px; }
@@ -169,6 +184,7 @@
     .model-grid, .model-grid.three { grid-template-columns: 1fr; }
     .database-stats { grid-template-columns: 1fr; }
     .safety-stats,.safety-layout,.safety-fields,.safety-fields.two { grid-template-columns:1fr; }
+    .watchdog-setting { grid-template-columns: 1fr; gap: 8px; }
   }
 </style>
 <script src="/assets/mamba-shell.js" defer></script>
@@ -242,24 +258,72 @@
     <div class="card telegram-card">
       <div class="card-head"><div>
         <h2 class="step-title"><span class="step-no">4</span> Telegram</h2>
-        <div class="card-kicker">Bot and approval chat</div>
+        <div class="card-kicker">Bot connection、人工审批与 Watchdog 通知，分区管理。</div>
       </div></div>
-      <label class="fld">
-        <span>Bot Token</span>
-        <input id="telegramBotToken" type="password" autocomplete="off" placeholder="123456:ABC..." />
-      </label>
-      <label class="fld">
-        <span>Chat ID</span>
-        <input id="telegramChatId" type="text" autocomplete="off" placeholder="先对 bot 发 hi，再点自动找 Chat ID" />
-      </label>
-      <div class="status-line">不要填 bot username。Chat ID 通常是数字，自动找最稳。</div>
-      <div class="actions">
-        <button class="btn" id="btnFindChat">自动找 Chat ID</button>
-        <button class="btn" id="btnTestTelegram">发送测试 Telegram</button>
-      </div>
-      <div class="status-stack">
-        <div class="status-line" id="telegramStatus">读取中...</div>
-        <div class="status-line" id="telegramLinked">Linked: 查询中...</div>
+      <div class="telegram-layout">
+        <section class="telegram-panel">
+          <div class="telegram-panel-head">
+            <h3>Bot 连接</h3>
+            <p>负责系统通知与 Sales Brain 人工审批。</p>
+          </div>
+          <label class="fld">
+            <span>Bot Token</span>
+            <input id="telegramBotToken" type="password" autocomplete="off" placeholder="123456:ABC..." />
+          </label>
+          <label class="fld">
+            <span>Chat ID</span>
+            <input id="telegramChatId" type="text" autocomplete="off" placeholder="先对 bot 发 hi，再点自动找 Chat ID" />
+          </label>
+          <div class="status-line">不要填 bot username。Chat ID 通常是数字，自动找最稳。</div>
+          <div class="actions">
+            <button class="btn" id="btnFindChat">自动找 Chat ID</button>
+            <button class="btn" id="btnTestTelegram">发送测试 Telegram</button>
+          </div>
+          <div class="status-stack">
+            <div class="status-line" id="telegramStatus">读取中...</div>
+            <div class="status-line" id="telegramLinked">Linked: 查询中...</div>
+          </div>
+        </section>
+
+        <section class="telegram-panel">
+          <div class="telegram-panel-head">
+            <h3>Watchdog 通知策略</h3>
+            <p>健康检查与 Telegram 等待时间分开设置。支持最长 24 小时。</p>
+          </div>
+          <div class="watchdog-settings">
+            <div class="watchdog-setting">
+              <div>
+                <span class="watchdog-setting-title">系统健康检查</span>
+                <span class="watchdog-setting-sub">只更新系统状态，不会每次发送 Telegram。600 秒是检查频率上限。</span>
+              </div>
+              <div class="watchdog-control">
+                <input id="watchdogCheckIntervalSeconds" aria-label="Watchdog 健康检查秒数" type="number" min="15" max="600" step="1" value="30" />
+                <span class="watchdog-unit">秒</span>
+              </div>
+            </div>
+            <div class="watchdog-setting">
+              <div>
+                <span class="watchdog-setting-title">首次异常通知</span>
+                <span class="watchdog-setting-sub">异常持续到这个时间才发 Telegram；例如填写 6 小时。</span>
+              </div>
+              <div class="watchdog-control">
+                <input id="watchdogFailureDelayValue" aria-label="首次异常通知时间" type="number" min="1" max="1440" step="1" value="1" />
+                <select id="watchdogFailureDelayUnit" aria-label="首次异常通知单位"><option value="minutes">分钟</option><option value="hours">小时</option></select>
+              </div>
+            </div>
+            <div class="watchdog-setting">
+              <div>
+                <span class="watchdog-setting-title">持续异常提醒</span>
+                <span class="watchdog-setting-sub">填 0 代表同一次异常不重复；恢复正常仍会通知一次。</span>
+              </div>
+              <div class="watchdog-control">
+                <input id="watchdogReminderValue" aria-label="持续异常重复提醒时间" type="number" min="0" max="1440" step="1" value="0" />
+                <select id="watchdogReminderUnit" aria-label="持续异常重复提醒单位"><option value="minutes">分钟</option><option value="hours">小时</option></select>
+              </div>
+            </div>
+          </div>
+          <div class="watchdog-summary" id="watchdogTimingStatus">读取 Watchdog 通知策略...</div>
+        </section>
       </div>
       <div class="filter-panel">
         <div class="provider-title">Telegram Filter List</div>
@@ -536,7 +600,7 @@
         <h2 class="step-title"><span class="step-no">6</span> Save</h2>
         <div class="card-kicker">Apply local configuration</div>
       </div></div>
-      <div class="save-copy">保存 TEST 号码、Notion、Telegram 和 AI 设置。Brain service 下次起草时会读取所选 Provider；独立运行中的 Brain 建议重启一次。</div>
+      <div class="save-copy">保存 TEST 号码、Notion、Telegram、Watchdog 时间和 AI 设置。Watchdog 会动态读取时间；Brain service 下次起草时会读取所选 Provider。</div>
       <div class="actions">
         <button class="btn primary" id="btnSave">保存 Settings</button>
       </div>
@@ -564,11 +628,54 @@ async function api(url, body) {
   return data;
 }
 
+function watchdogMinutes(valueId, unitId) {
+  const value = Number($(valueId).value);
+  return $(unitId).value === "hours" ? value * 60 : value;
+}
+
+function syncWatchdogDurationBounds(valueId, unitId, { allowZero = false } = {}) {
+  const input = $(valueId);
+  const isHours = $(unitId).value === "hours";
+  input.min = allowZero ? "0" : "1";
+  input.max = isHours ? "24" : "1440";
+}
+
+function setWatchdogDuration(minutes, valueId, unitId, options = {}) {
+  const safeMinutes = Math.max(options.allowZero ? 0 : 1, Number(minutes) || 0);
+  const useHours = safeMinutes >= 60 && safeMinutes % 60 === 0;
+  $(unitId).value = useHours ? "hours" : "minutes";
+  $(valueId).value = useHours ? safeMinutes / 60 : safeMinutes;
+  syncWatchdogDurationBounds(valueId, unitId, options);
+}
+
+function watchdogDurationLabel(minutes) {
+  const value = Number(minutes) || 0;
+  if (value === 0) return "不重复提醒";
+  if (value % 60 === 0) return `${value / 60} 小时`;
+  return `${value} 分钟`;
+}
+
+function watchdogDraft() {
+  return {
+    checkIntervalSeconds: Number($("watchdogCheckIntervalSeconds").value),
+    failureDelayMinutes: watchdogMinutes("watchdogFailureDelayValue", "watchdogFailureDelayUnit"),
+    reminderMinutes: watchdogMinutes("watchdogReminderValue", "watchdogReminderUnit"),
+  };
+}
+
+function watchdogSummary(timing, prefix = "") {
+  const reminder = Number(timing.reminderMinutes) > 0
+    ? `之后每 ${watchdogDurationLabel(timing.reminderMinutes)}提醒一次。`
+    : "同一次异常不会重复提醒。";
+  return `${prefix}系统每 ${timing.checkIntervalSeconds} 秒检查；异常持续 ${watchdogDurationLabel(timing.failureDelayMinutes)}才发 Telegram；${reminder}`;
+}
+
 function values() {
   return {
     notionToken: $("notionToken").value.trim(),
     telegramBotToken: $("telegramBotToken").value.trim(),
     telegramChatId: $("telegramChatId").value.trim(),
+    watchdog: watchdogDraft(),
     anthropicApiKey: $("anthropicApiKey").value.trim(),
     openaiApiKey: $("openaiApiKey").value.trim(),
     geminiApiKey: $("geminiApiKey").value.trim(),
@@ -646,6 +753,12 @@ function render(settings) {
     "Bot: " + (s.telegram?.botConfigured ? "已设置 " + s.telegram.botMasked : (s.telegram?.botInvalid ? "旧值格式不对" : "未设置")) +
     " · Chat ID: " + (s.telegram?.chatConfigured ? s.telegram.chatId : (s.telegram?.chatInvalid ? "旧值不是 Chat ID，请重新自动找" : "未设置"));
   if (!$("telegramChatId").value && s.telegram?.chatId) $("telegramChatId").value = s.telegram.chatId;
+  if (s.watchdog) {
+    $("watchdogCheckIntervalSeconds").value = s.watchdog.checkIntervalSeconds ?? 30;
+    setWatchdogDuration(s.watchdog.failureDelayMinutes ?? 1, "watchdogFailureDelayValue", "watchdogFailureDelayUnit");
+    setWatchdogDuration(s.watchdog.reminderMinutes ?? 0, "watchdogReminderValue", "watchdogReminderUnit", { allowZero: true });
+    $("watchdogTimingStatus").textContent = watchdogSummary(s.watchdog);
+  }
   $("anthropicStatus").textContent = s.anthropic?.configured
     ? "已设置: " + s.anthropic.masked
     : "未设置 Anthropic Key";
@@ -1067,6 +1180,23 @@ $("senderSafetyBody").addEventListener("click", async (event) => {
   }
 });
 
+for (const [valueId, unitId, allowZero] of [
+  ["watchdogFailureDelayValue", "watchdogFailureDelayUnit", false],
+  ["watchdogReminderValue", "watchdogReminderUnit", true],
+]) {
+  $(unitId).addEventListener("change", () => {
+    syncWatchdogDurationBounds(valueId, unitId, { allowZero });
+    $("watchdogTimingStatus").textContent = watchdogSummary(watchdogDraft(), "待保存：");
+  });
+  $(valueId).addEventListener("input", () => {
+    $("watchdogTimingStatus").textContent = watchdogSummary(watchdogDraft(), "待保存：");
+  });
+}
+
+$("watchdogCheckIntervalSeconds").addEventListener("input", () => {
+  $("watchdogTimingStatus").textContent = watchdogSummary(watchdogDraft(), "待保存：");
+});
+
 $("btnSave").addEventListener("click", async () => {
   message("", "");
   try {
@@ -1078,7 +1208,7 @@ $("btnSave").addEventListener("click", async () => {
     $("openaiApiKey").value = "";
     $("geminiApiKey").value = "";
     refreshIdentity();
-    message("已保存。TEST 号码会马上用于 Campaign Automations；自动回复开关需要重新启动 Mamba 才会完全生效。", "");
+    message("已保存。Watchdog 会自动读取新的 Telegram 时间；TEST 号码会马上用于 Campaign Automations；自动回复开关需要重新启动 Mamba 才会完全生效。", "");
   } catch (e) {
     message("", e.message);
   }

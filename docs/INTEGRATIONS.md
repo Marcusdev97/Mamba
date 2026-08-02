@@ -118,9 +118,12 @@ Mamba 不再把所有 `fetch failed` 都显示成「Evolution 掉线」，而是
 
 常驻 Watchdog 可以在 Mamba Server 离线时独立读取这三层 transport 状态，但默认
 只报警，不自动重启 Server。这样 Scheduler 与中断的 LIVE run 不会因为服务恢复
-而在无人确认时重新发送。Telegram 只在同一异常连续两次确认后首次报警，并在恢复
-时通知一次；正常启动与持续健康检查不会发送心跳消息。Watchdog 仍会每 30 秒更新
-本机状态文件，供 Control Center 判断健康状态。
+而在无人确认时重新发送。检查间隔、异常持续多久才 Telegram 报警，以及持续异常的
+重复提醒间隔，统一由 Settings 写入中央 Watchdog config；运行中的 Watchdog 会在
+每轮检查前重读，不必重启 Campaign。默认每 30 秒检查、异常持续 1 分钟后首次报警、
+同一次异常不重复提醒，并在恢复时通知一次；正常启动与持续健康检查不会发送心跳消息。
+首次报警和重复提醒都可使用分钟或小时设置，最长 24 小时（例如 6 小时）；状态文件
+仍按检查节奏更新，供 Control Center 判断健康状态。
 
 ## 3. Notion
 

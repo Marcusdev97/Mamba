@@ -74,24 +74,45 @@ export function watchdogSignature(snapshot) {
     .join("|");
 }
 
-export function watchdogTransition(previous, current, { failureThreshold = 2 } = {}) {
+function validTimestamp(value) {
+  const milliseconds = new Date(value || 0).getTime();
+  return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : null;
+}
+
+export function watchdogTransition(previous, current, {
+  failureDelayMs = 60_000,
+  reminderIntervalMs = 0,
+  nowMs = Date.now(),
+} = {}) {
   const previousFailures = Math.max(0, Number(previous?.consecutiveFailures) || 0);
   const consecutiveFailures = current.healthy ? 0 : previousFailures + 1;
-  const previousReported = String(previous?.reportedSignature || "");
   const signature = watchdogSignature(current);
+  const continuingFailure = previous?.healthy === false || previousFailures > 0;
+  const failureStartedAtMs = current.healthy
+    ? null
+    : (continuingFailure ? validTimestamp(previous?.failureStartedAt) : null) || nowMs;
+  const lastFailureAlertAtMs = validTimestamp(previous?.lastFailureAlertAt);
+  const failureReady = !current.healthy
+    && nowMs - failureStartedAtMs >= Math.max(0, Number(failureDelayMs) || 0);
   const shouldReportFailure = !current.healthy
-    && consecutiveFailures >= failureThreshold
-    && signature !== previousReported;
+    && failureReady
+    && lastFailureAlertAtMs === null;
+  const shouldReportReminder = !current.healthy
+    && failureReady
+    && lastFailureAlertAtMs !== null
+    && Number(reminderIntervalMs) > 0
+    && nowMs - lastFailureAlertAtMs >= Number(reminderIntervalMs);
   const shouldReportRecovery = current.healthy
-    && Boolean(previousReported)
-    && previousReported !== signature;
+    && previous?.healthy === false
+    && (lastFailureAlertAtMs !== null || Boolean(previous?.reportedSignature));
 
   return {
     consecutiveFailures,
     signature,
+    failureStartedAt: failureStartedAtMs === null ? null : new Date(failureStartedAtMs).toISOString(),
     shouldReportFailure,
+    shouldReportReminder,
     shouldReportRecovery,
-    reportedSignature: shouldReportFailure || shouldReportRecovery ? signature : previousReported,
   };
 }
 

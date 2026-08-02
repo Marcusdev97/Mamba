@@ -298,6 +298,7 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 | Sender safety state | SQLite `sender_safety_state` | 熔断与人工恢复状态 |
 | Campaign safety audit | SQLite `campaign_safety_checks` | 每次 preflight 的 ALLOW／WARN／BLOCK 证据 |
 | P0 safety policy | `campaign-data/campaign_safety_policy.json` | Settings 编辑；不进入 Git |
+| Watchdog 通知时间 | `evolution-pilot/.env` 的 `MAMBA_WATCHDOG_*` | Settings 编辑；Watchdog 每轮动态重读 |
 | Secret | `evolution-pilot/.env` | 不进入 Git |
 
 不要让同一种资料同时拥有两个可以互相覆盖的真相源。

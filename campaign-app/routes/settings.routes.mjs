@@ -1,4 +1,8 @@
 import { httpError, json, readJson } from "../lib/http.mjs";
+import {
+  validateWatchdogSettings,
+  watchdogSettingsToEnv,
+} from "../config/watchdog-config.mjs";
 
 function requireSettings(runtime) {
   if (!runtime.settings) {
@@ -97,6 +101,19 @@ function testLeadsFromBody(body) {
     leads.push({ name, phone, language });
   }
   return leads;
+}
+
+function watchdogSettingsFromBody(body, settings) {
+  if (!Object.hasOwn(body, "watchdog")) return {};
+  if (!body.watchdog || typeof body.watchdog !== "object" || Array.isArray(body.watchdog)) {
+    throw httpError(400, "Watchdog 通知时间格式不对。");
+  }
+  const current = settings.snapshot().watchdog;
+  try {
+    return watchdogSettingsToEnv(validateWatchdogSettings(body.watchdog, current));
+  } catch (error) {
+    throw httpError(400, error.message);
+  }
 }
 
 export function registerSettingsRoutes(router) {
@@ -246,6 +263,7 @@ export function registerSettingsRoutes(router) {
     const openaiApiKey = String(body.openaiApiKey ?? "").trim();
     const geminiApiKey = String(body.geminiApiKey ?? "").trim();
     Object.assign(values, brainSettingsFromBody(body));
+    Object.assign(values, watchdogSettingsFromBody(body, settings));
     const testLeads = testLeadsFromBody(body);
 
     if (notionToken) values.NOTION_API_KEY = notionToken;

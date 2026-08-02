@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { watchdogSettingsFromEnv } from "../config/watchdog-config.mjs";
 
 function maskSecret(value) {
   const text = String(value || "");
@@ -141,6 +142,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
       : (anthropicKey ? "anthropic" : (openaiKey ? "openai" : (geminiKey ? "gemini" : "rules")));
     const botValid = isTelegramBotToken(botToken);
     const chatValid = isTelegramChatId(chatId);
+    const watchdog = watchdogSettingsFromEnv(env);
     return {
       notion: {
         configured: Boolean(notionToken),
@@ -177,6 +179,7 @@ export function createSettingsService({ env, envPath, getNotionToken, notion }) 
         chatInvalid: Boolean(chatId && !chatValid),
         chatId: chatValid ? chatId : "",
       },
+      watchdog,
       testRecipients: parseTestLeads(testLeads),
       testLeadsEnv: {
         configured: Boolean(String(testLeads).trim()),

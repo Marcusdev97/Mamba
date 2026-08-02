@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import {
+  DEFAULT_WATCHDOG_SETTINGS,
+  validateWatchdogSettings,
+  watchdogSettingsFromEnv,
+  watchdogSettingsToEnv,
+} from "./config/watchdog-config.mjs";
+import {
   formatWatchdogStatus,
   summarizeWatchdogHealth,
   unreachableWatchdogHealth,
@@ -37,31 +43,87 @@ assert.equal(legacy.healthy, true, "rolling upgrade must infer Docker/Evolution 
 assert.match(legacy.components.find((item) => item.id === "docker").detail, /Rolling upgrade/);
 
 const down = unreachableWatchdogHealth(new Error("fetch failed"));
-const first = watchdogTransition({}, down, { failureThreshold: 2 });
+const t0 = Date.parse("2026-08-02T00:00:00.000Z");
+const first = watchdogTransition({}, down, { failureDelayMs: 60_000, nowMs: t0 });
 assert.equal(first.shouldReportFailure, false, "one short network wobble must not alert");
-const second = watchdogTransition({ consecutiveFailures: 1 }, down, { failureThreshold: 2 });
-assert.equal(second.shouldReportFailure, true, "second consecutive failure must alert");
-const repeated = watchdogTransition({
+const early = watchdogTransition({
+  healthy: false,
+  consecutiveFailures: 1,
+  failureStartedAt: first.failureStartedAt,
+}, down, { failureDelayMs: 60_000, nowMs: t0 + 59_000 });
+assert.equal(early.shouldReportFailure, false, "failure must remain quiet until the configured delay passes");
+const second = watchdogTransition({
+  healthy: false,
   consecutiveFailures: 2,
+  failureStartedAt: first.failureStartedAt,
+}, down, { failureDelayMs: 60_000, nowMs: t0 + 60_000 });
+assert.equal(second.shouldReportFailure, true, "confirmed failure must alert after the configured delay");
+const repeated = watchdogTransition({
+  healthy: false,
+  consecutiveFailures: 2,
+  failureStartedAt: first.failureStartedAt,
+  lastFailureAlertAt: new Date(t0 + 60_000).toISOString(),
   reportedSignature: second.signature,
-}, down, { failureThreshold: 2 });
+}, down, { failureDelayMs: 60_000, reminderIntervalMs: 0, nowMs: t0 + 120_000 });
 assert.equal(repeated.shouldReportFailure, false, "the same confirmed failure must not repeatedly alert");
+assert.equal(repeated.shouldReportReminder, false, "zero reminder interval must keep the same incident quiet");
+
+const reminder = watchdogTransition({
+  healthy: false,
+  consecutiveFailures: 3,
+  failureStartedAt: first.failureStartedAt,
+  lastFailureAlertAt: new Date(t0 + 60_000).toISOString(),
+  reportedSignature: second.signature,
+}, down, { failureDelayMs: 60_000, reminderIntervalMs: 30 * 60_000, nowMs: t0 + 31 * 60_000 });
+assert.equal(reminder.shouldReportReminder, true, "explicit reminder timing must be honored");
 
 const recovery = watchdogTransition({
+  healthy: false,
   consecutiveFailures: 3,
+  lastFailureAlertAt: new Date(t0 + 60_000).toISOString(),
   reportedSignature: "server:down",
-}, healthy, { failureThreshold: 2 });
+}, healthy, { nowMs: t0 + 32 * 60_000 });
 assert.equal(recovery.shouldReportRecovery, true);
 assert.equal(recovery.consecutiveFailures, 0);
 
 const stableRecovery = watchdogTransition({
+  healthy: true,
   consecutiveFailures: 0,
-  reportedSignature: recovery.signature,
-}, healthy, { failureThreshold: 2 });
+}, healthy, { nowMs: t0 + 33 * 60_000 });
 assert.equal(stableRecovery.shouldReportRecovery, false, "healthy checks must stay silent after recovery");
+
+assert.deepEqual(watchdogSettingsFromEnv({}), DEFAULT_WATCHDOG_SETTINGS);
+assert.deepEqual(watchdogSettingsFromEnv({
+  MAMBA_WATCHDOG_INTERVAL_SECONDS: "45",
+  MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES: "5",
+  MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES: "60",
+}), { checkIntervalSeconds: 45, failureDelayMinutes: 5, reminderMinutes: 60 });
+assert.throws(() => validateWatchdogSettings({ checkIntervalSeconds: 5 }), /15–600/);
+assert.equal(validateWatchdogSettings({ failureDelayMinutes: 6 * 60 }).failureDelayMinutes, 360,
+  "Telegram failure delay must support six hours");
+assert.throws(() => validateWatchdogSettings({ failureDelayMinutes: 1441 }), /1–1440/);
+assert.deepEqual(watchdogSettingsToEnv({
+  checkIntervalSeconds: 60,
+  failureDelayMinutes: 10,
+  reminderMinutes: 0,
+}), {
+  MAMBA_WATCHDOG_INTERVAL_SECONDS: "60",
+  MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES: "10",
+  MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES: "0",
+});
 
 const watchdogSource = await fs.readFile(new URL("./mamba_watchdog.mjs", import.meta.url), "utf8");
 assert.doesNotMatch(watchdogSource, /心跳正常|MAMBA_WATCHDOG_TELEGRAM_MINUTES|lastTelegramHeartbeatAt/,
   "Watchdog must not send periodic healthy Telegram heartbeats");
+assert.match(watchdogSource, /reloadTiming/, "Watchdog must reload Settings timing without restarting a Campaign");
+assert.doesNotMatch(watchdogSource, /setInterval\(/, "dynamic timing must not be frozen in a process-lifetime interval");
+
+const settingsHtml = await fs.readFile(new URL("./settings.html", import.meta.url), "utf8");
+assert.match(settingsHtml, /watchdogFailureDelayValue/);
+assert.match(settingsHtml, /watchdogFailureDelayUnit/);
+assert.match(settingsHtml, /watchdogReminderValue/);
+assert.match(settingsHtml, /支持最长 24 小时/);
+const settingsRoutes = await fs.readFile(new URL("./routes/settings.routes.mjs", import.meta.url), "utf8");
+assert.match(settingsRoutes, /watchdogSettingsFromBody/);
 
 console.log("✅ all watchdog tests passed");
