@@ -83,6 +83,10 @@ Services
 当前仓库正在从大型 legacy 文件逐步迁移到这个边界。`server.mjs` 与 `lib/` 仍有
 过渡职责；新增功能应放入正确模块，但不要为了目录外观一次性搬迁全部旧代码。
 
+Mamba 不使用 Global PostgreSQL 汇总层；跨设备可见的业务资料通过受控 Notion sync
+处理。`evolution-pilot` 内的 PostgreSQL 只属于 Evolution API 的内部储存，不保存
+Mamba 的客户、Campaign 或发送账本，不能与已经退役的 Global 汇总层混为一谈。
+
 详细设计：
 
 - [Architecture](docs/ARCHITECTURE.md)

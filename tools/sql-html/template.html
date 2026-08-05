@@ -171,7 +171,6 @@
   <span class="spacer"></span>
   <button id="btn-seed">载入示例数据</button>
   <button id="btn-export">导出 SQL (SQLite)</button>
-  <button id="btn-pg">导出 SQL (Postgres)</button>
   <button id="btn-json">导出 JSON</button>
   <button class="danger" id="btn-wipe">还原快照</button>
 </header>
@@ -923,50 +922,6 @@ document.getElementById('btn-export').onclick = () => {
     parts.push('');
   }
   download('mamba-data.sql', parts.join('\n'));
-};
-// Postgres 要求先有父行才能插子行,所以按外键做拓扑排序再导出。
-function tablesInFKOrder() {
-  const done = new Set(), order = [], visiting = new Set();
-  const visit = (name) => {
-    if (done.has(name) || visiting.has(name)) return;   // visiting: 环(如自引用)直接跳过
-    visiting.add(name);
-    for (const c of byName[name].columns) {
-      if (c.ref && c.ref.table !== name && byName[c.ref.table]) visit(c.ref.table);
-    }
-    visiting.delete(name);
-    done.add(name); order.push(byName[name]);
-  };
-  TABLES.forEach(t => visit(t.name));
-  return order;
-}
-// 真 upsert:再灌一次时,这里的值覆盖 Postgres 里的旧行(和 tools/pg/dump-data.mjs 一致)
-function conflictClause(t, row) {
-  const pk = byName[t].columns.filter(c => c.pk).map(c => c.name);
-  const rest = byName[t].columns
-    .filter(c => !pk.includes(c.name) && row[c.name] !== undefined && row[c.name] !== null && row[c.name] !== '')
-    .map(c => c.name);
-  if (!pk.length || !rest.length) return 'ON CONFLICT DO NOTHING';
-  return `ON CONFLICT (${pk.join(', ')}) DO UPDATE SET\n` + rest.map(c => `  ${c} = EXCLUDED.${c}`).join(',\n');
-}
-document.getElementById('btn-pg').onclick = () => {
-  const parts = [
-    '-- Mamba 数据导出 (PostgreSQL) ' + new Date().toISOString(),
-    '-- 先建表: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f docs/mamba-schema.postgres.sql',
-    '-- 再灌数据: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f mamba-data.pg.sql',
-    '-- 表的顺序已按外键依赖排好,重复执行安全(ON CONFLICT DO NOTHING)。',
-    '', 'BEGIN;', '',
-  ];
-  let n = 0;
-  for (const t of tablesInFKOrder()) {
-    const rs = db[t.name] || [];
-    if (!rs.length) continue;
-    parts.push(`-- ${t.name} (${rs.length} 行)`);
-    for (const r of rs) { parts.push(sqlInsert(t.name, r).replace(/;$/, '\n' + conflictClause(t.name, r) + ';')); n++; }
-    parts.push('');
-  }
-  parts.push('COMMIT;');
-  if (!n) { alert('还没有数据可以导出。'); return; }
-  download('mamba-data.pg.sql', parts.join('\n'));
 };
 document.getElementById('btn-json').onclick = () => download('mamba-data.json', JSON.stringify(db, null, 2));
 document.getElementById('btn-wipe').onclick = () => {

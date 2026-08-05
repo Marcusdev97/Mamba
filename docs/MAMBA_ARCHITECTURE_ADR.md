@@ -103,6 +103,11 @@ Blast(Mamba) ⇄ SQLite(本机主库) → Outbox → Sync Worker ⇄ Notion(云�
 
 ## 七、什么时候才迁移到 Postgres(看条件,不看日历)
 
+> 2026-08-05 补充：实验性的 SQLite → Global PostgreSQL 汇总镜像已经退役。
+> 当前系统只有 SQLite 运行真相源与 Notion CRM；Evolution API 自己的数据库不属于
+> Mamba schema。下面的条件只描述未来重新评估共享业务数据库的门槛，不代表当前
+> 存在或需要配置 Global PostgreSQL。
+
 以下**任何一条真的发生**了,再迁到**托管版 PostgreSQL**(Supabase / Neon / RDS,省得自己维护服务器):
 
 - 多台电脑需要**实时编辑同一批客户**(不再各管各的号码),而 Notion 速度/限流扛不住;

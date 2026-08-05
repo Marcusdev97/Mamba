@@ -2,7 +2,7 @@
 // docs/mamba-schema*.sql into a structured description (columns, keys, CHECK
 // enums, foreign keys, indexes, and the Chinese comments attached to each).
 //
-// Used by tools/sql-html/build.mjs and tools/pg/build-postgres.mjs.
+// Used by the local SQL viewer and offline SQLite maintenance tools.
 import { readFileSync } from 'node:fs';
 
 function splitTopLevel(body) {

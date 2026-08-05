@@ -8,8 +8,7 @@
 //   · 预设 --dry-run:只数、只出报告,一个字都不写。
 //   · --apply 也**绝不改动 base 库**,只产生一个新档案(预设 campaign-data/mamba.merged.sqlite)。
 //   · base 用 VACUUM INTO 复制,连 WAL 里还没落盘的资料一起带走。
-//   · 冲突用 updated_at 决胜(和 tools/pg/dump-data.mjs --if-newer 同一套规则):
-//     来源那台比较新才覆盖,否则保留这台的。
+//   · 冲突用 updated_at 决胜:来源那台比较新才覆盖,否则保留这台的。
 //   · 跑完自动 PRAGMA quick_check + foreign_key_check,任一失败就中止。
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

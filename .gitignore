@@ -58,7 +58,7 @@ campaign-app/market-dashboard.secret.js
 # ─── 中央 Server 的存取码（每台电脑自己产生，绝不提交）───
 hub-server/.access-token
 
-# ─── Global Postgres 连线字串（含密码，绝不提交）───
+# ─── 已退役的 Global PostgreSQL 旧连线档仍可能含密码，永久禁止提交 ───
 .env.pg
 
 # ─── SQL 面板 Server 的存取码（每台电脑自己产生，绝不提交）───
@@ -67,6 +67,7 @@ tools/sql-html/.access-token
 # ─── SQL 面板(内嵌客户电话/对话内容的快照,绝不提交)───
 # 用 node tools/sql-html/build.mjs 随时重新生成;空壳版加 --no-data
 mamba-sql.html
+# 旧 Global 面板可能含历史客户资料，即使功能已退役也继续禁止提交
 mamba-sql-global.html
 mamba-data*.sql
 mamba-data*.json

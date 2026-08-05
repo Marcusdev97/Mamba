@@ -16,6 +16,7 @@
 //   node tools/sql-html/serve.mjs --new-token     # 换一组存取码(旧网址立刻失效)
 //   node tools/sql-html/serve.mjs --allow-upload  # 额外开 /upload,收另一台电脑的资料库
 import http from 'node:http';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -23,8 +24,23 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { statSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
-import { buildSnapshot, renderPage, ROOT, DEFAULT_DB } from '../lib/snapshot.mjs';
+
+let sqliteModule;
+let snapshotModule;
+try {
+  [sqliteModule, snapshotModule] = await Promise.all([
+    import('node:sqlite'),
+    import('../lib/snapshot.mjs'),
+  ]);
+} catch (error) {
+  if (error?.code !== 'ERR_UNKNOWN_BUILTIN_MODULE' || process.execArgv.includes('--experimental-sqlite')) throw error;
+  const result = spawnSync(process.execPath, ['--experimental-sqlite', ...process.argv.slice(1)], {
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
+const { DatabaseSync } = sqliteModule;
+const { buildSnapshot, renderPage, ROOT, DEFAULT_DB } = snapshotModule;
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const TOKEN_PATH = path.join(HERE, '.access-token');
@@ -214,7 +230,7 @@ function receiveUpload(req, res, url) {
       console.log(`        ${mb} MB · contacts ${stats.contacts} · project_leads ${stats.project_leads} · messages ${stats.messages}` +
         (device ? ` · 来自 ${device.device_name || device.device_key}` : ''));
       console.log(`        看它:  node tools/sql-html/serve.mjs --db=campaign-data/incoming/${path.basename(target)}`);
-      console.log(`        合并到 Postgres:  node tools/pg/dump-data.mjs --db=campaign-data/incoming/${path.basename(target)} --if-newer\n`);
+      console.log(`        只读查看:  node tools/sql-html/serve.mjs --db=campaign-data/incoming/${path.basename(target)}\n`);
       json(200, { ok: true, detail });
     } catch (error) {
       fsSync.rmSync(target, { force: true });

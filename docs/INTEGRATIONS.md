@@ -1,6 +1,6 @@
 # Mamba Integrations
 
-> 状态：Current · 更新日期：2026-07-28
+> 状态：Current · 更新日期：2026-08-05
 >
 > 本文件记录外部系统的责任、资料方向、失败行为与修改边界。
 > Secret value 不得写入本文。
@@ -81,6 +81,8 @@ WhatsApp → Evolution webhook/history → Mamba
 - ChatRoom 新号码只可使用当前 Device 上 OPEN 的 sender；第一次发送必须由
   操作员再次确认，且发送结果写入本机 conversation ledger。
 - Evolution 的 PostgreSQL 不存放 Mamba 业务 schema。
+- 已退役的 Mamba Global PostgreSQL 汇总工具与 Evolution 内部数据库无关；维护
+  Evolution compose 时不得因为移除 Global 汇总层而删除其数据库或 volume。
 - Instance name 不是客户或 sender 的永久业务 ID。
 - Settings 的「重新扫码」只对未连接 instance 开放：先 logout 失效的 Baileys
   session，再向 `/instance/connect/<name>` 请求新 QR。它不得调用 instance delete，

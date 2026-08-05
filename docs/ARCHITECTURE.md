@@ -1,6 +1,6 @@
 # Mamba Architecture
 
-> 状态：Current + Target · 更新日期：2026-07-28
+> 状态：Current + Target · 更新日期：2026-08-05
 >
 > 本文件说明 Mamba 现在如何运行，以及新增代码应该往哪里放。
 > 数据架构的正式决策见
@@ -89,6 +89,10 @@ UI shell 不得复制 eligibility、suppression、resume 或 sync 规则。Monit
 | Brain Service | `campaign-app/brain_service.mjs` | 入站理解、AI 草稿、Telegram 审批 |
 | Phone View | `campaign-app/phone-view-server.mjs` | 本机手机查看入口 |
 | SQLite | `campaign-data/mamba.sqlite` | 本机运行真相源 |
+
+Mamba 不再维护 SQLite → Global PostgreSQL 的跨机汇总层。跨设备业务可见性由
+Notion CRM 承担；Evolution API 自己的 PostgreSQL 仅保存 provider 内部资料，
+不属于 Mamba 的业务数据库或 reporting source。
 
 ## 3. 当前代码结构
 
