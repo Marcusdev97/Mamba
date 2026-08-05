@@ -151,7 +151,9 @@ async function checkOnce() {
     const now = new Date(nowMs).toISOString();
 
     let reportSent = false;
-    if (transition.shouldReportFailure || transition.shouldReportReminder) {
+    // Keep health tracking active while allowing operators to silence only
+    // Watchdog Telegram delivery during maintenance or known outages.
+    if (timing.telegramNotificationsEnabled && (transition.shouldReportFailure || transition.shouldReportReminder)) {
       const title = transition.shouldReportReminder ? "持续异常提醒" : "服务异常";
       reportSent = await notify(`🔴 <b>${title}</b>\n${escapeHtml(formatWatchdogStatus(snapshot))}${restarted ? "\n已尝试自动重启 Mamba。" : ""}`)
         .then(() => true)
@@ -159,7 +161,7 @@ async function checkOnce() {
           console.log(`[watchdog] Telegram failure alert failed: ${error.message}`);
           return false;
         });
-    } else if (transition.shouldReportRecovery) {
+    } else if (timing.telegramNotificationsEnabled && transition.shouldReportRecovery) {
       reportSent = await notify(`🟢 <b>服务已恢复</b>\n${escapeHtml(formatWatchdogStatus(snapshot))}`)
         .then(() => true)
         .catch((error) => {
@@ -197,7 +199,9 @@ async function checkOnce() {
 
 console.log(`Mamba Watchdog · ${deviceName}`);
 console.log(`Watching ${serverUrl}; timing is managed in Mamba Settings.`);
-console.log("Telegram reports after the configured failure delay; reminders are off unless enabled.");
+console.log(timing.telegramNotificationsEnabled
+  ? "Telegram reports after the configured failure delay; reminders are off unless enabled."
+  : "Watchdog Telegram notifications are disabled; health tracking remains active.");
 console.log(externalHeartbeatUrl ? "External dead-man heartbeat enabled." : "External dead-man heartbeat not configured.");
 
 await checkOnce();

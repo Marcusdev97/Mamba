@@ -88,14 +88,25 @@ const RULES = [
   // Evolution 在 127.0.0.1:8080，连不上时抛的是 ECONNREFUSED —— 而那条规则
   // 也认 /ECONN/。顺序反了的话「WhatsApp 掉线」会被讲成「Notion 网路问题」，
   // 使用者就跑去查网路，实际上要做的是重新扫 QR。
+  // 「号码全部离线」跟「Evolution 连不上」是两件事，要做的动作完全不同：
+  // 前者去重新扫码，后者去启动服务。分开两条规则，才不会叫人去查错的地方。
+  {
+    code: "WHATSAPP_ALL_INSTANCES_OFFLINE",
+    test: (text, error) => error?.code === "WHATSAPP_NOT_CONNECTED"
+      && /没有 OPEN 的 WhatsApp connection|0\/\d+ OPEN|没有可用的发送号码/i.test(text),
+    message: "Evolution 正常，但这台电脑的 WhatsApp 号码全部离线。",
+    why: "WhatsApp session 已经断开 —— 手机上「已连结的装置」被移除、换了手机、或 session 过期都会这样。Evolution 本身答得出来，所以不是服务挂掉。",
+    impact: "发不出讯息，手机人工跟进也核对不到。自动跟进会以为这些客户还没被联系，可能重复打扰他们。",
+    action: "到 Settings → Phone Setup，对显示 CLOSE 的号码按「重新扫码」，用手机 WhatsApp 的「已连结的装置」扫一次。恢复后这个提醒会自动停止。",
+  },
   {
     code: "WHATSAPP_NOT_CONNECTED",
     test: (text, error) => error?.code === "WHATSAPP_NOT_CONNECTED"
       || /ECONNREFUSED.*8080|127\.0\.0\.1:8080|Evolution.*(refused|unavailable)|instance.*not.*(found|connected)/i.test(text),
     message: "连不上 Evolution（WhatsApp 发送服务）。",
-    why: "Evolution 没在跑，或 WhatsApp 装置已经登出（手机上「已连结的装置」被移除也会这样）。",
+    why: "Evolution 容器没在跑，或 Docker 本身没启动。",
     impact: "完全发不出讯息。进行中的 campaign 会整批失败。",
-    action: "确认 Evolution 有在跑（127.0.0.1:8080），再到 Settings 看 Phone Health；装置被登出的话要重新扫 QR。",
+    action: "先确认 Docker 有在跑，再确认 Evolution 容器已启动（127.0.0.1:8080 要能回应）。都正常却仍然失败，就到 Settings 看 Phone Health 哪个号码是 CLOSE。",
   },
   {
     code: "RECIPIENT_NOT_ON_WHATSAPP",

@@ -99,6 +99,12 @@ async function analyzePreparedRecipientRisk(campaign, runner, skipIds = []) {
     assignments: runner.state.assignments || [],
     connectedInstances,
     skipIds,
+    flowTopic: typeof runner.flowTopic === "function"
+      ? runner.flowTopic()
+      : (runner.state.templateFlow || runner.state.flowLabel || ""),
+    resendCooldownDays: typeof runner.resendCooldownDays === "function"
+      ? runner.resendCooldownDays()
+      : 0,
   });
 }
 

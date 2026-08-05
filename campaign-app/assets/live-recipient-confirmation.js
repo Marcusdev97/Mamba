@@ -49,6 +49,11 @@
       .mamba-risk-count span{display:block;color:#94a3b8;font-size:10.5px}
       .mamba-risk-count b{display:block;margin-top:3px;color:#f8fafc;font-size:19px}
       .mamba-risk-section{margin-top:12px;border:1px solid #334155;border-radius:10px;overflow:hidden}
+      details.mamba-risk-section summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:#172033;color:#e2e8f0;font-size:12.5px;font-weight:800;cursor:pointer;list-style:none}
+      details.mamba-risk-section summary::-webkit-details-marker{display:none}
+      details.mamba-risk-section summary::after{content:"展开明细";color:#94a3b8;font-size:10.5px;font-weight:700}
+      details.mamba-risk-section[open] summary::after{content:"收起明细"}
+      details.mamba-risk-section.warn summary{background:#2a200e;color:#fcd34d}
       .mamba-risk-section.danger{border-color:#7f1d1d}.mamba-risk-section.warn{border-color:#854d0e}
       .mamba-risk-section h3{margin:0;padding:10px 12px;background:#172033;color:#e2e8f0;font-size:12.5px}
       .mamba-risk-section.danger h3{background:#2b1519;color:#fca5a5}.mamba-risk-section.warn h3{background:#2a200e;color:#fcd34d}
@@ -59,6 +64,8 @@
       .mamba-risk-reason{color:#94a3b8}
       .mamba-risk-more{padding:9px 12px;border-top:1px solid #273449;color:#94a3b8;font-size:11.5px}
       .mamba-risk-clear{padding:13px;border:1px solid #14532d;border-radius:10px;background:#0c2118;color:#86efac;font-size:13px;line-height:1.55}
+      .mamba-risk-summary{margin-bottom:14px;padding:12px 13px;border:1px solid #1d4ed8;border-radius:10px;background:#0d1c33;color:#bfdbfe;font-size:12.5px;line-height:1.55}
+      .mamba-risk-summary strong{color:#f8fafc}
       .mamba-risk-unavailable{margin-top:12px;padding:11px 13px;border:1px solid #7f1d1d;border-radius:9px;background:#2b1519;color:#fecaca;font-size:12px;line-height:1.55}
       .mamba-risk-ack{display:flex;gap:9px;align-items:flex-start;margin-top:16px;padding:12px 13px;border:1px solid #854d0e;border-radius:9px;background:#251c0d;color:#fde68a;font-size:12.5px;line-height:1.5}
       .mamba-risk-ack input{margin-top:2px;flex:0 0 auto}
@@ -71,7 +78,7 @@
     document.head.appendChild(style);
   }
 
-  function section(title, items, kind, detail) {
+  function section(title, items, kind, detail, { collapsed = false } = {}) {
     if (!items?.length) return "";
     const visible = items.slice(0, 8);
     const rows = visible.map((item) => `
@@ -83,6 +90,9 @@
     const more = items.length > visible.length
       ? `<div class="mamba-risk-more">另有 ${items.length - visible.length} 位，请返回名单逐一检查。</div>`
       : "";
+    if (collapsed) {
+      return `<details class="mamba-risk-section ${kind}"><summary>${escapeHtml(title)} · ${items.length}</summary><ul class="mamba-risk-list">${rows}</ul>${more}</details>`;
+    }
     return `<section class="mamba-risk-section ${kind}"><h3>${escapeHtml(title)} · ${items.length}</h3><ul class="mamba-risk-list">${rows}</ul>${more}</section>`;
   }
 
@@ -92,6 +102,9 @@
     const connected = risk?.connectedSenders || [];
     const privateContacts = risk?.privateContacts || [];
     const previous = risk?.previousBlast || [];
+    const recentSameFlow = risk?.recentSameFlow || [];
+    const recentSameFlowIds = new Set(recentSameFlow.map((item) => String(item.id)));
+    const previousOtherFlow = previous.filter((item) => !recentSameFlowIds.has(String(item.id)));
     const missingConsent = risk?.missingConsent || [];
     const expiredConsent = risk?.expiredConsent || [];
     const revokedConsent = risk?.revokedConsent || [];
@@ -100,10 +113,12 @@
     const safetyUnavailable = risk?.safetyUnavailableChecks || [];
     const unavailable = risk?.unavailableChecks || [];
     const hasBlock = blocked.length > 0 || safetyUnavailable.length > 0;
+    const estimatedSendCount = Math.max(0, Number(risk?.total || 0) - recentSameFlow.length);
     const needsExtraAck = !hasBlock && Boolean(
       connected.length
       || privateContacts.length
       || previous.length
+      || recentSameFlow.length
       || missingConsent.length
       || expiredConsent.length
       || contactBudget.length
@@ -123,30 +138,34 @@
         </header>
         <div class="mamba-risk-body">
           <div class="mamba-risk-counts">
-            <div class="mamba-risk-count"><span>本次发送</span><b>${Number(risk?.total || 0)}</b></div>
+            <div class="mamba-risk-count"><span>本次名单</span><b>${Number(risk?.total || 0)}</b></div>
+            <div class="mamba-risk-count"><span>预计发送</span><b>${estimatedSendCount}</b></div>
+            <div class="mamba-risk-count"><span>自动跳过重发</span><b>${recentSameFlow.length}</b></div>
             <div class="mamba-risk-count"><span>自己的号码</span><b>${connected.length}</b></div>
             <div class="mamba-risk-count"><span>私人联系人</span><b>${privateContacts.length}</b></div>
-            <div class="mamba-risk-count"><span>曾经 Blast</span><b>${previous.length}</b></div>
-            <div class="mamba-risk-count"><span>缺少 Consent</span><b>${missingConsent.length + expiredConsent.length}</b></div>
-            <div class="mamba-risk-count"><span>联系预算</span><b>${contactBudget.length}</b></div>
-            <div class="mamba-risk-count"><span>强制阻止</span><b>${blocked.length}</b></div>
+            <div class="mamba-risk-count"><span>其他历史 Blast</span><b>${previousOtherFlow.length}</b></div>
+            <div class="mamba-risk-count"><span>Consent 警告</span><b>${missingConsent.length + expiredConsent.length}</b></div>
+            <div class="mamba-risk-count"><span>联系预算警告</span><b>${contactBudget.length}</b></div>
+            <div class="mamba-risk-count"><span>硬性阻止</span><b>${blocked.length}</b></div>
           </div>
+          ${!hasBlock ? `<div class="mamba-risk-summary"><strong>这不是发送 Error。</strong> 当前有 ${blocked.length} 个硬性阻止；预计发送 ${estimatedSendCount} 位。${recentSameFlow.length ? `另有 ${recentSameFlow.length} 位近期已收过同一个 Flow，发送引擎会自动跳过，避免重复发送。` : ""}${missingConsent.length ? ` ${missingConsent.length} 位目前只是 Consent 警告；系统不会自动伪造同意证据。` : ""}</div>` : ""}
           ${(!needsExtraAck && !hasBlock) ? '<div class="mamba-risk-clear">✓ 名单已通过 P0 检查。仍请确认这就是你选择的客户群。</div>' : ""}
           ${section("自己的已连接号码", connected, "danger", (item) => item.reason)}
           ${section("Settings 私人联系人", privateContacts, "danger", (item) => item.reason)}
-          ${section("本机有历史 Blast 记录", previous, "warn", (item) => `${item.reason} · 最近 ${displayTime(item.lastSentAt)}${item.flows?.length ? ` · ${item.flows.join(" / ")}` : ""}`)}
-          ${section("缺少 Consent 证据", missingConsent, "warn", (item) => item.reason)}
-          ${section("Consent 证据已过期", expiredConsent, "warn", (item) => item.reason)}
+          ${section("本轮会自动跳过：近期已收过同一 Flow", recentSameFlow, "warn", (item) => `${item.reason} · 最近 ${displayTime(item.sentAt)} · ${item.flowTopic}`)}
+          ${section("其他历史 Blast 记录（请人工确认）", previousOtherFlow, "warn", (item) => `${item.reason} · 最近 ${displayTime(item.lastSentAt)}${item.flows?.length ? ` · ${item.flows.join(" / ")}` : ""}`)}
+          ${section("缺少 Consent 证据（警告，不是硬性阻止）", missingConsent, "warn", (item) => item.reason, { collapsed: missingConsent.length > 5 })}
+          ${section("Consent 证据已过期（警告）", expiredConsent, "warn", (item) => item.reason, { collapsed: expiredConsent.length > 5 })}
           ${section("Consent 已撤回（不可发送）", revokedConsent, "danger", (item) => item.reason)}
           ${section("近期联系预算已满", contactBudget, contactBudget.some((item) => item.assessment?.outcome === "BLOCK") ? "danger" : "warn", (item) => item.reason)}
           ${safetyUnavailable.length ? `<div class="mamba-risk-unavailable">⛔ P0 安全资料无法读取：${safetyUnavailable.map(escapeHtml).join("；")}。系统会 fail closed，不允许继续发送。</div>` : ""}
           ${blocked.length ? '<div class="mamba-risk-unavailable">⛔ 这批含有不可发送的号码。请返回名单移除后重新检查；确认按钮不会绕过安全规则。</div>' : ""}
           ${unavailable.length ? `<div class="mamba-risk-unavailable">⚠️ ${unavailable.map(escapeHtml).join("；")}。系统无法证明名单安全，请先返回检查，或明确承担风险后继续。</div>` : ""}
-          ${needsExtraAck ? '<label class="mamba-risk-ack"><input type="checkbox" data-risk-ack><span>我已经检查以上警告与 Consent 证据，确认仍要把未取消选择的人加入 LIVE 发送。</span></label>' : ""}
+          ${needsExtraAck ? `<label class="mamba-risk-ack"><input type="checkbox" data-risk-ack><span>我已经检查以上警告，确认让系统处理这 ${Number(risk?.total || 0)} 位；防重发闸门预计自动跳过 ${recentSameFlow.length} 位，其余才进入 LIVE 发送。</span></label>` : ""}
         </div>
         <footer class="mamba-risk-actions">
           <button type="button" data-risk-cancel>返回检查名单</button>
-          <button type="button" class="confirm" data-risk-confirm ${(needsExtraAck || hasBlock) ? "disabled" : ""}>${hasBlock ? "请先移除被阻止号码" : `${escapeHtml(actionLabel)} ${Number(risk?.total || 0)} 人`}</button>
+          <button type="button" class="confirm" data-risk-confirm ${(needsExtraAck || hasBlock) ? "disabled" : ""}>${hasBlock ? "请先移除被阻止号码" : `${escapeHtml(actionLabel)} · 预计 ${estimatedSendCount} 人`}</button>
         </footer>
       </div>`;
     document.body.appendChild(modal);

@@ -29,6 +29,9 @@ function confirmationToken(scopeId, recipients, risks) {
     previousBlast: risks.previousBlast
       .map((item) => `${item.id}:${item.lastSentAt || ""}:${item.times || 0}`)
       .sort(),
+    recentSameFlow: risks.recentSameFlow
+      .map((item) => `${item.id}:${item.sentAt || ""}:${item.times || 0}:${item.flowTopic || ""}`)
+      .sort(),
     missingConsentIds: risks.missingConsent.map((item) => item.id).sort(),
     expiredConsentIds: risks.expiredConsent.map((item) => item.id).sort(),
     revokedConsentIds: risks.revokedConsent.map((item) => item.id).sort(),
@@ -53,6 +56,8 @@ export function createCampaignRecipientRiskService({
     assignments = [],
     connectedInstances = [],
     skipIds = [],
+    flowTopic = "",
+    resendCooldownDays = 0,
   } = {}) {
     const skipped = new Set((skipIds || []).map(String));
     const recipients = assignments
@@ -69,6 +74,7 @@ export function createCampaignRecipientRiskService({
       connectedSenders: [],
       privateContacts: [],
       previousBlast: [],
+      recentSameFlow: [],
       missingConsent: [],
       expiredConsent: [],
       revokedConsent: [],
@@ -134,6 +140,31 @@ export function createCampaignRecipientRiskService({
       risks.unavailableChecks.push("历史 Blast 检查未启用");
     }
 
+    const normalizedFlowTopic = clean(flowTopic);
+    const normalizedCooldownDays = Number(resendCooldownDays);
+    if (normalizedFlowTopic && normalizedCooldownDays > 0 && conversationLog?.sentFlowSince) {
+      try {
+        const recent = await conversationLog.sentFlowSince(recipients.map((item) => item.phone), {
+          flowTopic: normalizedFlowTopic,
+          sinceDays: normalizedCooldownDays,
+        });
+        for (const [phone, hit] of recent) {
+          const recipient = byPhone.get(phone);
+          if (!recipient) continue;
+          risks.recentSameFlow.push({
+            ...recipient,
+            flowTopic: normalizedFlowTopic,
+            cooldownDays: normalizedCooldownDays,
+            sentAt: hit.sentAt || null,
+            times: Number(hit.times || 0),
+            reason: `${normalizedCooldownDays} 天内已经收过同一个 Flow，发送引擎会自动跳过`,
+          });
+        }
+      } catch {
+        risks.unavailableChecks.push("近期同 Flow 防重发预览暂时无法读取");
+      }
+    }
+
     if (campaignSafety?.analyzeRecipients) {
       try {
         const safety = await campaignSafety.analyzeRecipients({
@@ -158,6 +189,7 @@ export function createCampaignRecipientRiskService({
       ...risks.connectedSenders,
       ...risks.privateContacts,
       ...risks.previousBlast,
+      ...risks.recentSameFlow,
       ...risks.missingConsent,
       ...risks.expiredConsent,
       ...risks.revokedConsent,

@@ -85,6 +85,9 @@
   .watchdog-control { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(76px, auto); gap: 8px; align-items: center; }
   .watchdog-control input, .watchdog-control select { width: 100%; min-width: 0; margin: 0; }
   .watchdog-unit { min-height: 42px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); background: var(--panel); font-size: 12px; font-weight: 800; }
+  .watchdog-toggle { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); cursor: pointer; }
+  .watchdog-toggle input { width: auto; margin: 0; accent-color: var(--green); }
+  .watchdog-toggle span { color: var(--text); font-size: 12px; font-weight: 800; }
   .watchdog-summary { margin-top: 14px; padding: 11px 12px; border: 1px solid rgba(59,130,246,.35); border-radius: var(--radius); background: rgba(59,130,246,.08); color: var(--text); font-size: 12px; line-height: 1.55; }
   .check-row { display: flex; align-items: flex-start; gap: 9px; color: var(--text); font-size: 13px; line-height: 1.5; }
   .check-row input { width: 16px; min-height: 16px; margin-top: 2px; flex: 0 0 auto; }
@@ -296,6 +299,16 @@
             <p>健康检查与 Telegram 等待时间分开设置。支持最长 24 小时。</p>
           </div>
           <div class="watchdog-settings">
+            <div class="watchdog-setting">
+              <div>
+                <span class="watchdog-setting-title">Telegram 通知总开关</span>
+                <span class="watchdog-setting-sub">关闭后仍会检查并记录健康状态，但不发送异常、重复提醒或恢复通知。</span>
+              </div>
+              <label class="watchdog-toggle">
+                <span id="watchdogTelegramEnabledLabel">允许发送</span>
+                <input id="watchdogTelegramNotificationsEnabled" aria-label="Watchdog Telegram 通知" type="checkbox" checked />
+              </label>
+            </div>
             <div class="watchdog-setting">
               <div>
                 <span class="watchdog-setting-title">系统健康检查</span>
@@ -662,6 +675,7 @@ function watchdogDurationLabel(minutes) {
 
 function watchdogDraft() {
   return {
+    telegramNotificationsEnabled: $("watchdogTelegramNotificationsEnabled").checked,
     checkIntervalSeconds: Number($("watchdogCheckIntervalSeconds").value),
     failureDelayMinutes: watchdogMinutes("watchdogFailureDelayValue", "watchdogFailureDelayUnit"),
     reminderMinutes: watchdogMinutes("watchdogReminderValue", "watchdogReminderUnit"),
@@ -669,6 +683,9 @@ function watchdogDraft() {
 }
 
 function watchdogSummary(timing, prefix = "") {
+  if (timing.telegramNotificationsEnabled === false) {
+    return `${prefix}Telegram 通知已关闭；Watchdog 仍会每 ${timing.checkIntervalSeconds} 秒检查并记录系统健康。`;
+  }
   const reminder = Number(timing.reminderMinutes) > 0
     ? `之后每 ${watchdogDurationLabel(timing.reminderMinutes)}提醒一次。`
     : "同一次异常不会重复提醒。";
@@ -759,6 +776,8 @@ function render(settings) {
     " · Chat ID: " + (s.telegram?.chatConfigured ? s.telegram.chatId : (s.telegram?.chatInvalid ? "旧值不是 Chat ID，请重新自动找" : "未设置"));
   if (!$("telegramChatId").value && s.telegram?.chatId) $("telegramChatId").value = s.telegram.chatId;
   if (s.watchdog) {
+    $("watchdogTelegramNotificationsEnabled").checked = s.watchdog.telegramNotificationsEnabled !== false;
+    $("watchdogTelegramEnabledLabel").textContent = s.watchdog.telegramNotificationsEnabled === false ? "停止发送" : "允许发送";
     $("watchdogCheckIntervalSeconds").value = s.watchdog.checkIntervalSeconds ?? 30;
     setWatchdogDuration(s.watchdog.failureDelayMinutes ?? 1, "watchdogFailureDelayValue", "watchdogFailureDelayUnit");
     setWatchdogDuration(s.watchdog.reminderMinutes ?? 0, "watchdogReminderValue", "watchdogReminderUnit", { allowZero: true });
@@ -1211,6 +1230,12 @@ for (const [valueId, unitId, allowZero] of [
 }
 
 $("watchdogCheckIntervalSeconds").addEventListener("input", () => {
+  $("watchdogTimingStatus").textContent = watchdogSummary(watchdogDraft(), "待保存：");
+});
+
+$("watchdogTelegramNotificationsEnabled").addEventListener("change", () => {
+  const enabled = $("watchdogTelegramNotificationsEnabled").checked;
+  $("watchdogTelegramEnabledLabel").textContent = enabled ? "允许发送" : "停止发送";
   $("watchdogTimingStatus").textContent = watchdogSummary(watchdogDraft(), "待保存：");
 });
 

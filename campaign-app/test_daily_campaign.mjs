@@ -247,4 +247,42 @@ await fs.rm(rootDir, { recursive: true, force: true });
 await fs.rm(queuedRootDir, { recursive: true, force: true });
 await fs.rm(relayRootDir, { recursive: true, force: true });
 await fs.rm(lateRootDir, { recursive: true, force: true });
+
+// --- HOLD 通知去重：LIVE 每 5 分钟重试一次，不可以每次都发 Telegram ---
+{
+  const holdRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-daily-hold-"));
+  const posted = [];
+  let instancesOnline = false;
+  const holdService = createDailyCampaignService({
+    rootDir: holdRoot,
+    flowSequence,
+    clock: () => now,
+    replyServices: { status: async () => ({ tracker: true, brain: true }) },
+    // 号码断线 = 闸门挡住，这正是操作员会连续收到 Telegram 的情境。
+    openInstances: async () => (instancesOnline ? [{ name: "wa_01", number: "60110000000" }] : []),
+    getTestLeads: () => [{ name: "Anson", phone: "60172064505", language: "en" }],
+    getRunner: () => null,
+    queue: { snapshot: async () => ({ count: 0, hold: null }) },
+    fetchDuePlan: async () => ({
+      leads: [{ project: "Binastra", nextFlow: "Flow 2 - Layout", phone: "60120000001" }],
+      whatsappCheck: { safeToSend: true, scanSource: "tracker" },
+    }),
+    executeTest: async () => ({ runId: "run_test_hold" }),
+    executeLive: async () => ({ runId: "run_live_hold" }),
+    postOps: async (text) => { posted.push(text); },
+  });
+  await holdService.ready;
+  await holdService.update({ schedulerMode: "TEST", maxLeads: 1 });
+
+  await holdService.runTest();
+  assert.equal(posted.length, 1, "第一次被挡要通知");
+  assert.match(posted[0], /HOLD/);
+
+  await holdService.runTest();
+  await holdService.runTest();
+  assert.equal(posted.length, 1, "原因没变就不可以再发 Telegram");
+
+  await fs.rm(holdRoot, { recursive: true, force: true });
+}
+
 console.log("✅ all daily-campaign tests passed");

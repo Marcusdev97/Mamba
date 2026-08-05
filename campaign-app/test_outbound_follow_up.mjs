@@ -234,4 +234,51 @@ assert.match(disconnectedResult.error, /全部 WhatsApp connection 核对失败/
 assert.equal(connectionLogs.at(-1).event, "WHATSAPP_NOT_CONNECTED");
 assert.doesNotMatch(connectionLogs.at(-1).message, /Notion 当下比较慢/);
 
+
+// --- 号码全部离线：要讲得出「去重新扫码」，而且不可以每 30 分钟刷一次 ---
+{
+  const written = [];
+  let online = false;
+  const offlineService = createOutboundFollowUpService({
+    blastDatabaseId: "database123",
+    api: async () => ({ messages: [] }),
+    notion: async (method) => (method === "GET"
+      ? { properties: { "Follow Up At": { type: "date" } } }
+      : { ok: true }),
+    // 先全部离线，之后恢复一个号码。
+    openInstances: async () => (online ? [{ name: "wa_01" }] : []),
+    normalizePhone: (value) => String(value || "").replace(/\D/g, ""),
+    collectMessageObjects: (value) => value.messages || [],
+    describeMessage: () => "",
+    resolvePhone: (item) => item.key.remoteJid.split("@")[0],
+    messageTime: (item) => item.messageTimestamp,
+    queryNotionRows: async (filter) => (filter ? [liveCandidate] : []),
+    writeCache: async () => {},
+    history: { append: async () => ({ added: true }) },
+    conversationLog: { recordOutbound: async () => ({ saved: true }) },
+    systemLogs: { write: async (entry) => written.push(entry) },
+    onLog: () => {},
+  });
+
+  const first = await offlineService.runOnce({ reason: "test" });
+  assert.match(first.error, /没有 OPEN 的 WhatsApp connection/);
+  const failures = written.filter((item) => item.level === "warn");
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].event, "WHATSAPP_ALL_INSTANCES_OFFLINE",
+    "以前这里是 UNEXPECTED_ERROR，看不出该做什么");
+  assert.match(failures[0].message, /重新扫码/);
+
+  // 同一个故障重复跑，不可以再记一次 —— 否则 System Logs 会被淹掉。
+  await offlineService.runOnce({ reason: "test" });
+  await offlineService.runOnce({ reason: "test" });
+  assert.equal(written.filter((item) => item.level === "warn").length, 1,
+    "同一个故障只记一次");
+
+  // 恢复后要留下一笔，才看得出断线区间什么时候结束。
+  online = true;
+  await offlineService.runOnce({ reason: "test" });
+  assert.ok(written.some((item) => item.event === "outbound_follow_up_recovered"),
+    "恢复必须留痕");
+}
+
 console.log("✅ all outbound follow-up tests passed");

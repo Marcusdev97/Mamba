@@ -125,7 +125,9 @@ Mamba 不再把所有 `fetch failed` 都显示成「Evolution 掉线」，而是
 每轮检查前重读，不必重启 Campaign。默认每 30 秒检查、异常持续 1 分钟后首次报警、
 同一次异常不重复提醒，并在恢复时通知一次；正常启动与持续健康检查不会发送心跳消息。
 首次报警和重复提醒都可使用分钟或小时设置，最长 24 小时（例如 6 小时）；状态文件
-仍按检查节奏更新，供 Control Center 判断健康状态。
+仍按检查节奏更新，供 Control Center 判断健康状态。Settings 另有独立的 Watchdog
+Telegram 总开关；关闭后只停止异常、重复提醒与恢复通知，健康检查、状态文件和外部
+dead-man heartbeat 仍继续运行，不影响 Sales Brain 审批或手动 Telegram 测试。
 
 ## 3. Notion
 

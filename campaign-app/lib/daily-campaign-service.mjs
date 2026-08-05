@@ -741,6 +741,24 @@ export function createDailyCampaignService({
     await postOps(text).catch(() => {});
   }
 
+  // LIVE 每 5 分钟重试一次；号码断线时，同一句「HOLD」会一小时发 12 条 Telegram。
+  // 重复的通知不会带来新资讯，只会让人开始忽略这个频道 —— 所以只在「被挡的原因
+  // 变了」时才通知。System Logs 仍然每次都记，追查时看得到完整过程。
+  const lastHoldNotice = new Map();
+
+  async function notifyHoldOnce(mode, reasons) {
+    const signature = [...reasons].sort().join(" | ");
+    if (lastHoldNotice.get(mode) === signature) return false;
+    lastHoldNotice.set(mode, signature);
+    await notify(`⏸ <b>Next Campaign ${mode} HOLD</b>\n${reasons.join("\n")}`);
+    return true;
+  }
+
+  // 闸门通过 = 之前的 HOLD 原因不再成立，下次再挡要重新通知一次。
+  function clearHoldNotice(mode) {
+    lastHoldNotice.delete(mode);
+  }
+
   function scheduleLiveRetry() {
     state.nextAttemptAt = new Date(clock().getTime() + LIVE_RETRY_DELAY_MS).toISOString();
   }
@@ -772,9 +790,10 @@ export function createDailyCampaignService({
           message: `Daily ${mode} launch was held by safety gates.`,
           context: { mode, reasons, nextAttemptAt: state.nextAttemptAt },
         }).catch(() => {});
-        await notify(`⏸ <b>Next Campaign ${mode} HOLD</b>\n${reasons.join("\n")}`);
+        await notifyHoldOnce(mode, reasons);
         return { ok: false, status: "HOLD", readiness, reasons };
       }
+      clearHoldNotice(mode);
       const result = await executor({
         batch: readiness.batch,
         plan: readiness.automationPlan,

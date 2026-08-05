@@ -112,6 +112,31 @@ export function createOutboundFollowUpService({
     await systemLogs?.write({ level, area: "follow_up", event, message, context }).catch(() => {});
   }
 
+  // 同一个故障每 30 分钟重复记一次，只会把 System Logs 淹掉，读的人反而看不出
+  // 「什么时候断的、断了多久」。改成跟 Watchdog 一样：状态变化时记一次，
+  // 恢复时记一次，中间保持安静。当前状态仍然留在 state.error 供画面读取。
+  let lastFailureSignature = "";
+
+  async function logFailureOnce(explanation, context) {
+    const signature = `${explanation.code}:${explanation.details || ""}`;
+    if (signature === lastFailureSignature) return false;
+    lastFailureSignature = signature;
+    await log("warn", explanation.code, [
+      "无法检查业务员自己从 WhatsApp 发出去的回复。",
+      `为什么：${explanation.why}`,
+      "影响：这些客户可能已经被人工跟进过，但 Mamba 不知道，所以还会把他们排进下一轮自动跟进 —— 客户会收到重复的讯息。",
+      "处理：" + explanation.action,
+      `原始讯息：${explanation.details}`,
+    ].join("\n"), context);
+    return true;
+  }
+
+  async function logRecoveryOnce(context) {
+    if (!lastFailureSignature) return;
+    lastFailureSignature = "";
+    await log("info", "outbound_follow_up_recovered", "WhatsApp follow-up reconciliation is working again.", context);
+  }
+
   async function runOnce({ reason = "scheduled" } = {}) {
     if (activeRun) return activeRun;
     activeRun = (async () => {
@@ -152,7 +177,14 @@ export function createOutboundFollowUpService({
           return snapshot();
         }
         const instances = (await openInstances()).filter((instance) => instance?.name);
-        if (!instances.length) throw new Error("没有 OPEN 的 WhatsApp connection，无法核对手机回复。");
+        if (!instances.length) {
+          // 没有 OPEN 号码不是「未知错误」：Evolution 答得出来，只是所有 session
+          // 都断了。带上 code，error-explainer 才讲得出「去重新扫码」而不是
+          // 「把错误码记下来」。
+          const error = new Error("没有 OPEN 的 WhatsApp connection，无法核对手机回复。");
+          error.code = "WHATSAPP_NOT_CONNECTED";
+          throw error;
+        }
 
         const handledByPage = new Map();
         const connectionErrors = [];
@@ -252,6 +284,7 @@ export function createOutboundFollowUpService({
         };
         scheduleNext();
         onLog(`[follow-up-sync] checked ${candidates.length}, phone replies handled ${handled}, reason=${reason}.`);
+        await logRecoveryOnce({ reason, connections: instances.map((instance) => instance.name) });
         await log(failures.length ? "warn" : "info", "outbound_follow_up_checked", "Checked sales replies sent from WhatsApp.", {
           reason,
           checkedClients: candidates.length,
@@ -268,13 +301,7 @@ export function createOutboundFollowUpService({
         scheduleNext();
         onLog(`[follow-up-sync:error] ${state.error}`);
         const explanation = explainError(error, { area: "follow_up", event: "outbound_follow_up_failed" });
-        await log("warn", explanation.code, [
-          "无法检查业务员自己从 WhatsApp 发出去的回复。",
-          `为什么：${explanation.why}`,
-          "影响：这些客户可能已经被人工跟进过，但 Mamba 不知道，所以还会把他们排进下一轮自动跟进 —— 客户会收到重复的讯息。",
-          "处理：" + explanation.action,
-          `原始讯息：${explanation.details}`,
-        ].join("\n"), { reason, error: state.error, matched: explanation.matched });
+        await logFailureOnce(explanation, { reason, error: state.error, matched: explanation.matched });
         return snapshot();
       } finally {
         activeRun = null;

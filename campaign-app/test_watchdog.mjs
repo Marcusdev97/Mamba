@@ -94,19 +94,23 @@ assert.equal(stableRecovery.shouldReportRecovery, false, "healthy checks must st
 
 assert.deepEqual(watchdogSettingsFromEnv({}), DEFAULT_WATCHDOG_SETTINGS);
 assert.deepEqual(watchdogSettingsFromEnv({
+  MAMBA_WATCHDOG_TELEGRAM_ENABLED: "0",
   MAMBA_WATCHDOG_INTERVAL_SECONDS: "45",
   MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES: "5",
   MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES: "60",
-}), { checkIntervalSeconds: 45, failureDelayMinutes: 5, reminderMinutes: 60 });
+}), { telegramNotificationsEnabled: false, checkIntervalSeconds: 45, failureDelayMinutes: 5, reminderMinutes: 60 });
+assert.throws(() => validateWatchdogSettings({ telegramNotificationsEnabled: "maybe" }), /开启或关闭/);
 assert.throws(() => validateWatchdogSettings({ checkIntervalSeconds: 5 }), /15–600/);
 assert.equal(validateWatchdogSettings({ failureDelayMinutes: 6 * 60 }).failureDelayMinutes, 360,
   "Telegram failure delay must support six hours");
 assert.throws(() => validateWatchdogSettings({ failureDelayMinutes: 1441 }), /1–1440/);
 assert.deepEqual(watchdogSettingsToEnv({
+  telegramNotificationsEnabled: false,
   checkIntervalSeconds: 60,
   failureDelayMinutes: 10,
   reminderMinutes: 0,
 }), {
+  MAMBA_WATCHDOG_TELEGRAM_ENABLED: "0",
   MAMBA_WATCHDOG_INTERVAL_SECONDS: "60",
   MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES: "10",
   MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES: "0",
@@ -116,12 +120,18 @@ const watchdogSource = await fs.readFile(new URL("./mamba_watchdog.mjs", import.
 assert.doesNotMatch(watchdogSource, /心跳正常|MAMBA_WATCHDOG_TELEGRAM_MINUTES|lastTelegramHeartbeatAt/,
   "Watchdog must not send periodic healthy Telegram heartbeats");
 assert.match(watchdogSource, /reloadTiming/, "Watchdog must reload Settings timing without restarting a Campaign");
+assert.match(watchdogSource, /timing\.telegramNotificationsEnabled && \(transition\.shouldReportFailure/,
+  "Watchdog failure and reminder Telegram delivery must respect the operator switch");
+assert.match(watchdogSource, /timing\.telegramNotificationsEnabled && transition\.shouldReportRecovery/,
+  "Watchdog recovery Telegram delivery must respect the operator switch");
 assert.doesNotMatch(watchdogSource, /setInterval\(/, "dynamic timing must not be frozen in a process-lifetime interval");
 
 const settingsHtml = await fs.readFile(new URL("./settings.html", import.meta.url), "utf8");
 assert.match(settingsHtml, /watchdogFailureDelayValue/);
 assert.match(settingsHtml, /watchdogFailureDelayUnit/);
 assert.match(settingsHtml, /watchdogReminderValue/);
+assert.match(settingsHtml, /watchdogTelegramNotificationsEnabled/);
+assert.match(settingsHtml, /Telegram 通知总开关/);
 assert.match(settingsHtml, /支持最长 24 小时/);
 const settingsRoutes = await fs.readFile(new URL("./routes/settings.routes.mjs", import.meta.url), "utf8");
 assert.match(settingsRoutes, /watchdogSettingsFromBody/);

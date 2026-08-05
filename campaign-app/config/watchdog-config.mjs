@@ -1,4 +1,5 @@
 export const DEFAULT_WATCHDOG_SETTINGS = Object.freeze({
+  telegramNotificationsEnabled: true,
   checkIntervalSeconds: 30,
   failureDelayMinutes: 1,
   reminderMinutes: 0,
@@ -19,8 +20,19 @@ function boundedInteger(value, { name, min, max, fallback }) {
   return number;
 }
 
+function booleanSetting(value, { name, fallback }) {
+  if (value === undefined || value === null || String(value).trim() === "") return fallback;
+  if (value === true || value === "1" || value === 1 || value === "true") return true;
+  if (value === false || value === "0" || value === 0 || value === "false") return false;
+  throw new Error(`${name} 必须是开启或关闭。`);
+}
+
 export function validateWatchdogSettings(input = {}, fallback = DEFAULT_WATCHDOG_SETTINGS) {
   return {
+    telegramNotificationsEnabled: booleanSetting(input.telegramNotificationsEnabled, {
+      name: "Watchdog Telegram 通知",
+      fallback: fallback.telegramNotificationsEnabled,
+    }),
     checkIntervalSeconds: boundedInteger(input.checkIntervalSeconds, {
       name: "Watchdog 检查间隔（秒）",
       ...WATCHDOG_SETTING_LIMITS.checkIntervalSeconds,
@@ -42,6 +54,7 @@ export function validateWatchdogSettings(input = {}, fallback = DEFAULT_WATCHDOG
 export function watchdogSettingsFromEnv(env = {}) {
   try {
     return validateWatchdogSettings({
+      telegramNotificationsEnabled: env.MAMBA_WATCHDOG_TELEGRAM_ENABLED,
       checkIntervalSeconds: env.MAMBA_WATCHDOG_INTERVAL_SECONDS,
       failureDelayMinutes: env.MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES,
       reminderMinutes: env.MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES,
@@ -56,6 +69,7 @@ export function watchdogSettingsFromEnv(env = {}) {
 export function watchdogSettingsToEnv(settings) {
   const validated = validateWatchdogSettings(settings);
   return {
+    MAMBA_WATCHDOG_TELEGRAM_ENABLED: validated.telegramNotificationsEnabled ? "1" : "0",
     MAMBA_WATCHDOG_INTERVAL_SECONDS: String(validated.checkIntervalSeconds),
     MAMBA_WATCHDOG_TELEGRAM_DELAY_MINUTES: String(validated.failureDelayMinutes),
     MAMBA_WATCHDOG_TELEGRAM_REMINDER_MINUTES: String(validated.reminderMinutes),

@@ -19,6 +19,12 @@ const service = createCampaignRecipientRiskService({
         flows: ["Flow 1 - Project Template", "Flow 2 - Layout"],
       }]]);
     },
+    async sentFlowSince() {
+      return new Map([["60120000003", {
+        sentAt: "2026-07-20T02:00:00.000Z",
+        times: 1,
+      }]]);
+    },
   },
   workInboxIgnore: {
     async snapshot() {
@@ -46,6 +52,8 @@ const risk = await service.analyze({
   scopeId: "run-risk-test",
   assignments,
   connectedInstances: [{ name: "wa_03", owner: "60120000001" }],
+  flowTopic: "Flow 2 - Layout",
+  resendCooldownDays: 30,
 });
 assert.equal(risk.total, 4);
 assert.equal(risk.riskCount, 4);
@@ -53,6 +61,8 @@ assert.equal(risk.connectedSenders[0].id, "own");
 assert.equal(risk.privateContacts[0].privateName, "Friend A");
 assert.equal(risk.previousBlast[0].times, 2);
 assert.deepEqual(risk.previousBlast[0].flows, ["Flow 1 - Project Template", "Flow 2 - Layout"]);
+assert.equal(risk.recentSameFlow[0].id, "history");
+assert.equal(risk.recentSameFlow[0].flowTopic, "Flow 2 - Layout");
 assert.equal(risk.missingConsent[0].id, "clean");
 assert.equal(risk.contactBudget[0].id, "history");
 assert.equal(service.matchesConfirmation(risk, risk.confirmationToken), true);
@@ -87,9 +97,11 @@ assert.match(routeSource, /assertSenderSafety/);
 const modalSource = await fs.readFile(new URL("./assets/live-recipient-confirmation.js", import.meta.url), "utf8");
 assert.match(modalSource, /确定要发给这群人/);
 assert.match(modalSource, /自己的已连接号码/);
-assert.match(modalSource, /本机有历史 Blast 记录/);
+assert.match(modalSource, /其他历史 Blast 记录/);
 assert.match(modalSource, /缺少 Consent 证据/);
-assert.match(modalSource, /强制阻止/);
+assert.match(modalSource, /硬性阻止/);
+assert.match(modalSource, /本轮会自动跳过/);
+assert.match(modalSource, /这不是发送 Error/);
 assert.match(modalSource, /当前 Mamba Server 还是更新前的版本/);
 assert.match(modalSource, /formatRequestError/);
 
