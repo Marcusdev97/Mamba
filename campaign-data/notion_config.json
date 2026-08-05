@@ -9,7 +9,11 @@
     "templates": "d8a1bf9c5fdd4c1198f50b91ee41079c",
     "images": "b8978f28aa004e22a21ff4b95aa00790",
     "recycleLeads": "fd7bba6715434c5f820a36ead4a582c8",
-    "campaignRuns": "38358de2161380e28f19f7587f3fa932"
+    "campaignRuns": "38358de2161380e28f19f7587f3fa932",
+    "projectKnowledge": "339481852caa427ebe6cf4f756d82e47",
+    "goldenConversations": "dc5c303e463145abb9d635c007120157",
+    "objectionBank": "f73c35315d604aa682ecf84826cde123",
+    "aiReplyLog": "4272e2edbf644f44b670c71ae4276051"
   },
   "dataSources": {
     "blastLeads": "b7f288ef-c2dc-4dbd-8071-5e4914e7648c",
@@ -44,5 +48,20 @@
       "pageId": "38858de21613812da02ce610b5c4003b",
       "imagePageId": "38858de21613812fba0fc5372fbe888b"
     }
+  },
+  "crm": {
+    "schemaVersion": 1,
+    "parentPageId": "3b358de2161380cdaba9dfbc7fd267d8",
+    "databases": {
+      "customers": "3b358de2161381389cf0dc5422321d0d",
+      "projectLeads": "3b358de21613818ea747e600a19ab1b5",
+      "followUpTasks": "3b358de2161381d486c0cc7aba337faf",
+      "salesOpportunities": "3b358de2161381e59bded3879325cf27",
+      "campaigns": "3b358de216138144b4b7f622a53ecffd",
+      "campaignRuns": "3b358de216138135a85fcc9c250c4170",
+      "conversationSummaries": "3b358de216138192a6fecae37973c4a6",
+      "aiLeadReviews": "3b358de216138198b2b9ed81c3d50a31"
+    },
+    "viewsRequireManualSetup": false
   }
 }

@@ -307,6 +307,12 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 
 不要让同一种资料同时拥有两个可以互相覆盖的真相源。
 
+Notion CRM v1 使用 Customers、Project Leads、Follow-up Tasks、Sales Opportunities、
+Campaigns、Campaign Runs、Conversation Summaries 和 AI Lead Reviews 八个固定 database。
+字段所有权、relations、稳定 ID、privacy denylist 与 provisioning 流程见
+[`NOTION_CRM_V1.md`](NOTION_CRM_V1.md)。Legacy Blast／Ads／Recycle databases 在迁移期
+保持独立，CRM provisioner 不得覆盖它们的配置或把原始 message ledger 搬进 Notion。
+
 ### SQLite 启动与安全状态
 
 SQLite 启动顺序固定为：确认数据库文件 → `quick_check`／foreign key 检查 →

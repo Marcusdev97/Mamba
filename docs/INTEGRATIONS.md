@@ -150,6 +150,16 @@ Mamba 不再把所有 `fetch failed` 都显示成「Evolution 掉线」，而是
 运行结果：SQLite outbox → Notion
 ```
 
+### CRM v1 Structure
+
+新的在线 CRM 使用 8 个独立 databases；legacy Blast／Ads／Recycle／Templates／Images
+在迁移期保留原配置。CRM database IDs 只写入 `notion_config.json -> crm.databases`，
+不得覆盖 legacy keys。Schema 与 relations 由
+`domain/notion-crm-schema.mjs` 单一定义，maintenance provisioner 默认只 dry-run。
+任何同名 property type／relation 冲突都必须停止 apply；Notion 和 SQLite 同时修改
+human-owned field 时标记 `Conflict`，不采用 last-write-wins。完整规则见
+[`NOTION_CRM_V1.md`](NOTION_CRM_V1.md)。
+
 ### Campaign Sync 时机
 
 1. 每位客户的发送结果先写入 SQLite。

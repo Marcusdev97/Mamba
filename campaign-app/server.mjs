@@ -671,9 +671,9 @@ const runtime = await loadRuntime({
     history: conversationHistoryService,
     readCache: readLeadStore,
     systemLogs: systemLogService,
-    aiReplyLogDbId: configuredBrainDb("aiReplyLog", "4272e2edbf644f44b670c71ae4276051"),
-    goldenDbId: configuredBrainDb("goldenConversations", "dc5c303e463145abb9d635c007120157"),
-    objectionDbId: configuredBrainDb("objectionBank", "f73c35315d604aa682ecf84826cde123"),
+    aiReplyLogDbId: configuredBrainDb("aiReplyLog", ""),
+    goldenDbId: configuredBrainDb("goldenConversations", ""),
+    objectionDbId: configuredBrainDb("objectionBank", ""),
   },
   templates: {
     rootDir: paths.rootDir,

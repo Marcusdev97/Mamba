@@ -1,6 +1,6 @@
 const NOTION_VERSION = "2022-06-28";
 
-export function createNotionService({ env }) {
+export function createNotionService({ env, logger = console }) {
   function notionTokenValue() {
     return env.NOTION_API_KEY || env.NOTION_TOKEN || process.env.NOTION_API_KEY || process.env.NOTION_TOKEN || "";
   }
@@ -10,7 +10,7 @@ export function createNotionService({ env }) {
     if (!token) throw new Error("没有 Notion token。先运行 Set Notion Token。");
     const started = Date.now();
     const retryTag = attempt ? ` retry=${attempt}` : "";
-    console.log(`[notion] ${method} ${pathname}${retryTag}`);
+    logger?.log?.(`[notion] ${method} ${pathname}${retryTag}`);
     const response = await fetch(`https://api.notion.com/v1${pathname}`, {
       method,
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Notion-Version": NOTION_VERSION },
@@ -26,11 +26,11 @@ export function createNotionService({ env }) {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      console.log(`[notion] FAIL ${method} ${pathname} HTTP ${response.status} ${Date.now() - started}ms`);
+      logger?.log?.(`[notion] FAIL ${method} ${pathname} HTTP ${response.status} ${Date.now() - started}ms`);
       throw new Error(`Notion HTTP ${response.status} ${JSON.stringify(data)}`);
     }
     const summary = Array.isArray(data?.results) ? ` results=${data.results.length}` : data?.id ? ` id=${data.id}` : "";
-    console.log(`[notion] OK ${method} ${pathname}${summary} ${Date.now() - started}ms`);
+    logger?.log?.(`[notion] OK ${method} ${pathname}${summary} ${Date.now() - started}ms`);
     return data;
   }
 

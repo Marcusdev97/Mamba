@@ -57,7 +57,7 @@ const PORT = Number(process.env.BRAIN_PORT ?? 8799);
 const PUBLIC_URL = process.env.BRAIN_WEBHOOK_URL ?? `http://host.docker.internal:${PORT}/webhook/evolution`;
 const TRACKER_FORWARD_URL = process.env.BRAIN_FORWARD_URL ?? `http://127.0.0.1:${Number(process.env.TRACKER_PORT ?? 8798)}/webhook/evolution`;
 const NOTION_VERSION = "2022-06-28";
-const AI_REPLY_LOG_DB = "4272e2edbf644f44b670c71ae4276051"; // Mamba | AI Reply Log (override in notion_config.databases.aiReplyLog)
+const AI_REPLY_LOG_DB = ""; // Configured only through notion_config.databases.aiReplyLog.
 
 const simulateIdx = process.argv.indexOf("--simulate");
 const SIMULATE = simulateIdx !== -1 ? String(process.argv[simulateIdx + 1] ?? "这个多少钱?") : null;

@@ -36,10 +36,10 @@ const NOTION_VERSION = "2022-06-28";
 const WATCH_INTERVAL_MS = 30 * 60 * 1000; // 30 min — the "knowledge clock"
 
 const DEFAULT_DBS = {
-  projectKnowledge: "339481852caa427ebe6cf4f756d82e47",
-  goldenConversations: "dc5c303e463145abb9d635c007120157",
-  objectionBank: "f73c35315d604aa682ecf84826cde123",
-  aiReplyLog: "4272e2edbf644f44b670c71ae4276051",
+  projectKnowledge: "",
+  goldenConversations: "",
+  objectionBank: "",
+  aiReplyLog: "",
 };
 
 // ---------- config / auth (same conventions as the rest of the repo) ----------
