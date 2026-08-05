@@ -15,6 +15,7 @@
 // 名单闸：只有 blast 名单里的号码才进数据库。名单外的是自己的私人联络人 / 同事 /
 // 广告陌生人，之后另外做 add-new-leads 功能来管。
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
@@ -82,6 +83,7 @@ export function createConversationLogService({
   let cliPromise = null;
   let leadIndex = { phones: new Set(), loadedAt: 0 };
   let connectionIndex = { byNumber: new Map(), byInstance: new Map(), loadedAt: 0 };
+  let messageCoreColumns = null;
 
   function cli() {
     if (!cliPromise) {
@@ -91,6 +93,22 @@ export function createConversationLogService({
       });
     }
     return cliPromise;
+  }
+
+  async function supportsCoreMessageIdentity(database) {
+    if (messageCoreColumns !== null) return messageCoreColumns;
+    const columns = new Set((await database.query("PRAGMA table_info(messages);")).map((row) => row.name));
+    messageCoreColumns = ["connection_key", "external_message_id", "idempotency_key"]
+      .every((column) => columns.has(column));
+    return messageCoreColumns;
+  }
+
+  function messageIdempotencyKey(row) {
+    const connectionScope = row.connectionKey
+      || (row.instanceName ? `instance:${row.instanceName}` : "")
+      || (row.senderNumber ? `sender:${row.senderNumber}` : "")
+      || `conversation:${row.conversationId}`;
+    return crypto.createHash("sha256").update(`${connectionScope}\u0000${row.id}`).digest("hex");
   }
 
   // 「这个号码是不是我 blast 的名单」——三个来源联集，任何一个认得就算数：
@@ -240,6 +258,7 @@ export function createConversationLogService({
   async function writeChunk(rows) {
     if (!rows.length) return;
     const database = await cli();
+    const hasCoreMessageIdentity = await supportsCoreMessageIdentity(database);
     const index = await connections();
     const nowIso = clock().toISOString();
     // 先把每条讯息归到哪段对话算好，后面 conversations 和 messages 用的是同一个值。
@@ -262,6 +281,11 @@ export function createConversationLogService({
     const messageValues = placed.map((row) => `(${[
       sqlValue(row.id),
       sqlValue(row.conversationId),
+      ...(hasCoreMessageIdentity ? [
+        sqlValue(row.connectionKey),
+        sqlValue(row.id),
+        sqlValue(messageIdempotencyKey(row)),
+      ] : []),
       sqlValue(row.direction),
       sqlValue(row.text),
       sqlValue(row.messageType || "text"),
@@ -294,7 +318,9 @@ INSERT OR IGNORE INTO conversations (id, contact_key, connection_key, customer_p
 VALUES
   ${conversationValues};
 
-INSERT OR IGNORE INTO messages (id, conversation_id, direction, text, message_type, source, flow_topic, template_key, sent_at, payload_json, created_at)
+INSERT OR IGNORE INTO messages (${hasCoreMessageIdentity
+    ? "id, conversation_id, connection_key, external_message_id, idempotency_key, direction, text, message_type, source, flow_topic, template_key, sent_at, payload_json, created_at"
+    : "id, conversation_id, direction, text, message_type, source, flow_topic, template_key, sent_at, payload_json, created_at"})
 VALUES
   ${messageValues};
 

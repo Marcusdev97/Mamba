@@ -52,6 +52,9 @@ const campaign = {
 };
 const runtime = {
   campaign,
+  localDatabase: {
+    async assertLiveReady() { return { health: "ready", storageMode: "primary", liveSendingAllowed: true }; },
+  },
   systemLogs: { write: async () => {} },
 };
 const router = createRouter(runtime);

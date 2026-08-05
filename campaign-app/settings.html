@@ -228,8 +228,13 @@
         <div class="database-stat"><span>Customers</span><b id="databaseCustomers">0</b></div>
         <div class="database-stat"><span>Pending Sync</span><b id="databasePending">0</b></div>
         <div class="database-stat"><span>Sync Worker</span><b id="databaseWorker">SHADOW</b></div>
+        <div class="database-stat"><span>Database ID</span><b id="databaseId">—</b></div>
+        <div class="database-stat"><span>Last Health</span><b id="databaseLastHealth">—</b></div>
+        <div class="database-stat"><span>Last Backup</span><b id="databaseLastBackup">—</b></div>
+        <div class="database-stat"><span>Journal / Index</span><b id="databaseCoreState">—</b></div>
       </div>
       <div class="status-line" id="databaseStatus">读取本机数据库状态...</div>
+      <div class="status-line" id="databaseWarnings">SQLite 安全检查：查询中...</div>
       <div class="status-line" id="databaseBinding">Device / Sender: 查询中...</div>
       <div class="status-line" id="databasePath">Path: 查询中...</div>
       <div class="actions">
@@ -813,6 +818,15 @@ function renderLocalDatabase(database) {
   $("databaseCustomers").textContent = String(db.counts?.customers || 0);
   $("databasePending").textContent = String(db.counts?.pendingSyncJobs || 0);
   $("databaseWorker").textContent = (db.syncWorker?.enabled ? (db.syncWorker.status || "IDLE") : "OFF") + " · " + (db.syncWorker?.mode || "SHADOW");
+  $("databaseId").textContent = db.databaseId || "尚未建立";
+  $("databaseLastHealth").textContent = db.lastHealthCheckAt
+    ? new Date(db.lastHealthCheckAt).toLocaleString()
+    : "尚未检查";
+  $("databaseLastBackup").textContent = db.lastBackupAt
+    ? new Date(db.lastBackupAt).toLocaleString()
+    : "尚无备份";
+  $("databaseCoreState").textContent = (db.journalMode || "—").toUpperCase()
+    + " · " + (db.indexes?.ready ? "INDEX READY" : "INDEX CHECK");
   $("databaseStatus").textContent = db.health === "ready"
     ? primary
       ? "SQLite Primary 正在运行。本机客户读取来自 SQLite；Notion 仍保留作云端镜像和手动刷新来源。"
@@ -826,6 +840,9 @@ function renderLocalDatabase(database) {
       : db.driverAvailable
         ? "尚未初始化。可以安全建立空的 SQLite 数据库壳。"
         : "找不到 sqlite3 driver；请确认 macOS /usr/bin/sqlite3 存在。";
+  $("databaseWarnings").textContent = db.liveSendingAllowed
+    ? "SQLite 安全检查通过：LIVE 可用。"
+    : "LIVE 已锁定" + (db.warnings?.length ? "：" + db.warnings.join("；") : "，需 SQLite READY + Primary 才会开放。");
   $("databaseBinding").textContent = "Device: " + (db.deviceId || "未建立") + " · Sender Key: " + (db.expectedSenderKey || "尚未绑定") + " · Instance 名称（如 wa_01）不作唯一键";
   $("databasePath").textContent = "Path: " + (db.databasePath || "campaign-data/mamba.sqlite");
   $("btnInitDatabase").textContent = db.health === "migration_required"

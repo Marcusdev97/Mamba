@@ -87,6 +87,9 @@ function buildRuntime() {
   };
   return {
     campaign,
+    localDatabase: {
+      async assertLiveReady() { return { health: "ready", storageMode: "primary", liveSendingAllowed: true }; },
+    },
     campaignMode: {
       async getSetting(instance) {
         return instance === "wa_03"
@@ -166,5 +169,19 @@ const staleRisk = await post("/api/campaign/lane/launch", {
   recipientRiskToken: "stale",
 });
 assert.equal(staleRisk.status, 409, "LIVE 风险 token 不对要挡");
+
+const originalDatabaseGuard = runtime.localDatabase.assertLiveReady;
+runtime.localDatabase.assertLiveReady = async () => {
+  const error = new Error("SQLite health check failed");
+  error.code = "SQLITE_LIVE_HEALTH_BLOCKED";
+  throw error;
+};
+const databaseBlocked = await post("/api/campaign/lane/launch", {
+  project: "binastra", instance: "wa_01", mode: "LIVE", leadGroupId: "group-A", optIn: true,
+  recipientRiskToken: "lane-risk-ok",
+});
+assert.equal(databaseBlocked.status, 503, "SQLite 不健康时 LIVE 车道必须 fail closed");
+assert.equal(databaseBlocked.body.details.code, "SQLITE_LIVE_HEALTH_BLOCKED");
+runtime.localDatabase.assertLiveReady = originalDatabaseGuard;
 
 console.log("✅ all lane launch tests passed");

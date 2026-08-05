@@ -29,6 +29,21 @@ function requireCampaign(runtime) {
   return runtime.campaign;
 }
 
+async function assertLiveDatabaseReady(runtime) {
+  if (!runtime.localDatabase?.assertLiveReady) {
+    throw httpError(503, "SQLite LIVE 安全闸尚未载入；本次不会发送。", {
+      code: "SQLITE_LIVE_GUARD_UNAVAILABLE",
+    });
+  }
+  try {
+    return await runtime.localDatabase.assertLiveReady();
+  } catch (error) {
+    throw httpError(503, error.message || "SQLite 尚未 READY；本次 LIVE 不会发送。", {
+      code: error.code || "SQLITE_LIVE_HEALTH_BLOCKED",
+    });
+  }
+}
+
 function requireRecipientRisk(campaign) {
   if (!campaign.recipientRisk) {
     throw httpError(503, "LIVE 收件人风险检查尚未载入。为避免误发，本次不会启动。", "RECIPIENT_RISK_UNAVAILABLE");
@@ -358,6 +373,7 @@ export function runCampaignInBackground(runtime, runner, autoAdvance, errorEvent
     }
     campaign.persistRunners?.().catch(() => {});
     try {
+      if (runner.state?.mode === "LIVE") await assertLiveDatabaseReady(runtime);
       const awake = runtime.campaignAwake?.acquire?.(runId);
       if (awake?.supported && !awake.active) {
         await writeCampaignLog(runtime, "warn", "campaign_awake_guard_unavailable", "Campaign started without an active macOS idle-sleep guard.", {
@@ -479,6 +495,7 @@ export async function startNextQueued(runtime, { force = false } = {}) {
 
   const nextRunner = await restoreQueuedRunner(campaign, next);
   try {
+    if (nextRunner.state?.mode === "LIVE") await assertLiveDatabaseReady(runtime);
     await assertSenderSafety(campaign, runnerInstanceNames(nextRunner));
   } catch (error) {
     await campaign.queue.setHold(error.message, next.runId);
@@ -651,6 +668,7 @@ export function registerCampaignRoutes(router) {
     const runner = await resolveStartRunner(campaign, body);
     ensureRunnableStart(runner, body);
     if (runner.state.mode === "LIVE") {
+      await assertLiveDatabaseReady(runtime);
       if (runner.state.campaignType === "RECYCLE") {
         try {
           await campaign.refreshCampaign.assertPreparedRunner(runner);
@@ -758,6 +776,8 @@ export function registerCampaignRoutes(router) {
     const remaining = resumeJobs.length;
     if (!remaining) throw httpError(400, "没有待发送的客户了（都已处理）。");
 
+    if (runner.state.mode === "LIVE") await assertLiveDatabaseReady(runtime);
+
     await assertSenderSafety(campaign, runnerInstanceNames(runner));
 
     const conflict = conflictingRunner(campaign, runnerInstanceNames(runner), runner.state.runId, {
@@ -806,6 +826,8 @@ export function registerCampaignRoutes(router) {
     );
     const failed = failedJobs.length;
     if (!failed) throw httpError(400, "没有发送异常需要重试（无 WhatsApp 客户不会重试）。");
+
+    if (runner.state.mode === "LIVE") await assertLiveDatabaseReady(runtime);
 
     await assertSenderSafety(campaign, runnerInstanceNames(runner));
 
@@ -965,6 +987,7 @@ export function registerCampaignRoutes(router) {
     const instanceName = String(body?.instance || "").trim();
     const sendMode = body?.mode === "LIVE" ? "LIVE" : "TEST";
     if (!instanceName) throw httpError(400, "缺少号码，无法启动车道。", "LANE_INSTANCE_REQUIRED");
+    if (sendMode === "LIVE") await assertLiveDatabaseReady(runtime);
     if (!runtime.campaignMode?.getSetting) {
       throw httpError(503, "发送节奏服务尚未启用，车道不会使用未经验证的临时间隔。", "CAMPAIGN_MODE_UNAVAILABLE");
     }

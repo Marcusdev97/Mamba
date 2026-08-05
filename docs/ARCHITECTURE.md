@@ -307,6 +307,23 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 
 不要让同一种资料同时拥有两个可以互相覆盖的真相源。
 
+### SQLite 启动与安全状态
+
+SQLite 启动顺序固定为：确认数据库文件 → `quick_check`／foreign key 检查 →
+核对 schema v3 与 runtime patch → 执行有编号的 pending migration → 审计必要索引 →
+写入健康状态 → `READY`。Migration 303 会先用 SQLite online backup 建立备份，另写
+包含 SHA-256、大小、原因和验证结果的 manifest；已应用 migration 的 checksum
+不得改变。
+
+`metadata.database_id` 是数据库稳定身份，重启或重复 initialize 不得重建。Settings
+显示 database ID、最后健康检查、最后备份、WAL 和索引状态。任何 migration、checksum、
+`quick_check`、foreign key 或必要索引失败都会进入 safe mode；诊断与备份仍可使用，
+但 LIVE start／resume／retry／queue relay／sender lane 全部 fail closed。只有
+`health=ready` 且 `storage_mode=primary` 时才开放 LIVE；TEST 不依赖这条 recipient source。
+
+`messages` 的业务幂等键由 connection scope 与 Evolution external message id 组成，
+相同 provider message id 出现在不同 sender connection 时必须保存为两份不同证据。
+
 私人联系人名单与 Telegram Filter、STOP／Suppression 是三个不同规则：
 
 - Telegram Filter 只关闭 Telegram 通知，Tracker 与 Notion 行为不变。

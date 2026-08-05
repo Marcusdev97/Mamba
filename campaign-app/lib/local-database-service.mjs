@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { recentActiveRunState } from "./active-campaign-state.mjs";
 import { buildSenderKey } from "./device-identity.mjs";
 import {
   RUNTIME_REQUIRED_COLUMNS,
@@ -11,6 +12,18 @@ import {
 
 const SCHEMA_VERSION = 3;
 const DEFAULT_SCHEMA_PATH = fileURLToPath(new URL("../../docs/mamba-schema.sql", import.meta.url));
+const CORE_MIGRATION_VERSION = 303;
+const CORE_MIGRATION_NAME = "sqlite-core-stability";
+const DEFAULT_CORE_MIGRATION_PATH = fileURLToPath(new URL("../migrations/303-sqlite-core-stability.sql", import.meta.url));
+const REQUIRED_INDEXES = [
+  "idx_messages_conv_time",
+  "idx_messages_idempotency",
+  "idx_sync_jobs_queue",
+  "idx_campaign_runs_status_mode",
+  "idx_sendjobs_queue",
+  "idx_sendjobs_connection_status",
+  "idx_project_leads_followup_queue",
+];
 const DEFAULT_SQLITE_CANDIDATES = [
   "/usr/bin/sqlite3",
   "/opt/homebrew/bin/sqlite3",
@@ -136,8 +149,10 @@ export function createLocalDatabaseService({
   senderPolicy = {},
   sqliteBinary = "",
   schemaPath = DEFAULT_SCHEMA_PATH,
+  coreMigrationPath = DEFAULT_CORE_MIGRATION_PATH,
 } = {}) {
   const databasePath = path.join(dataDir, "mamba.sqlite");
+  const rootDir = path.dirname(dataDir);
   let notionImportSource = null;
 
   async function driver() {
@@ -159,6 +174,18 @@ export function createLocalDatabaseService({
     }
   }
 
+  async function diskState() {
+    try {
+      const stats = await fs.statfs(dataDir);
+      const availableBytes = Number(stats.bavail) * Number(stats.bsize);
+      const totalBytes = Number(stats.blocks) * Number(stats.bsize);
+      const low = availableBytes < 512 * 1024 * 1024 || (totalBytes > 0 && availableBytes / totalBytes < 0.05);
+      return { availableBytes, totalBytes, low };
+    } catch {
+      return { availableBytes: null, totalBytes: null, low: false };
+    }
+  }
+
   async function queryJson(binary, sql) {
     const output = await runProcess(binary, ["-batch", "-json", databasePath], sql);
     return output ? JSON.parse(output) : [];
@@ -167,6 +194,129 @@ export function createLocalDatabaseService({
   async function schemaVersion(binary) {
     const [row] = await queryJson(binary, "PRAGMA user_version;");
     return Number(row?.user_version || 0);
+  }
+
+  async function coreMigrationDefinition() {
+    const sql = await fs.readFile(coreMigrationPath, "utf8");
+    return {
+      version: CORE_MIGRATION_VERSION,
+      name: CORE_MIGRATION_NAME,
+      sql,
+      checksum: crypto.createHash("sha256").update(sql).digest("hex"),
+    };
+  }
+
+  async function coreMigrationState(binary) {
+    const definition = await coreMigrationDefinition();
+    const columns = new Set((await queryJson(binary, "PRAGMA table_info(schema_migrations);")).map((row) => row.name));
+    const hasAuditColumns = ["checksum", "duration_ms", "result"].every((column) => columns.has(column));
+    if (!hasAuditColumns) return { ...definition, applied: false, pending: true, reason: "audit_columns_missing" };
+    const [row] = await queryJson(binary, `
+SELECT version, name, checksum, applied_at AS appliedAt, duration_ms AS durationMs, result
+FROM schema_migrations WHERE version=${sqlNumber(definition.version)} LIMIT 1;`);
+    if (!row) return { ...definition, applied: false, pending: true, reason: "migration_not_recorded" };
+    if (clean(row.checksum) !== definition.checksum) {
+      const error = new Error(`SQLite migration ${definition.version} checksum 与已应用记录不一致；禁止自动继续。`);
+      error.code = "SQLITE_MIGRATION_CHECKSUM_MISMATCH";
+      throw error;
+    }
+    return { ...definition, applied: true, pending: false, record: row };
+  }
+
+  async function requiredIndexState(binary) {
+    const rows = await queryJson(binary, `
+SELECT name FROM sqlite_master
+WHERE type='index' AND name IN (${REQUIRED_INDEXES.map(sqlText).join(",")});`);
+    const present = new Set(rows.map((row) => row.name));
+    const missing = REQUIRED_INDEXES.filter((name) => !present.has(name));
+    return { required: [...REQUIRED_INDEXES], missing, ready: missing.length === 0 };
+  }
+
+  async function fileChecksum(filePath) {
+    return crypto.createHash("sha256").update(await fs.readFile(filePath)).digest("hex");
+  }
+
+  async function backupForMigration(binary, definition) {
+    const [sourceStat, disk] = await Promise.all([fs.stat(databasePath), diskState()]);
+    if (disk.availableBytes !== null && disk.availableBytes < sourceStat.size * 2 + 100 * 1024 * 1024) {
+      const error = new Error("可用磁盘空间不足，无法在 migration 前建立可恢复备份。LIVE 保持锁定。");
+      error.code = "SQLITE_MIGRATION_DISK_SPACE_LOW";
+      throw error;
+    }
+    const backupDir = path.join(dataDir, "backups");
+    await fs.mkdir(backupDir, { recursive: true });
+    const createdAt = new Date().toISOString();
+    const stamp = createdAt.replace(/[:.]/g, "-");
+    const backupPath = path.join(backupDir, `before-migration-${definition.version}-${stamp}.sqlite`);
+    await runProcess(binary, ["-batch", databasePath, `.backup ${sqlText(backupPath)}`], "", 60000);
+    const stat = await fs.stat(backupPath);
+    const manifestPath = `${backupPath}.manifest.json`;
+    const manifest = {
+      formatVersion: 1,
+      databaseId: null,
+      sourcePath: databasePath,
+      backupPath,
+      createdAt,
+      sizeBytes: stat.size,
+      sha256: await fileChecksum(backupPath),
+      reason: "before_schema_migration",
+      migration: { version: definition.version, name: definition.name, checksum: definition.checksum },
+      verification: { quickCheck: "pending", foreignKeyErrors: null },
+    };
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    return { backupPath, manifestPath, manifest };
+  }
+
+  async function applyCoreMigration(binary) {
+    const state = await coreMigrationState(binary);
+    if (!state.pending) return { applied: false, state };
+    const activeRuns = recentActiveRunState(rootDir).activeRuns;
+    if (activeRuns.length) {
+      const error = new Error(`仍有 ${activeRuns.length} 个活动 Campaign；SQLite migration 已安全暂停。`);
+      error.code = "ACTIVE_CAMPAIGN_BLOCKS_SCHEMA_MIGRATION";
+      throw error;
+    }
+    const backup = await backupForMigration(binary, state);
+    const startedAt = Date.now();
+    const appliedAt = new Date().toISOString();
+    try {
+      await runProcess(binary, ["-batch", databasePath], `
+PRAGMA foreign_keys=ON;
+BEGIN IMMEDIATE;
+${state.sql}
+INSERT INTO schema_migrations(version, name, checksum, applied_at, duration_ms, result)
+VALUES (${sqlNumber(state.version)}, ${sqlText(state.name)}, ${sqlText(state.checksum)}, ${sqlText(appliedAt)}, 0, 'APPLIED');
+INSERT INTO metadata(key, value, updated_at) VALUES
+  ('last_backup_at', ${sqlText(backup.manifest.createdAt)}, ${sqlText(appliedAt)}),
+  ('last_migrated_at', ${sqlText(appliedAt)}, ${sqlText(appliedAt)})
+ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;
+COMMIT;
+`, 60000);
+      const durationMs = Date.now() - startedAt;
+      await runProcess(binary, ["-batch", databasePath], `
+UPDATE schema_migrations SET duration_ms=${sqlNumber(durationMs)}, result='APPLIED'
+WHERE version=${sqlNumber(state.version)};`);
+      const [quick] = await queryJson(binary, "PRAGMA quick_check;");
+      const foreignKeys = await queryJson(binary, "PRAGMA foreign_key_check;");
+      const indexes = await requiredIndexState(binary);
+      if (quick?.quick_check !== "ok" || foreignKeys.length || !indexes.ready) {
+        const error = new Error(`SQLite migration ${state.version} 验证失败；可使用 manifest 内的备份恢复。`);
+        error.code = "SQLITE_MIGRATION_VERIFICATION_FAILED";
+        throw error;
+      }
+      const completedManifest = {
+        ...backup.manifest,
+        verification: { quickCheck: "ok", foreignKeyErrors: 0, missingIndexes: [] },
+        appliedAt,
+        durationMs,
+      };
+      await fs.writeFile(backup.manifestPath, `${JSON.stringify(completedManifest, null, 2)}\n`, "utf8");
+      return { applied: true, backupPath: backup.backupPath, manifestPath: backup.manifestPath, durationMs };
+    } catch (error) {
+      error.backupPath = backup.backupPath;
+      error.manifestPath = backup.manifestPath;
+      throw error;
+    }
   }
 
   function configureNotionImport(source) {
@@ -1847,7 +1997,7 @@ COMMIT;
 
   async function snapshot() {
     const detected = await driver();
-    const stat = await databaseStat();
+    const [stat, disk] = await Promise.all([databaseStat(), diskState()]);
     const base = {
       engine: "SQLite",
       driver: detected.label,
@@ -1856,8 +2006,20 @@ COMMIT;
       initialized: Boolean(stat),
       schemaVersion: null,
       targetSchemaVersion: SCHEMA_VERSION,
+      databaseId: "",
       storageMode: "shadow",
       health: stat ? "checking" : "not_initialized",
+      safeMode: true,
+      liveSendingAllowed: false,
+      lastMigratedAt: null,
+      lastBackupAt: null,
+      lastHealthCheckAt: null,
+      lastHealthStatus: stat ? "checking" : "not_initialized",
+      journalMode: null,
+      migrations: { target: CORE_MIGRATION_VERSION, pending: [], latest: null },
+      indexes: { required: [...REQUIRED_INDEXES], missing: [...REQUIRED_INDEXES], ready: false },
+      warnings: [],
+      disk,
       sizeBytes: stat?.size || 0,
       deviceId: clean(device?.id),
       expectedSenderPhone: senderPolicy?.configured ? normalizePhone(senderPolicy.expectedSenderPhone) : "",
@@ -1885,9 +2047,27 @@ COMMIT;
           error: `检测到旧版 SQLite v${version || 1}。程序不会原地覆盖；请先运行 v2 → v3 Dry Run。`,
         };
       }
+      const migration = await coreMigrationState(detected.binary);
+      if (migration.pending) {
+        return {
+          ...base,
+          initialized: true,
+          schemaVersion: version,
+          health: "migration_required",
+          lastHealthStatus: "migration_required",
+          migrations: { target: CORE_MIGRATION_VERSION, pending: [migration.version], latest: null },
+          warnings: [`SQLite migration ${migration.version} 尚未应用。`],
+          errorCode: "SQLITE_CORE_MIGRATION_REQUIRED",
+          error: `SQLite core migration ${migration.version} 尚未应用；LIVE 已锁定。`,
+        };
+      }
+      const indexes = await requiredIndexState(detected.binary);
       const [row] = await queryJson(detected.binary, `
 SELECT
   COALESCE((SELECT value FROM metadata WHERE key = 'storage_mode'), 'shadow') AS storageMode,
+  COALESCE((SELECT value FROM metadata WHERE key = 'database_id'), '') AS databaseId,
+  (SELECT value FROM metadata WHERE key = 'last_migrated_at') AS lastMigratedAt,
+  (SELECT value FROM metadata WHERE key = 'last_backup_at') AS lastBackupAt,
   COALESCE((SELECT value FROM metadata WHERE key = 'notion_import_enabled'), 'false') AS notionImportEnabled,
   (SELECT COUNT(*) FROM contacts) AS customers,
   (SELECT COUNT(*) FROM project_leads) AS projectLeads,
@@ -1917,14 +2097,37 @@ ORDER BY started_at DESC LIMIT 1;
       try { latestApply = latestApplyRow?.reportJson ? JSON.parse(latestApplyRow.reportJson) : null; } catch {}
       const [integrity] = await queryJson(detected.binary, "PRAGMA quick_check;");
       const foreignKeys = await queryJson(detected.binary, "PRAGMA foreign_key_check;");
-      const healthy = integrity?.quick_check === "ok" && foreignKeys.length === 0;
+      const [journal] = await queryJson(detected.binary, "PRAGMA journal_mode;");
+      const healthy = integrity?.quick_check === "ok" && foreignKeys.length === 0 && indexes.ready;
+      const healthAt = new Date().toISOString();
+      const healthStatus = healthy ? "ready" : "error";
+      await runProcess(detected.binary, ["-batch", databasePath], `
+INSERT INTO metadata(key, value, updated_at) VALUES
+  ('last_health_check_at', ${sqlText(healthAt)}, ${sqlText(healthAt)}),
+  ('last_health_status', ${sqlText(healthStatus)}, ${sqlText(healthAt)})
+ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;`);
+      const warnings = [];
+      if (!indexes.ready) warnings.push(`缺少必要索引：${indexes.missing.join(", ")}`);
+      if (String(journal?.journal_mode || "").toLowerCase() !== "wal") warnings.push("journal_mode 不是 WAL。");
+      if (disk.low) warnings.push("SQLite 所在磁盘空间偏低，请先清理空间并建立备份。");
       return {
         ...base,
         initialized: true,
         schemaVersion: version,
+        databaseId: row?.databaseId || "",
         storageMode: row?.storageMode || "shadow",
         health: healthy ? "ready" : "error",
-        ...(healthy ? {} : { errorCode: "SQLITE_INTEGRITY_FAILED", error: "quick_check 或 foreign_key_check 未通过。" }),
+        safeMode: !healthy,
+        liveSendingAllowed: healthy && row?.storageMode === "primary",
+        lastMigratedAt: row?.lastMigratedAt || migration.record?.appliedAt || null,
+        lastBackupAt: row?.lastBackupAt || null,
+        lastHealthCheckAt: healthAt,
+        lastHealthStatus: healthStatus,
+        journalMode: String(journal?.journal_mode || "").toLowerCase() || null,
+        migrations: { target: CORE_MIGRATION_VERSION, pending: [], latest: migration.record },
+        indexes,
+        warnings,
+        ...(healthy ? {} : { errorCode: "SQLITE_INTEGRITY_FAILED", error: "quick_check、foreign_key_check 或必要索引检查未通过。" }),
         notionImport: {
           ...base.notionImport,
           enabled: row?.notionImportEnabled === "true",
@@ -1955,7 +2158,15 @@ ORDER BY started_at DESC LIMIT 1;
         },
       };
     } catch (error) {
-      return { ...base, initialized: true, health: "error", errorCode: "SQLITE_HEALTH_CHECK_FAILED", error: error.message };
+      return {
+        ...base,
+        initialized: true,
+        health: "error",
+        lastHealthStatus: "error",
+        warnings: [error.message],
+        errorCode: error.code || "SQLITE_HEALTH_CHECK_FAILED",
+        error: error.message,
+      };
     }
   }
 
@@ -2019,7 +2230,20 @@ WHERE type='table' AND name IN (${runtimeTables.map(sqlText).join(",")});`)).map
       await runProcess(detected.binary, ["-batch", databasePath], schema, 60000);
     }
 
+    // Integrity is checked before any migration so a damaged source database is
+    // never transformed into a harder-to-diagnose state.
+    const [preMigrationIntegrity] = await queryJson(detected.binary, "PRAGMA quick_check;");
+    const preMigrationForeignKeys = await queryJson(detected.binary, "PRAGMA foreign_key_check;");
+    if (preMigrationIntegrity?.quick_check !== "ok" || preMigrationForeignKeys.length) {
+      const error = new Error("SQLite migration 前完整性检查失败；数据库保持原状并锁定 LIVE。");
+      error.code = "SQLITE_PRE_MIGRATION_INTEGRITY_FAILED";
+      throw error;
+    }
+
+    await applyCoreMigration(detected.binary);
+
     const now = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+    const databaseId = crypto.randomUUID();
     const deviceKey = clean(device?.id);
     const senderPhone = senderPolicy?.configured ? normalizePhone(senderPolicy.expectedSenderPhone) : "";
     const senderKey = buildSenderKey(deviceKey, senderPhone);
@@ -2040,6 +2264,11 @@ device_key=excluded.device_key, last_seen_at=excluded.last_seen_at, updated_at=e
 INSERT INTO metadata(key, value, updated_at) VALUES ('notion_import_enabled', 'false', ${now})
 ON CONFLICT(key) DO NOTHING;
 INSERT INTO metadata(key, value, updated_at) VALUES
+  ('database_id', ${sqlText(databaseId)}, ${now}),
+  ('created_at', ${now}, ${now}),
+  ('schema_version', ${sqlText(String(SCHEMA_VERSION))}, ${now})
+ON CONFLICT(key) DO NOTHING;
+INSERT INTO metadata(key, value, updated_at) VALUES
   ('expected_sender_phone', ${sqlText(senderPhone)}, ${now}),
   ('expected_sender_key', ${sqlText(senderKey)}, ${now})
 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;
@@ -2053,6 +2282,19 @@ COMMIT;
       throw error;
     }
     return state;
+  }
+
+  async function assertLiveReady() {
+    const state = await snapshot();
+    if (state.liveSendingAllowed) return state;
+    const error = new Error(
+      state.health !== "ready"
+        ? `SQLite 尚未 READY（${state.errorCode || state.health}）；LIVE 发送已安全锁定。`
+        : "SQLite 尚未启用 Primary；LIVE 发送已安全锁定。",
+    );
+    error.code = state.health !== "ready" ? "SQLITE_LIVE_HEALTH_BLOCKED" : "SQLITE_LIVE_PRIMARY_REQUIRED";
+    error.database = state;
+    throw error;
   }
 
   return {
@@ -2086,5 +2328,6 @@ COMMIT;
     updateLeadGroupMembers,
     setStorageMode,
     isPrimary,
+    assertLiveReady,
   };
 }

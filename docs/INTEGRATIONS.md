@@ -339,7 +339,13 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
 ### 规则
 
 - `.sqlite` 不进入 Git、iCloud 或 Dropbox。
-- Migration 必须可验证，不在启动时静默破坏资料。
+- Migration 使用不可变编号与 SHA-256 checksum；应用前必须确认没有活动 LIVE，
+  建立 online backup 与 manifest，应用后通过 `quick_check`、foreign key 和必要索引审计。
+- SQLite 启动异常时 Server 可以保留诊断／备份能力，但所有 LIVE start、resume、retry、
+  queue relay 与 sender lane 必须 fail closed；只有 READY + Primary 才能发送。
+- `metadata` 保存稳定 `database_id`、建立／迁移／备份／健康检查时间和最后健康状态。
+- Message idempotency 以 connection scope + Evolution external message id 为唯一业务键；
+  不得假设不同 WhatsApp connection 的 provider message id 全局唯一。
 - 大型 import／repair 先 dry-run。
 - Notion 和 Evolution 都不能覆盖本机已确认的发送事实。
 - LIVE 风险弹窗的「曾经 Blast」只读取 `messages` 中 `direction=outbound` 且
