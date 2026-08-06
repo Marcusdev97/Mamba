@@ -27,6 +27,7 @@
     { title: "System", links: [
       { code: "AI", label: "AI Changes", href: "/ai-changes", paths: ["/ai-changes"] },
       { code: "LG", label: "System Logs", href: "/logs", paths: ["/logs"] },
+      { code: "NS", label: "Notion Sync", href: "/notion-sync", paths: ["/notion-sync"] },
       { code: "RM", label: "Remote Mamba", href: "/remote-mamba", paths: ["/remote-mamba"] },
       { code: "ST", label: "Settings", href: "/settings", paths: ["/settings", "/numbers"] },
     ] },

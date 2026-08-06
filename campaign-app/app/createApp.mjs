@@ -14,6 +14,7 @@ import { registerInstancesRoutes } from "../routes/instances.routes.mjs";
 import { registerKnowledgeRoutes } from "../routes/knowledge.routes.mjs";
 import { registerLookupRoutes } from "../routes/lookup.routes.mjs";
 import { registerNextFlowRoutes } from "../routes/next-flow.routes.mjs";
+import { registerNotionCrmSyncRoutes } from "../routes/notion-crm-sync.routes.mjs";
 import { registerProjectsRoutes } from "../routes/projects.routes.mjs";
 import { registerProjectBrainRoutes } from "../routes/project-brain.routes.mjs";
 import { registerRemoteMambaRoutes } from "../routes/remote-mamba.routes.mjs";
@@ -45,6 +46,7 @@ export function createApp(runtime) {
   registerCampaignSafetyRoutes(router);
   registerRefreshCampaignRoutes(router);
   registerNextFlowRoutes(router);
+  registerNotionCrmSyncRoutes(router);
   registerConversationsRoutes(router);
   registerInboxRoutes(router);
   registerFollowUpRoutes(router);

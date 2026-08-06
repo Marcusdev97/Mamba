@@ -31,7 +31,7 @@ function pageSelect(page, name) {
   return page?.properties?.[name]?.select?.name || "";
 }
 
-function customerHumanValuesFromPage(page) {
+export function customerHumanValuesFromPage(page) {
   return approvedHumanFields("customers", {
     "Display Name": pageText(page, "Display Name"),
     Language: pageSelect(page, "Language"),
@@ -44,7 +44,7 @@ function customerHumanValuesFromPage(page) {
   });
 }
 
-function customerHumanValues(customer) {
+export function customerHumanValues(customer) {
   return approvedHumanFields("customers", {
     "Display Name": clean(customer.displayName || customer.name),
     Language: clean(customer.language || "Other"),
@@ -57,7 +57,7 @@ function customerHumanValues(customer) {
   });
 }
 
-function customerProperties(customer, customerId, { includeHuman = true, syncStatus = "Synced" } = {}) {
+export function customerProperties(customer, customerId, { includeHuman = true, syncStatus = "Synced" } = {}) {
   const properties = {
     "Customer ID": title(customerId),
     "Primary Phone": { phone_number: clean(customer.primaryPhone || customer.phone) || null },

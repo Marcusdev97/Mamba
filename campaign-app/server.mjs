@@ -27,6 +27,9 @@ import { createEvolutionHealthService } from "./lib/evolution-health-service.mjs
 import { createEvolutionReconnectService } from "./lib/evolution-reconnect-service.mjs";
 import { createNotionOutboxService } from "./lib/notion-outbox-service.mjs";
 import { createNotionOutboxWorker } from "./lib/notion-outbox-worker.mjs";
+import { createNotionCrmSyncRepository } from "./lib/notion-crm-sync-repository.mjs";
+import { createNotionCrmSyncEngine } from "./lib/notion-crm-sync-engine.mjs";
+import { createNotionCrmSyncCoordinator } from "./lib/notion-crm-sync-coordinator.mjs";
 import { createConversationHistoryService } from "./lib/conversation-history-service.mjs";
 import { createConversationDispositionService } from "./lib/conversation-disposition-service.mjs";
 import { createDailyCampaignService } from "./lib/daily-campaign-service.mjs";
@@ -847,6 +850,15 @@ runtime.inboxLeadSetup = createManualLeadSetupService({
   };
 }
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
+runtime.notionCrmSyncRepository = createNotionCrmSyncRepository({ dataDir: paths.dataDir });
+runtime.notionCrmSyncEngine = createNotionCrmSyncEngine({
+  notion,
+  repository: runtime.notionCrmSyncRepository,
+  databaseIds: {
+    customers: String(notionConfig?.crm?.databases?.customers || "").replace(/[^a-fA-F0-9]/g, ""),
+    projectLeads: String(notionConfig?.crm?.databases?.projectLeads || "").replace(/[^a-fA-F0-9]/g, ""),
+  },
+});
 runtime.notionOutboxWorker = createNotionOutboxWorker({
   outbox: runtime.notionOutbox,
   time: env.NOTION_OUTBOX_TIME || "22:00",
@@ -854,6 +866,10 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
   // 重跑一次那个 run 的收尾。两个函式本身都会跳过没发出去的客户，
   // 所以重复执行是安全的。
   handler: async (job) => {
+    if (["crm_customer", "crm_project_lead"].includes(job.entityType)) {
+      const result = await runtime.notionCrmSyncEngine.pushEntity(job);
+      return result?.defer ? result : true;
+    }
     if (job.entityType === "project_lead_patch") {
       const pageId = String(job.payload?.pageId || "").replace(/[^a-fA-F0-9]/g, "");
       const properties = job.payload?.properties;
@@ -914,6 +930,14 @@ runtime.notionOutboxWorker = createNotionOutboxWorker({
   },
 });
 runtime.notionOutboxWorker.start();
+runtime.notionCrmSync = createNotionCrmSyncCoordinator({
+  repository: runtime.notionCrmSyncRepository,
+  engine: runtime.notionCrmSyncEngine,
+  outbox: runtime.notionOutbox,
+  notion,
+  onLog: (message) => console.log(message),
+});
+runtime.notionCrmSync.start();
 
 const server = http.createServer(createApp(runtime));
 

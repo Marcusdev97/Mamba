@@ -53,3 +53,61 @@ export function detectCrmConflict({
           : "NO_CHANGE",
   };
 }
+
+function sameValue(left, right) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+export function mergeNotionHumanFields({
+  database,
+  baseValues = {},
+  sqliteValues = {},
+  notionValues = {},
+} = {}) {
+  const approvedNotion = approvedHumanFields(database, notionValues);
+  const approvedSqlite = approvedHumanFields(database, sqliteValues);
+  const approvedBase = approvedHumanFields(database, baseValues);
+  const applyFromNotion = {};
+  const conflicts = [];
+  const unchanged = [];
+
+  for (const field of Object.keys(approvedNotion)) {
+    const baseValue = approvedBase[field] ?? null;
+    const sqliteValue = approvedSqlite[field] ?? null;
+    const notionValue = approvedNotion[field] ?? null;
+    const sqliteChanged = !sameValue(sqliteValue, baseValue);
+    const notionChanged = !sameValue(notionValue, baseValue);
+    if (sqliteChanged && notionChanged && !sameValue(sqliteValue, notionValue)) {
+      conflicts.push({ field, baseValue, sqliteValue, notionValue });
+    } else if (notionChanged && !sameValue(sqliteValue, notionValue)) {
+      applyFromNotion[field] = notionValue;
+    } else {
+      unchanged.push(field);
+    }
+  }
+  return { applyFromNotion, conflicts, unchanged };
+}
+
+export function assertReducedSyncPayload(payload = {}) {
+  const denied = new Set(NOTION_CRM_PRIVACY_DENYLIST.map((item) => item.toLowerCase()));
+  const forbidden = [];
+  const visit = (value, path = []) => {
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      const normalized = key.toLowerCase().replaceAll(" ", "_");
+      if (denied.has(normalized) || /^(raw_message|raw_conversation|full_transcript|messages)$/i.test(normalized)) {
+        forbidden.push([...path, key].join("."));
+      } else {
+        visit(child, [...path, key]);
+      }
+    }
+  };
+  visit(payload);
+  if (forbidden.length) {
+    const error = new Error(`Notion sync payload 包含只应保留在 SQLite 的字段：${forbidden.join(", ")}`);
+    error.code = "NOTION_SYNC_PAYLOAD_NOT_REDUCED";
+    error.retryable = false;
+    throw error;
+  }
+  return payload;
+}

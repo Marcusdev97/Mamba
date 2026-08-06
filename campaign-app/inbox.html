@@ -22,6 +22,8 @@
     --blue:#58bfe7;
     --blue-soft:#153442;
     --red:#f17b7b;
+    --purple:#8d7cf2;
+    --purple-soft:#221d3d;
   }
 
   * { box-sizing:border-box; }
@@ -152,21 +154,68 @@
   .panel-title { min-width:0; }
   .panel-title h2 { margin:0; font-size:13.5px; letter-spacing:0; }
   .panel-title p { margin:3px 0 0; color:var(--muted); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .section-code {
+  .head-tool {
     flex:0 0 auto;
-    min-width:30px;
-    height:28px;
+    min-width:32px;
+    height:30px;
     display:grid;
     place-items:center;
-    border-radius:6px;
-    background:var(--panel-3);
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:var(--panel-2);
     color:var(--muted);
-    font-size:9px;
+    cursor:pointer;
+    font-size:12px;
+  }
+  .head-tool:hover { color:var(--text); border-color:var(--line-strong); background:var(--panel-3); }
+  .head-tool.on { color:var(--amber); border-color:#6e5424; background:var(--amber-soft); }
+
+  .thread-head { align-items:center; }
+  .thread-avatar {
+    flex:0 0 auto;
+    width:36px;
+    height:36px;
+    display:grid;
+    place-items:center;
+    border-radius:50%;
+    background:var(--green-soft);
+    color:var(--green);
+    font-size:12px;
     font-weight:800;
   }
-  .customer-panel .section-code { color:var(--amber); background:var(--amber-soft); }
-  .reply-panel .section-code { color:var(--green); background:var(--green-soft); }
-  .ai-panel .section-code { color:var(--blue); background:var(--blue-soft); }
+  .thread-head .panel-title { flex:1; }
+  .thread-chips { display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .chip {
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:5px 9px;
+    border:1px solid var(--line);
+    border-radius:999px;
+    background:var(--panel-2);
+    color:var(--muted);
+    font-size:10px;
+    font-weight:750;
+    white-space:nowrap;
+  }
+  button.chip { cursor:pointer; }
+  button.chip:hover { color:var(--text); border-color:var(--line-strong); }
+  .chip.amber { color:var(--amber); border-color:#6e5424; background:var(--amber-soft); }
+  .chip.green { color:var(--green); border-color:#356348; background:var(--green-soft); }
+  .chip.blue { color:var(--blue); border-color:#31596a; background:var(--blue-soft); }
+  .chip.red { color:var(--red); border-color:#754141; background:#2b1919; }
+  .contact-card {
+    display:grid;
+    gap:6px;
+    padding:11px 14px;
+    border-bottom:1px solid var(--line);
+    background:var(--panel);
+    font-size:10.5px;
+  }
+  .contact-card.hidden { display:none; }
+  .contact-card div { display:grid; grid-template-columns:78px minmax(0,1fr); gap:8px; }
+  .contact-card span { color:var(--dim); font-weight:700; }
+  .contact-card strong { font-weight:700; overflow-wrap:anywhere; }
 
   .customer-nav {
     flex:1;
@@ -214,20 +263,22 @@
   .new-contact-cancel { background:transparent; color:var(--muted); }
   .new-contact-note { color:var(--dim); font-size:9px; line-height:1.4; }
   .new-contact-error { color:var(--red); font-size:9.5px; }
-  .list-filters { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; margin-top:7px; }
+  .list-filters { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
   .list-filters button {
-    min-height:29px;
+    min-height:28px;
+    padding:0 10px;
     border:1px solid var(--line);
-    border-radius:6px;
+    border-radius:999px;
     background:transparent;
     color:var(--muted);
     cursor:pointer;
-    font-size:11.5px;
+    font-size:11px;
     font-weight:700;
   }
-  .list-filters button.on { color:var(--text); background:var(--panel-3); border-color:var(--line-strong); }
-  .filter-count { margin-left:4px; color:var(--dim); font-size:9px; }
-  .list-filters button.on .filter-count { color:var(--muted); }
+  .list-filters button:hover { color:var(--text); border-color:var(--line-strong); }
+  .list-filters button.on { color:var(--amber); background:var(--amber-soft); border-color:#6e5424; }
+  .filter-count { margin-left:5px; color:var(--dim); font-size:9px; }
+  .list-filters button.on .filter-count { color:var(--amber); opacity:.8; }
   .customer-row {
     width:100%;
     min-height:68px;
@@ -264,8 +315,8 @@
   .customer-status { display:flex; align-items:center; gap:5px; margin-top:4px; color:var(--dim); font-size:9px; }
   .pending-mark { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--amber); }
   .followup-chip {
-    display:inline-flex;
-    align-items:center;
+    display:block;
+    width:fit-content;
     min-width:0;
     max-width:100%;
     padding:2px 5px;
@@ -279,6 +330,8 @@
   .followup-chip.overdue { color:var(--red); background:#3a2020; }
   .followup-chip.today { color:var(--amber); background:var(--amber-soft); }
   .followup-chip.later { color:var(--blue); background:var(--blue-soft); }
+  body[data-list-density="compact"] .customer-row { min-height:52px; }
+  body[data-list-density="compact"] .followup-chip { display:none; }
   .list-empty, .feed-empty {
     min-height:100px;
     display:flex;
@@ -315,38 +368,68 @@
   }
   .day-sep {
     align-self:center;
-    margin:8px 0 2px;
-    color:var(--dim);
+    margin:10px 0 4px;
+    padding:3px 11px;
+    border:1px solid var(--line);
+    border-radius:999px;
+    background:var(--panel-2);
+    color:var(--muted);
     font-size:9.5px;
+    font-weight:700;
     text-align:center;
   }
   .day-sep:first-child { margin-top:0; }
+  .msg-row {
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+    max-width:76%;
+    min-width:0;
+  }
+  .msg-row.inbound { align-self:flex-start; align-items:flex-start; }
+  .msg-row.outbound { align-self:flex-end; align-items:flex-end; }
   .entry {
     width:fit-content;
     min-width:130px;
-    max-width:72%;
-    padding:10px 11px;
+    max-width:100%;
+    padding:10px 12px;
     border:1px solid var(--line);
-    border-radius:10px;
+    border-radius:12px;
     background:var(--panel-2);
     line-height:1.45;
     white-space:normal;
     overflow-wrap:anywhere;
   }
   .entry-text { white-space:pre-wrap; overflow-wrap:anywhere; }
-  .entry.inbound { align-self:flex-start; border-bottom-left-radius:3px; }
-  .entry.outbound { align-self:flex-end; border-color:#285039; border-bottom-right-radius:3px; background:#17291e; }
+  .msg-row.inbound .entry { border-bottom-left-radius:4px; }
+  .msg-row.outbound .entry { border-color:#285039; border-bottom-right-radius:4px; background:#17291e; }
+  .msg-row.flash .entry { border-color:var(--amber); box-shadow:0 0 0 2px rgba(243,184,75,.22); }
   .entry-meta {
     display:flex;
     align-items:center;
-    justify-content:space-between;
+    justify-content:flex-end;
     gap:8px;
-    margin-top:7px;
+    margin-top:6px;
     color:var(--dim);
     font-size:9.5px;
   }
-  .entry-source { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .entry-time { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+  .entry-tag {
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:0 3px;
+    color:var(--dim);
+    font-size:9.5px;
+    font-weight:700;
+    max-width:100%;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  .entry-tag.auto { color:var(--blue); }
+  .entry-tag.manual { color:var(--green); }
+  .entry-tag.ai { color:var(--purple); }
   .delivery-mark { font-weight:800; letter-spacing:-2px; color:#91a0ae; cursor:help; }
   .delivery-mark.delivered { color:#b6c2cc; }
   .delivery-mark.read { color:#55b7ff; }
@@ -465,9 +548,105 @@
   .stopped-note { padding:14px; color:var(--red); text-align:center; font-size:11.5px; }
 
   .side-scroll { flex:1; min-height:0; overflow-y:auto; }
-  .followup-content { padding:14px; border-bottom:1px solid var(--line); background:#171a17; }
-  .ai-content { min-height:0; padding:14px; }
-  .ai-empty { min-height:180px; display:grid; place-items:center; color:var(--dim); text-align:center; font-size:12px; line-height:1.5; }
+  .ai-panel.collapsed { align-self:start; }
+  .ai-panel.collapsed .side-scroll { display:none; }
+  .followup-content { background:#171a17; }
+  .ai-content { min-height:0; }
+  .ai-empty { min-height:180px; display:grid; place-items:center; padding:14px; color:var(--dim); text-align:center; font-size:12px; line-height:1.5; }
+
+  .side-block { padding:13px 14px; border-bottom:1px dashed var(--line); }
+  .side-block.last { border-bottom:0; }
+  .block-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:9px; }
+  .block-title { display:flex; align-items:center; gap:6px; min-width:0; font-size:11px; font-weight:800; }
+  .block-title .ico { flex:0 0 auto; font-size:12px; }
+  .block-link {
+    flex:0 0 auto;
+    padding:0;
+    border:0;
+    background:transparent;
+    color:var(--blue);
+    font-size:10px;
+    font-weight:700;
+    cursor:pointer;
+    text-decoration:none;
+  }
+  .block-link:hover { text-decoration:underline; }
+  .block-hint { margin:0 0 9px; color:var(--dim); font-size:9.5px; line-height:1.45; }
+  .status-line {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:9px;
+    color:var(--dim);
+    font-size:9px;
+    font-weight:850;
+    letter-spacing:.07em;
+    text-transform:uppercase;
+  }
+  .status-line b { color:var(--muted); }
+  .status-line b.overdue { color:var(--red); }
+  .status-line b.today { color:var(--amber); }
+  .status-line b.later { color:var(--blue); }
+  .quote-card {
+    padding:9px 11px;
+    border:1px solid var(--line);
+    border-left:2px solid var(--amber);
+    border-radius:0 8px 8px 0;
+    background:#1e1b14;
+    color:#f0e2c4;
+    font-size:11px;
+    line-height:1.5;
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+  }
+  .quote-meta { margin-top:7px; color:var(--dim); font-size:9px; }
+  .summary-meta { margin:0 0 9px; color:var(--dim); font-size:9.5px; }
+  .summary-list { display:grid; gap:6px; }
+  .summary-item {
+    width:100%;
+    display:grid;
+    grid-template-columns:66px minmax(0,1fr);
+    align-items:start;
+    gap:8px;
+    padding:8px 9px;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:var(--panel-2);
+    color:var(--text);
+    text-align:left;
+    cursor:pointer;
+  }
+  .summary-item:hover { border-color:var(--line-strong); background:var(--panel-3); }
+  .summary-item b { color:var(--blue); font-size:9.5px; font-weight:850; line-height:1.5; }
+  .summary-item span { color:var(--muted); font-size:10.5px; line-height:1.5; overflow-wrap:anywhere; }
+  .summary-empty { color:var(--dim); font-size:10.5px; line-height:1.55; }
+  .summary-source { margin-top:9px; color:var(--dim); font-size:9px; line-height:1.45; }
+  .advice-box {
+    margin-top:9px;
+    padding:9px 11px;
+    border:1px solid #6e5424;
+    border-radius:8px;
+    background:var(--amber-soft);
+    color:#e8d5a8;
+    font-size:10.5px;
+    line-height:1.5;
+  }
+  .advice-text { color:var(--muted); font-size:10.5px; line-height:1.55; overflow-wrap:anywhere; }
+  .tone-row { display:flex; gap:6px; margin-bottom:9px; }
+  .tone-row.hidden { display:none; }
+  .tone-row button {
+    flex:1;
+    min-height:28px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:var(--panel-2);
+    color:var(--muted);
+    font-size:10px;
+    font-weight:750;
+    cursor:pointer;
+  }
+  .tone-row button:hover { color:var(--text); border-color:var(--line-strong); }
   .planner-empty { padding:14px; border:1px dashed var(--line-strong); border-radius:7px; color:var(--muted); font-size:11px; line-height:1.55; }
   .planner-empty a { color:var(--blue); }
   .planner-current {
@@ -500,7 +679,10 @@
     font-weight:700;
   }
   .quick-times button:hover { color:var(--text); border-color:var(--line-strong); }
-  .planner-form { display:grid; gap:7px; }
+  .quick-times button.on { color:var(--green); border-color:#356348; background:var(--green-soft); }
+  .quick-times button.wide { grid-column:span 2; }
+  .planner-form { display:grid; gap:7px; margin-top:10px; }
+  .planner-form.hidden { display:none; }
   .planner-row { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
   .planner-field { display:grid; gap:4px; }
   .planner-field span { color:var(--dim); font-size:9px; font-weight:700; }
@@ -531,8 +713,7 @@
   .planner-link { display:grid; place-items:center; margin-top:8px; color:var(--muted); text-decoration:none; background:var(--panel-2); }
   .planner-feedback { min-height:16px; margin-top:7px; color:var(--green); font-size:9.5px; line-height:1.4; }
   .planner-feedback.error { color:var(--red); }
-  .side-section-label { padding:9px 14px 0; color:var(--dim); font-size:9px; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
-  .signal-line { display:flex; align-items:center; gap:8px; margin-bottom:14px; }
+  .signal-line { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
   .signal-dot { width:9px; height:9px; border-radius:50%; background:var(--dim); }
   .signal-dot.green { background:var(--green); }
   .signal-dot.red { background:var(--red); }
@@ -576,30 +757,22 @@
   .intent-apply:disabled { opacity:.55; cursor:not-allowed; }
   .intent-feedback { min-height:0; margin-top:7px; color:var(--green); font-size:9.5px; line-height:1.4; }
   .intent-feedback.error { color:var(--red); }
-  .ai-section-title { margin:0 0 8px; color:var(--muted); font-size:10px; font-weight:800; }
-  .latest-customer {
-    margin-bottom:14px;
-    padding:10px 11px;
-    border-left:3px solid var(--amber);
-    background:var(--amber-soft);
-    color:#f5e5bf;
-    font-size:11.5px;
-    line-height:1.45;
-    white-space:pre-wrap;
-    overflow-wrap:anywhere;
-  }
   .suggestion {
-    min-height:110px;
+    width:100%;
+    min-height:118px;
+    max-height:300px;
+    resize:vertical;
     padding:12px;
     border:1px solid #36505c;
-    border-radius:7px;
+    border-radius:8px;
+    outline:none;
     background:var(--blue-soft);
     color:#d9f3ff;
-    font-size:13px;
+    font-size:12.5px;
     line-height:1.55;
-    white-space:pre-wrap;
     overflow-wrap:anywhere;
   }
+  .suggestion:focus { border-color:var(--blue); }
   .ai-actions { display:grid; grid-template-columns:1fr auto; gap:7px; margin-top:9px; }
   .ai-actions button {
     min-height:36px;
@@ -611,7 +784,7 @@
     font-weight:750;
     font-size:11.5px;
   }
-  .ai-actions .use-btn { background:var(--blue); border-color:var(--blue); color:#07151b; }
+  .ai-actions .use-btn { background:var(--purple); border-color:var(--purple); color:#0d0a1e; }
   .ai-actions button:disabled { opacity:.45; cursor:not-allowed; }
   .ai-note { margin-top:10px; color:var(--dim); font-size:9.5px; line-height:1.45; }
 
@@ -641,7 +814,11 @@
     .number-bar { padding-left:8px; padding-right:8px; }
     .panel-head { min-height:54px; padding:8px 10px; }
     .message-feed { padding:9px; }
-    .ai-content, .followup-content { padding:12px; }
+    .msg-row { max-width:88%; }
+    /* 窄屏时 chip 自己占一行，不然会压到客户名字。 */
+    .thread-head { flex-wrap:wrap; }
+    .thread-chips { flex:1 1 100%; gap:5px; justify-content:flex-start; }
+    .contact-card div { grid-template-columns:70px minmax(0,1fr); }
   }
 </style>
 </head>
@@ -669,29 +846,30 @@
     <section class="panel customer-panel" aria-label="客户列表">
       <header class="panel-head">
         <div class="panel-title"><h2>客户</h2><p id="customerListSubtitle">选择开始对话</p></div>
-        <span class="section-code">LIST</span>
+        <button class="head-tool" id="densityToggle" type="button" title="切换列表密度" aria-label="切换列表密度">☰</button>
       </header>
       <div class="customer-nav" id="customerNav"><div class="list-empty">选一个号码</div></div>
     </section>
 
     <section class="panel reply-panel" aria-label="客户对话">
-      <header class="panel-head">
+      <header class="panel-head thread-head">
         <button class="icon-btn mobile-only" id="threadBack" type="button" title="返回客户" aria-label="返回客户">←</button>
+        <span class="thread-avatar" id="threadAvatar" aria-hidden="true">·</span>
         <div class="panel-title"><h2 id="replyTitle">Conversation</h2><p id="replySubtitle">选择客户后开始</p></div>
-        <span class="section-code">CHAT</span>
+        <div class="thread-chips" id="threadChips"></div>
       </header>
+      <div class="contact-card hidden" id="contactCard"></div>
       <div class="message-feed" id="conversationMessages"><div class="feed-empty">这里会显示完整对话</div></div>
       <div class="composer-dock" id="composerDock"></div>
     </section>
 
-    <aside class="panel ai-panel" aria-label="Follow-up 与 AI 建议">
+    <aside class="panel ai-panel" id="aiPanel" aria-label="Follow-up 与 AI 建议">
       <header class="panel-head">
-        <div class="panel-title"><h2>Follow-up 工作台</h2><p id="aiSubtitle">选择客户后安排下一步</p></div>
-        <span class="section-code">PLAN</span>
+        <div class="panel-title"><h2>◈ Follow-up 工作台</h2><p id="aiSubtitle">选择客户后安排下一步</p></div>
+        <button class="head-tool" id="sideCollapse" type="button" title="收起工作台" aria-label="收起工作台" aria-expanded="true">⌃</button>
       </header>
       <div class="side-scroll">
-        <div class="followup-content" id="followUpContent"><div class="planner-empty">选择客户后安排 Follow-up</div></div>
-        <div class="side-section-label">AI 建议</div>
+        <div class="followup-content" id="followUpContent"><div class="side-block"><div class="planner-empty">选择客户后安排 Follow-up</div></div></div>
         <div class="ai-content" id="aiContent"><div class="ai-empty">选择客户后查看建议</div></div>
       </div>
     </aside>
@@ -721,6 +899,10 @@ let followUpLoadError = "";
 let currentThreadData = null;
 let followUpSelection = new Map();
 let mediaObserver = null;
+let contactCardOpen = false;
+let followUpFormOpen = false;
+let toneRowOpen = false;
+let listDensity = "comfortable";
 
 async function jget(url) {
   const response = await fetch(url, { cache:"no-store" });
@@ -845,6 +1027,21 @@ document.querySelectorAll(".mobile-switch button").forEach((button) => {
   button.addEventListener("click", () => setMobilePane(button.dataset.pane));
 });
 
+$("densityToggle").addEventListener("click", () => {
+  listDensity = listDensity === "compact" ? "comfortable" : "compact";
+  document.body.dataset.listDensity = listDensity;
+  $("densityToggle").classList.toggle("on", listDensity === "compact");
+});
+
+$("sideCollapse").addEventListener("click", () => {
+  const panel = $("aiPanel");
+  const collapsed = panel.classList.toggle("collapsed");
+  const button = $("sideCollapse");
+  button.textContent = collapsed ? "⌄" : "⌃";
+  button.title = collapsed ? "展开工作台" : "收起工作台";
+  button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+});
+
 async function loadNumbers() {
   const data = await jget("/api/inbox/numbers").catch(() => ({ numbers:[] }));
   numbers = data.numbers || [];
@@ -865,12 +1062,38 @@ async function loadInboxCapabilities() {
   newContactProjects = data?.projects || [];
 }
 
+// Tab 上显示的是「哪一支电话」，不是 Evolution 的标签（wa_01 这种）。
+// 号码读不到时才退回标签名，不然 tab 会变空的。
+function prettyPhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("60")) {
+    const local = digits.slice(2);
+    if (local.length === 9) return `+60 ${local.slice(0, 2)}-${local.slice(2, 5)} ${local.slice(5)}`;
+    if (local.length === 10) return `+60 ${local.slice(0, 2)}-${local.slice(2, 6)} ${local.slice(6)}`;
+  }
+  return `+${digits}`;
+}
+
+// 「用哪支号码」在确认发送时最重要，所以号码在前、Evolution 标签在后。
+function instanceLabel(instance) {
+  const name = String(instance || "");
+  const phone = prettyPhone(numbers.find((item) => item.instance === name)?.number);
+  if (!name) return phone || "-";
+  return phone ? `${phone} · ${name}` : name;
+}
+
 function renderTabs() {
-  $("tabs").innerHTML = numbers.map((number) => `
-    <button class="tab ${number.instance === currentInstance ? "active" : ""}" type="button" data-inst="${esc(number.instance)}">
-      <span class="dot"></span>${esc(number.instance)}
+  $("tabs").innerHTML = numbers.map((number) => {
+    const phone = prettyPhone(number.number);
+    return `
+    <button class="tab ${number.instance === currentInstance ? "active" : ""}" type="button"
+      data-inst="${esc(number.instance)}"
+      title="${esc(phone ? `${phone} · ${number.instance}` : number.instance)}">
+      <span class="dot"></span>${esc(phone || number.instance)}
       <span class="cnt" data-cnt="${esc(number.instance)}"></span>
-    </button>`).join("");
+    </button>`;
+  }).join("");
   document.querySelectorAll("#tabs .tab").forEach((tab) => {
     tab.addEventListener("click", async () => {
       currentInstance = tab.dataset.inst;
@@ -944,8 +1167,8 @@ function renderList() {
           <textarea id="newContactNote" placeholder="通话备注（可不填）" aria-label="客户备注"></textarea>
           <div class="new-contact-note" id="newContactTypeNote">${
             newContactLeadTypes.find((type) => type.default)?.description
-              ? `${esc(newContactLeadTypes.find((type) => type.default).description)} · 将使用 ${esc(currentInstance)}`
-              : `将使用 ${esc(currentInstance)}；请选择客户类型。`
+              ? `${esc(newContactLeadTypes.find((type) => type.default).description)} · 将使用 ${esc(instanceLabel(currentInstance))}`
+              : `将使用 ${esc(instanceLabel(currentInstance))}；请选择客户类型。`
           }</div>
           <div class="new-contact-error" id="newContactError"></div>
           <div class="new-contact-actions">
@@ -1031,8 +1254,8 @@ function updateNewContactType() {
   }
   if ($("newContactTypeNote")) {
     $("newContactTypeNote").textContent = type
-      ? `${type.description} · 将使用 ${currentInstance}`
-      : `将使用 ${currentInstance}；请选择客户类型。`;
+      ? `${type.description} · 将使用 ${instanceLabel(currentInstance)}`
+      : `将使用 ${instanceLabel(currentInstance)}；请选择客户类型。`;
   }
 }
 
@@ -1081,18 +1304,23 @@ async function startNewContact(event) {
 
 function renderThreadEmpty() {
   currentThreadData = null;
+  contactCardOpen = false;
   $("replyTitle").textContent = "Conversation";
   $("replySubtitle").textContent = "选择客户后开始";
+  $("threadAvatar").textContent = "·";
+  $("threadChips").innerHTML = "";
+  $("contactCard").classList.add("hidden");
+  $("contactCard").innerHTML = "";
   $("conversationMessages").innerHTML = '<div class="feed-empty">这里会显示完整对话</div>';
   $("composerDock").innerHTML = "";
   $("aiSubtitle").textContent = "选择客户后安排下一步";
-  $("followUpContent").innerHTML = '<div class="planner-empty">选择客户后安排 Follow-up</div>';
+  $("followUpContent").innerHTML = '<div class="side-block"><div class="planner-empty">选择客户后安排 Follow-up</div></div>';
   $("aiContent").innerHTML = '<div class="ai-empty">选择客户后查看建议</div>';
 }
 
 function renderLoadingThread() {
   $("conversationMessages").innerHTML = '<div class="feed-empty">读取完整对话中</div>';
-  $("followUpContent").innerHTML = '<div class="planner-empty">读取 Follow-up 资料中</div>';
+  $("followUpContent").innerHTML = '<div class="side-block"><div class="planner-empty">读取 Follow-up 资料中</div></div>';
   $("aiContent").innerHTML = '<div class="ai-empty">分析对话中</div>';
 }
 
@@ -1142,9 +1370,23 @@ async function openThread(phone, { refresh = false } = {}) {
   if (pendingImage) showImagePreview();
 }
 
-function sourceLabel(message) {
-  if (message.source === "brain") return "AI";
-  return "我们";
+// 气泡下面那行小字：这条回复是谁发的 —— 人工、Sales Brain，还是 blast flow。
+function sourceTag(message) {
+  if (message.direction !== "outbound") return null;
+  const source = String(message.source || "").toLowerCase();
+  const flow = String(message.flowTopic || "").trim();
+  if (source === "manual") return { tone:"manual", label:"人工发送" };
+  if (source === "brain") return { tone:"ai", label:"AI 回复" };
+  const detail = flow && !/^manual_/.test(flow) ? flow : "";
+  return { tone:"auto", label:detail ? `自动发送 · ${detail}` : "自动发送" };
+}
+
+function dayLabel(date) {
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 86400000);
+  if (date.toDateString() === now.toDateString()) return "今天";
+  if (date.toDateString() === yesterday.toDateString()) return "昨天";
+  return date.toLocaleDateString([], { year:"numeric", month:"2-digit", day:"2-digit" });
 }
 
 function deliveryMark(message) {
@@ -1200,20 +1442,23 @@ function conversationMarkup(messages) {
   for (const message of selected) {
     const direction = message.direction === "inbound" ? "inbound" : "outbound";
     const date = new Date(message.sentAt);
-    const day = date.toLocaleDateString([], { year:"numeric", month:"2-digit", day:"2-digit" });
+    const day = dayLabel(date);
     if (day !== lastDay) {
       items.push(`<div class="day-sep">${esc(day)}</div>`);
       lastDay = day;
     }
     const time = date.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", hour12:false });
+    const tag = sourceTag(message);
     items.push(`
-      <article class="entry ${direction}">
-        <div class="entry-text">${messageContent(message)}</div>
-        <footer class="entry-meta">
-          <span class="entry-source">${direction === "outbound" ? esc(sourceLabel(message)) : "客户"}</span>
-          <span class="entry-time">${deliveryMark(message)}<time>${esc(time)}</time></span>
-        </footer>
-      </article>`);
+      <div class="msg-row ${direction}" data-msg="${esc(message.id || "")}">
+        <article class="entry">
+          <div class="entry-text">${messageContent(message)}</div>
+          <footer class="entry-meta">
+            <span class="entry-time">${deliveryMark(message)}<time>${esc(time)}</time></span>
+          </footer>
+        </article>
+        ${tag ? `<span class="entry-tag ${tag.tone}">${esc(tag.label)}</span>` : ""}
+      </div>`);
   }
   return items.join("");
 }
@@ -1283,7 +1528,7 @@ function renderFollowUpPanel(contact) {
   const container = $("followUpContent");
   if (!container) return;
   if (followUpLoadError) {
-    container.innerHTML = `<div class="planner-empty">Follow-up 资料读取失败：${esc(followUpLoadError)}<br><a href="/follow-up">打开完整 Follow-Up Desk</a></div>`;
+    container.innerHTML = `<div class="side-block"><div class="planner-empty">Follow-up 资料读取失败：${esc(followUpLoadError)}<br><a href="/follow-up">打开完整 Follow-Up Desk</a></div></div>`;
     return;
   }
 
@@ -1292,10 +1537,13 @@ function renderFollowUpPanel(contact) {
   const deskLink = `/follow-up?q=${encodeURIComponent(contact.phone)}`;
   if (!record) {
     container.innerHTML = `
-      <div class="planner-empty">
-        目前没有进行中的 Follow-up。这个客户可能已经完成，或还没有建立可编辑的 CRM 跟进资料。
-        <br><br>如需安排，请先把客户设为 Blasting Lead 并选择 Project。
-        <br><a href="${deskLink}">到完整 Follow-Up Desk 检查</a>
+      <div class="side-block">
+        <div class="status-line"><span>Follow-up 状态</span><b>未建立</b></div>
+        <div class="planner-empty">
+          目前没有进行中的 Follow-up。这个客户可能已经完成，或还没有建立可编辑的 CRM 跟进资料。
+          <br><br>如需安排，请先把客户设为 Blasting Lead 并选择 Project。
+          <br><a href="${deskLink}">到完整 Follow-Up Desk 检查</a>
+        </div>
       </div>`;
     return;
   }
@@ -1316,23 +1564,28 @@ function renderFollowUpPanel(contact) {
     </label>` : "";
 
   container.innerHTML = `
-    <div class="planner-current ${tone}">
-      <div class="planner-status-row">
-        <strong>${esc(record.project || "未分类 Project")}</strong>
-        <span class="planner-badge ${tone}">${esc(followUpWhen(record))}</span>
+    <div class="side-block">
+      <div class="status-line">
+        <span>Follow-up 状态</span>
+        <b class="${tone}">${esc(record.followUpAt ? followUpWhen(record) : "未安排时间")}</b>
       </div>
-      <div class="planner-meta">${esc(record.priority || "MED")} · ${esc(record.nextAction || "Follow Up")} · ${esc(record.reason || "等待安排")}</div>
-      ${notes ? `<div class="planner-note">${esc(notes)}</div>` : ""}
-    </div>
-    <div class="planner-heading">快速安排</div>
-    <div class="quick-times">
-      <button type="button" data-followup-preset="today">今天稍后</button>
-      <button type="button" data-followup-preset="tomorrow">明天 10:00</button>
-      <button type="button" data-followup-preset="three_days">3 天后</button>
-      <button type="button" data-followup-preset="next_week">下周</button>
-    </div>
-    <div class="planner-heading">下一步计划</div>
-    <form class="planner-form" id="followUpForm">
+      <div class="planner-current ${tone}">
+        <div class="planner-status-row">
+          <strong>${esc(record.project || "未分类 Project")}</strong>
+          <span class="planner-badge ${tone}">${esc(followUpWhen(record))}</span>
+        </div>
+        <div class="planner-meta">${esc(record.priority || "MED")} · ${esc(record.nextAction || "Follow Up")} · ${esc(record.reason || "等待安排")}</div>
+        ${notes ? `<div class="planner-note">${esc(notes)}</div>` : ""}
+      </div>
+      <p class="block-hint" style="margin:10px 0 8px;">选一个下次跟进客户的时间</p>
+      <div class="quick-times">
+        <button type="button" data-followup-preset="today">今天稍后</button>
+        <button type="button" data-followup-preset="tomorrow">明天 10:00</button>
+        <button type="button" data-followup-preset="three_days">3 天后</button>
+        <button type="button" data-followup-preset="next_week">下周</button>
+        <button class="wide" type="button" data-followup-preset="custom">自定义日期</button>
+      </div>
+    <form class="planner-form ${followUpFormOpen ? "" : "hidden"}" id="followUpForm">
       ${recordPicker}
       <div class="planner-row">
         <label class="planner-field">
@@ -1366,17 +1619,26 @@ function renderFollowUpPanel(contact) {
         <button class="planner-done" id="followUpDone" type="button">完成</button>
       </div>
     </form>
-    <div class="planner-feedback" id="followUpFeedback"></div>
-    <a class="planner-link" href="${deskLink}">打开完整 Follow-Up Desk</a>`;
+      <div class="planner-feedback" id="followUpFeedback"></div>
+      <a class="planner-link" href="${deskLink}">打开完整 Follow-Up Desk</a>
+    </div>`;
 
   $("followUpRecordSelect")?.addEventListener("change", (event) => {
     followUpSelection.set(key, event.target.value);
     renderFollowUpPanel(contact);
   });
+  // 快捷键先填好时间再展开表单 —— 时间永远要人按下「保存」才写进 CRM。
   document.querySelectorAll("[data-followup-preset]").forEach((button) => {
     button.addEventListener("click", () => {
+      const preset = button.dataset.followupPreset;
       const input = $("followUpAt");
-      if (input) input.value = presetFollowUpTime(button.dataset.followupPreset);
+      if (input && preset !== "custom") input.value = presetFollowUpTime(preset);
+      followUpFormOpen = true;
+      $("followUpForm")?.classList.remove("hidden");
+      document.querySelectorAll("[data-followup-preset]").forEach((item) => {
+        item.classList.toggle("on", item === button && preset !== "custom");
+      });
+      if (preset === "custom") input?.focus();
     });
   });
   $("followUpForm")?.addEventListener("submit", (event) => {
@@ -1433,14 +1695,121 @@ async function saveChatFollowUp(actionOverride = "") {
   }
 }
 
-function renderAiPanel(contact, messages) {
+// 客户自己说过的话里，销售最常要回头找的几件事。
+// 纯本机关键词整理 —— 对话不会送出去，也不需要 API key。
+const SUMMARY_BUCKETS = [
+  { key:"预算", re:/(rm\s?[\d,.]+\s?(k|ribu|juta)?|budget|bajet|harga|price|loan|pinjaman|deposit|downpayment|\bdp\b|ansuran|installment|monthly|bulanan|预算|价格|月供)/i },
+  { key:"地点", re:/(kepong|selayang|semenyih|batu caves|rawang|sentul|kajang|puchong|shah alam|area|kawasan|lokasi|location|dekat|jauh|地点|区域|附近|太远)/i },
+  { key:"房型", re:/(landed|teres|terrace|banglo|bungalow|semi.?d|condo|apartment|rumah|bilik|bedroom|tingkat|unit|studio|房型|几房|排屋|公寓)/i },
+  { key:"工作", re:/(kerja|work|office|company|bank negara|bank|gaji|salary|income|epf|kwsp|slip|business|工作|公司|收入)/i },
+  { key:"时间", re:/(bila|when|bulan|month|tahun|year|next|nanti|sekarang|urgent|cepat|weekend|minggu|时间|什么时候|下个月)/i },
+  { key:"顾虑", re:/(jauh|mahal|expensive|tak\s?sure|belum|susah|risau|takut|reject|blacklist|ccris|ctos|考虑|太贵|不方便|还没)/i },
+];
+
+function plainInbound(messages) {
+  return messages.filter((message) => {
+    if (message.direction !== "inbound") return false;
+    const text = String(message.text || "").trim();
+    return Boolean(text) && !MEDIA_RE.test(text);
+  });
+}
+
+function snippet(text, limit = 96) {
+  const flat = String(text || "").replace(/\s+/g, " ").trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
+function summarizeCustomer(messages) {
+  const inbound = plainInbound(messages);
+  const grouped = new Map();
+  const remember = (key, message) => {
+    const id = String(message.id || message.sentAt || "");
+    if (!grouped.has(id)) grouped.set(id, { keys:[], text:snippet(message.text), id:message.id || "", at:message.sentAt });
+    const entry = grouped.get(id);
+    if (!entry.keys.includes(key)) entry.keys.push(key);
+  };
+  for (const bucket of SUMMARY_BUCKETS) {
+    const hit = [...inbound].reverse().find((message) => bucket.re.test(message.text));
+    if (hit) remember(bucket.key, hit);
+  }
+  const question = [...inbound].reverse().find((message) => /[?？]/.test(message.text));
+  if (question) remember("提问", question);
+  const facts = [...grouped.values()].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return {
+    count:inbound.length,
+    firstAt:inbound[0]?.sentAt || "",
+    lastAt:inbound.at(-1)?.sentAt || "",
+    facts,
+  };
+}
+
+function summaryMarkup(summary) {
+  if (!summary.count) {
+    return '<div class="summary-empty">这个客户还没有发过文字消息，暂时没东西可以整理。</div>';
+  }
+  const meta = `共 ${summary.count} 条客户消息 · 首次 ${esc(relTime(summary.firstAt))} · 最近 ${esc(relTime(summary.lastAt))}`;
+  const body = summary.facts.length
+    ? `<div class="summary-list">${summary.facts.map((fact) => `
+        <button class="summary-item" type="button" data-jump="${esc(fact.id)}" title="跳到这条消息">
+          <b>${esc(fact.keys.slice(0, 2).join(" / "))}${fact.keys.length > 2 ? " +" : ""}</b><span>${esc(fact.text)}</span>
+        </button>`).join("")}</div>`
+    : '<div class="summary-empty">客户的消息里还看不出预算、地点或房型的偏好，先问清楚需求。</div>';
+  return `<p class="summary-meta">${meta}</p>${body}
+    <div class="summary-source">本机按关键词整理客户原话，点一条可以跳回对话；不是 AI 生成的结论，请自己核对。</div>`;
+}
+
+function nextStepNarrative(summary) {
+  if (!summary.count) return "还没有客户消息，先确认这个号码是否正确。";
+  const keys = summary.facts.flatMap((fact) => fact.keys).filter((key) => key !== "提问");
+  const unique = [...new Set(keys)];
+  const focus = unique.length ? `客户提到过 ${unique.join("、")}。` : "客户还没有说出明确偏好。";
+  const asked = summary.facts.some((fact) => fact.keys.includes("提问")) ? "客户有问题在等答案。" : "";
+  return `${focus}${asked} 最后一条客户消息在 ${relTime(summary.lastAt)}。`;
+}
+
+function applyTone(text, tone) {
+  const base = String(text || "").trim();
+  if (!base) return base;
+  if (tone === "short") {
+    const parts = base.split(/(?<=[.!?。！？])\s+/).filter(Boolean);
+    return parts.length > 2 ? parts.slice(0, 2).join(" ") : base;
+  }
+  if (tone === "warm") {
+    const withEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(base) ? base : `${base} 🙂`;
+    return /^(hi|hai|hello|salam|selamat)/i.test(withEmoji) ? withEmoji : `Hi 👋 ${withEmoji}`;
+  }
+  return base
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")
+    .replace(/!+/g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+// 最新的一条客户消息，加上最近一条带 AI 判断的 payload。
+// 顶栏 chip 和右边工作台必须看同一份判断，不然会对不上。
+function intentPayload(messages) {
   const inbound = [...messages].reverse().filter((message) => message.direction === "inbound");
   const latestCustomer = inbound[0] || null;
-  const suggestionMessage = inbound.find((message) => {
+  const carrier = inbound.find((message) => {
     const payload = payloadOf(message);
     return payload.suggestedReply || payload.category || payload.nextAction || payload.signal;
   }) || latestCustomer;
-  const payload = payloadOf(suggestionMessage);
+  return { latestCustomer, payload:payloadOf(carrier) };
+}
+
+function focusMessage(id) {
+  const key = String(id || "");
+  if (!key) return;
+  const row = document.querySelector(`.msg-row[data-msg="${CSS.escape(key)}"]`);
+  if (!row) return;
+  setMobilePane("reply");
+  row.scrollIntoView({ block:"center", behavior:"smooth" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 1600);
+}
+
+function renderAiPanel(contact, messages) {
+  const { latestCustomer, payload } = intentPayload(messages);
   const suggestion = String(payload.suggestedReply || "").trim();
   const signal = String(payload.signal || "").toUpperCase() || "UNCLASSIFIED";
   const category = String(payload.category || payload.aiCategory || "").trim() || "未分类";
@@ -1464,42 +1833,108 @@ function renderAiPanel(contact, messages) {
         </div>`
     : "";
 
+  const summary = summarizeCustomer(messages);
+
   $("aiSubtitle").textContent = contact.name || contact.phone;
   $("aiContent").innerHTML = `
-    <div class="signal-line">
-      <i class="signal-dot ${signalClass(signal)}"></i>
-      <span class="signal-label">${esc(signal)}</span>
+    <div class="side-block">
+      <div class="block-head">
+        <div class="block-title"><span class="ico">✧</span>AI 判断</div>
+        <span class="signal-line" style="margin:0;">
+          <i class="signal-dot ${signalClass(signal)}"></i>
+          <span class="signal-label">${esc(signal)}</span>
+        </span>
+      </div>
+      <div class="insight-grid">
+        <div class="insight ${intentTone}"><span>客户意图</span><strong>${esc(category)}</strong></div>
+        <div class="insight ${intentTone}"><span>下一步</span><strong>${esc(nextAction)}</strong></div>
+      </div>
+      ${dispositionAction}
     </div>
-    <div class="insight-grid">
-      <div class="insight ${intentTone}"><span>客户意图</span><strong>${esc(category)}</strong></div>
-      <div class="insight ${intentTone}"><span>下一步</span><strong>${esc(nextAction)}</strong></div>
+
+    <div class="side-block">
+      <div class="block-head">
+        <div class="block-title"><span class="ico">✦</span>客户说过什么</div>
+        <button class="block-link" id="refreshSummary" type="button">重新整理</button>
+      </div>
+      <div id="summaryBody">${summaryMarkup(summary)}</div>
     </div>
-    ${dispositionAction}
-    <h3 class="ai-section-title">最新客户消息</h3>
-    <div class="latest-customer">${latestCustomer ? esc(latestCustomer.text || "") : "暂无客户消息"}</div>
-    <h3 class="ai-section-title">建议回复</h3>
-    <div class="suggestion" id="suggestionText">${suggestion ? esc(suggestion) : "暂无 AI 建议，请人工查看对话。"}</div>
-    <div class="ai-actions">
-      <button class="use-btn" id="useSuggestion" type="button" ${suggestion && !contact.stopFlag ? "" : "disabled"}>使用建议</button>
-      <button id="copySuggestion" type="button" ${suggestion ? "" : "disabled"} title="复制建议">复制</button>
+
+    <div class="side-block">
+      <div class="block-head">
+        <div class="block-title"><span class="ico">💬</span>最新客户消息</div>
+        <button class="block-link" id="jumpLatest" type="button" ${latestCustomer ? "" : "disabled"}>查看全部</button>
+      </div>
+      <div class="quote-card">${latestCustomer ? esc(snippet(latestCustomer.text, 220)) : "暂无客户消息"}</div>
+      ${latestCustomer ? `<div class="quote-meta">${esc(relTime(latestCustomer.sentAt))} · 来自 ${esc(contact.name || contact.phone)}</div>` : ""}
     </div>
-    <div class="ai-note">建议不会自动发送。发送前请确认价格、单位与客户意图。</div>`;
+
+    <div class="side-block">
+      <div class="block-title" style="margin-bottom:8px;"><span class="ico">◈</span>建议下一步</div>
+      <div class="advice-text">${esc(nextStepNarrative(summary))}</div>
+      <div class="advice-box">建议：${esc(nextAction)}</div>
+    </div>
+
+    <div class="side-block last">
+      <div class="block-head">
+        <div class="block-title"><span class="ico">✎</span>建议回复</div>
+        <button class="block-link" id="toneToggle" type="button" ${suggestion ? "" : "disabled"}>调整语气</button>
+      </div>
+      <div class="tone-row ${toneRowOpen && suggestion ? "" : "hidden"}" id="toneRow">
+        <button type="button" data-tone="warm">更亲切</button>
+        <button type="button" data-tone="short">更简短</button>
+        <button type="button" data-tone="formal">更正式</button>
+      </div>
+      <textarea class="suggestion" id="suggestionText" aria-label="建议回复" ${suggestion ? "" : "disabled"}>${suggestion ? esc(suggestion) : "暂无 AI 建议，请人工查看对话。"}</textarea>
+      <div class="ai-actions">
+        <button class="use-btn" id="useSuggestion" type="button" ${suggestion && !contact.stopFlag ? "" : "disabled"}>使用建议</button>
+        <button id="copySuggestion" type="button" ${suggestion ? "" : "disabled"} title="复制建议">复制</button>
+      </div>
+      <div class="ai-note">建议不会自动发送，也可以先在这里改。语气按钮只是本机微调文字，不会重新生成。</div>
+    </div>`;
+
+  const wireSummaryJumps = () => {
+    document.querySelectorAll("[data-jump]").forEach((button) => {
+      button.addEventListener("click", () => focusMessage(button.dataset.jump));
+    });
+  };
+  wireSummaryJumps();
+
+  $("refreshSummary")?.addEventListener("click", () => {
+    const body = $("summaryBody");
+    if (!body) return;
+    body.innerHTML = summaryMarkup(summarizeCustomer(currentThreadData?.messages || messages));
+    wireSummaryJumps();
+  });
+  $("jumpLatest")?.addEventListener("click", () => focusMessage(latestCustomer?.id));
+  $("toneToggle")?.addEventListener("click", () => {
+    toneRowOpen = !toneRowOpen;
+    $("toneRow")?.classList.toggle("hidden", !toneRowOpen);
+  });
+  document.querySelectorAll("[data-tone]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const box = $("suggestionText");
+      if (!box) return;
+      box.value = applyTone(box.value, button.dataset.tone);
+    });
+  });
 
   $("applySuggestedDisposition")?.addEventListener("click", () => {
     applyConversationDisposition("NOT_INTERESTED");
   });
   $("useSuggestion")?.addEventListener("click", () => {
     const textarea = $("composerText");
-    if (!textarea) return;
-    textarea.value = suggestion;
+    const draft = ($("suggestionText")?.value || suggestion).trim();
+    if (!textarea || !draft) return;
+    textarea.value = draft;
     resizeComposer(textarea);
     setMobilePane("reply");
     textarea.focus();
-    textarea.setSelectionRange(suggestion.length, suggestion.length);
+    textarea.setSelectionRange(draft.length, draft.length);
   });
   $("copySuggestion")?.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(suggestion);
+      await navigator.clipboard.writeText($("suggestionText")?.value || suggestion);
       const button = $("copySuggestion");
       button.textContent = "已复制";
       setTimeout(() => { if (button) button.textContent = "复制"; }, 1200);
@@ -1548,13 +1983,54 @@ async function applyConversationDisposition(disposition) {
   }
 }
 
+// 对话顶栏的状态 chip：AI 怎么分类、Follow-up 排了没有、有没有 STOP。
+function renderThreadChips(contact, messages) {
+  const { payload } = intentPayload(messages);
+  const category = String(payload.category || payload.aiCategory || "").trim() || "未分类";
+  const intentTone = intentClass(category, payload.signal);
+  const categoryTone = intentTone === "intent-positive" ? "green"
+    : intentTone === "intent-follow-up" ? "blue"
+    : intentTone === "intent-stop" ? "red"
+    : intentTone === "intent-not-interested" ? "amber"
+    : "";
+  const record = primaryFollowUp(contact.phone);
+  const tone = followUpTone(record);
+  const followUpChip = record
+    ? { tone:tone === "unplanned" ? "" : tone === "overdue" ? "red" : tone === "today" ? "amber" : "blue", label:`Follow-up ${followUpWhen(record)}` }
+    : { tone:"amber", label:"未建立 Follow-up" };
+
+  $("threadChips").innerHTML = `
+    ${contact.stopFlag ? '<span class="chip red">已 STOP</span>' : ""}
+    <span class="chip ${categoryTone}">${esc(category)}</span>
+    <span class="chip ${followUpChip.tone}">${esc(followUpChip.label)}</span>
+    <button class="chip chip-btn" id="contactCardToggle" type="button" aria-expanded="${contactCardOpen}">客户资料</button>`;
+
+  const card = $("contactCard");
+  card.innerHTML = `
+    <div><span>号码</span><strong>${esc(contact.phone || "-")}</strong></div>
+    <div><span>名字</span><strong>${esc(contact.name || "未命名")}</strong></div>
+    <div><span>Project</span><strong>${esc(contact.projectCode || "未设定")}</strong></div>
+    <div><span>CRM 状态</span><strong>${esc(contact.dispositionStatus || "未标记")}</strong></div>
+    <div><span>我们回复</span><strong>${esc(String(contact.replyCount ?? 0))} 次</strong></div>
+    <div><span>号码来源</span><strong>${esc(instanceLabel(currentInstance))}</strong></div>`;
+  card.classList.toggle("hidden", !contactCardOpen);
+
+  $("contactCardToggle")?.addEventListener("click", () => {
+    contactCardOpen = !contactCardOpen;
+    card.classList.toggle("hidden", !contactCardOpen);
+    $("contactCardToggle")?.setAttribute("aria-expanded", String(contactCardOpen));
+  });
+}
+
 function renderThread(contact, messages) {
   const inbound = messages.filter((message) => message.direction === "inbound");
   const outbound = messages.filter((message) => message.direction === "outbound");
   const stopped = Boolean(contact.stopFlag);
 
   $("replyTitle").textContent = contact.name || contact.phone;
-  $("replySubtitle").textContent = `${contact.phone} · ${inbound.length} 条客户消息 · ${outbound.length} 条我们的回复${stopped ? " · 已 STOP" : ""}`;
+  $("replySubtitle").textContent = `${contact.phone} · 客户消息 ${inbound.length} · 我们回复 ${outbound.length}`;
+  $("threadAvatar").textContent = initials(contact.name || contact.phone);
+  renderThreadChips(contact, messages);
   $("conversationMessages").innerHTML = conversationMarkup(messages);
   $("composerDock").innerHTML = stopped
     ? '<div class="stopped-note">该客户已 STOP，回复功能已关闭。</div>'
@@ -1716,7 +2192,7 @@ async function doSend() {
   if (newContactAwaitingFirstSend?.phone === currentPhone) {
     const preview = body || "[图片]";
     const confirmed = window.confirm(
-      `确认使用 ${currentInstance} 发给新号码 ${currentPhone}？\n客户类型：${newContactAwaitingFirstSend.typeLabel}\n\n${preview.slice(0, 180)}`
+      `确认使用 ${instanceLabel(currentInstance)} 发给新号码 ${currentPhone}？\n客户类型：${newContactAwaitingFirstSend.typeLabel}\n\n${preview.slice(0, 180)}`
     );
     if (!confirmed) return;
   }

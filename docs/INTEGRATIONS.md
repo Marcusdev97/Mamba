@@ -142,6 +142,10 @@ dead-man heartbeat 仍继续运行，不影响 Sales Brain 审批或手动 Teleg
 - `campaign-app/lib/notion-service.mjs`
 - `campaign-app/lib/notion-outbox-service.mjs`
 - `campaign-app/lib/notion-outbox-worker.mjs`
+- `campaign-app/lib/notion-crm-sync-engine.mjs`
+- `campaign-app/lib/notion-crm-sync-repository.mjs`
+- `campaign-app/lib/notion-crm-sync-coordinator.mjs`
+- `campaign-app/routes/notion-crm-sync.routes.mjs`
 - `campaign-app/lib/blast-cache-service.mjs`
 - `campaign-app/notion_sync.mjs`
 
@@ -151,6 +155,11 @@ dead-man heartbeat 仍继续运行，不影响 Sales Brain 审批或手动 Teleg
 人工内容：Notion → local cache / SQLite
 运行结果：SQLite outbox → Notion
 ```
+
+CRM v1 的 Customers 与 Project Leads 使用双向受控同步：SQLite row version 扫描把
+dirty entity 加入既有 `sync_jobs`；Notion `last_edited_time` polling 先写 durable inbox，
+再套用 human-owned 字段。system-owned 字段只允许 SQLite → Notion。同步默认 20 分钟，
+另有 nightly reconciliation 和人工「立即同步／暂停／恢复／重试／对账」入口。
 
 ### CRM v1 Structure
 
@@ -230,6 +239,10 @@ connection。系统先写 SQLite，再按客户来源处理外部镜像：
 ### 冲突与重试
 
 - 使用 `sync_jobs.idempotency_key` 防止重复写入。
+- Notion → SQLite 使用 page id + `last_edited_time` 组成 inbox idempotency key；重复 poll 不重复套用。
+- Retry 为 1m → 5m → 15m → 1h → 6h；authentication、schema、duplicate ID 与字段冲突不盲目重试。
+- 同一 human field 双边同时变化时写入 `sync_conflicts`，非冲突字段可继续合并，冲突字段等待人工处理。
+- Notion payload 只保留 CRM 摘要字段；raw message、完整 conversation、token、证件与 recovery state 被 denylist 拒绝。
 - 网络、限流等暂时问题使用有限次数 backoff。
 - 字段缺失、客户匹配冲突或语义冲突不能盲目覆盖。
 - 无法自动解决的资料必须保留错误码和人工处理入口。

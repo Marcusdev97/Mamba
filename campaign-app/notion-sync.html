@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Notion Sync · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .kpis { display:grid; grid-template-columns:repeat(5,minmax(120px,1fr)); gap:12px; }
+  .kpi { padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--panel2); }
+  .kpi b { display:block; font-size:28px; margin-top:4px; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; }
+  .state { font-weight:800; }
+  .state.ok { color:var(--green); } .state.warn { color:var(--amber); } .state.bad { color:var(--red); }
+  .small { font-size:12px; }
+  @media (max-width:900px) { .kpis { grid-template-columns:repeat(2,1fr); } }
+</style>
+<script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><div><h1>SQLite ↔ Notion Sync</h1><div class="sub">SQLite 是运行事实来源；Notion 是业务可见镜像</div></div><button class="btn" id="refresh">刷新</button></header>
+  <div class="card">
+    <h2>Health</h2>
+    <div id="health" class="muted">Loading…</div>
+    <div class="kpis" id="kpis" style="margin-top:14px"></div>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn primary" id="sync">立即同步</button>
+      <button class="btn" id="pause">暂停</button>
+      <button class="btn" id="resume">恢复</button>
+      <button class="btn" id="retry">重试失败</button>
+      <button class="btn" id="reconcile">运行对账</button>
+    </div>
+    <div id="message" class="muted" style="margin-top:12px"></div>
+    <div id="error" class="err"></div>
+  </div>
+  <div class="card"><h2>Open Conflicts</h2><table><thead><tr><th>Entity</th><th>Field</th><th>Detected</th><th>Resolution</th></tr></thead><tbody id="conflicts"></tbody></table></div>
+  <div class="card"><h2>Recent Queue</h2><table><thead><tr><th>Direction</th><th>Entity</th><th>Status</th><th>Error</th></tr></thead><tbody id="queue"></tbody></table></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+async function request(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+function row(direction, item) {
+  return `<tr><td>${direction}</td><td>${esc(item.entityType)} · ${esc(item.entityId)}</td><td>${esc(item.status)}</td><td class="small">${esc(item.errorMessage || "")}</td></tr>`;
+}
+async function load() {
+  $("error").textContent = "";
+  try {
+    const data = await request("/api/notion-crm-sync");
+    const health = data.health || {};
+    const ready = Boolean(health.ready);
+    const enabled = Number(health.enabled) === 1;
+    $("health").innerHTML = `<span class="state ${ready && enabled ? "ok" : ready ? "warn" : "bad"}">${esc(health.status || "UNKNOWN")}</span> · schema ${ready ? "ready" : "migration 304 required"} · ${enabled ? "active" : "paused"}${health.pausedReason ? ` · ${esc(health.pausedReason)}` : ""}`;
+    $("kpis").innerHTML = [["Pending Push",health.pendingPush],["Pending Pull",health.pendingPull],["Conflicts",health.conflicts],["Failed",health.failed],["Last Sync",health.lastFinishedAt ? new Date(health.lastFinishedAt).toLocaleString("en-MY",{hour12:false}) : "—"]].map(([label,value]) => `<div class="kpi"><span>${esc(label)}</span><b>${esc(value ?? 0)}</b></div>`).join("");
+    const conflicts = data.queue?.conflicts || [];
+    $("conflicts").innerHTML = conflicts.length ? conflicts.map((item) => `<tr><td>${esc(item.entityType)} · ${esc(item.entityId)}</td><td>${esc(item.fieldName)}</td><td>${esc(item.detectedAt)}</td><td>${esc(item.resolution)}</td></tr>`).join("") : '<tr><td colspan="4" class="muted">没有冲突。</td></tr>';
+    const outbox = (data.queue?.outbox || []).map((item) => row("Push",item));
+    const inbox = (data.queue?.inbox || []).map((item) => row("Pull",item));
+    $("queue").innerHTML = outbox.concat(inbox).join("") || '<tr><td colspan="4" class="muted">队列为空。</td></tr>';
+    ["sync","pause","resume","retry","reconcile"].forEach((id) => { $(id).disabled = !ready; });
+  } catch (error) { $("error").textContent = error.message; }
+}
+async function action(path, body) {
+  $("error").textContent = ""; $("message").textContent = "处理中…";
+  try {
+    const data = await request(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body || {})});
+    $("message").textContent = data.result?.busy ? "同步正在运行。" : "完成。";
+    await load();
+  } catch (error) { $("error").textContent = error.message; $("message").textContent = ""; }
+}
+$("refresh").onclick = load;
+$("sync").onclick = () => action("/api/notion-crm-sync/run");
+$("pause").onclick = () => action("/api/notion-crm-sync/pause",{reason:"Paused from Notion Sync dashboard"});
+$("resume").onclick = () => action("/api/notion-crm-sync/resume");
+$("retry").onclick = () => action("/api/notion-crm-sync/retry-failed");
+$("reconcile").onclick = () => action("/api/notion-crm-sync/reconcile");
+load(); setInterval(load,30000);
+</script>
+</body>
+</html>

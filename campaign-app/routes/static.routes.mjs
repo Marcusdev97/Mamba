@@ -15,6 +15,7 @@ const HTML_ROUTES = {
   "/lookup": "lookup.html",
   "/settings": "settings.html",
   "/logs": "logs.html",
+  "/notion-sync": "notion-sync.html",
   "/conversations": "conversations.html",
   "/follow-up": "follow-up.html",
   "/bot-rules": "bot-rules.html",

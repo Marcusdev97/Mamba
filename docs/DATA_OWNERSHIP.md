@@ -18,6 +18,7 @@
 | Campaign Run | SQLite `campaign_runs` | `campaign-data/runs/*.json` 恢复回执 | Notion Campaign 视图 | 客户 checkpoint + terminal commit |
 | 每个发送动作 | SQLite `send_jobs` | Run JSON provider evidence | Notion 汇总 | Provider 确认后 |
 | Notion 同步任务 | SQLite `sync_jobs` | 无 | Notion 是目标 | 本机业务 transaction 内排队 |
+| Notion 拉取／映射／冲突 | SQLite `sync_inbox` + `notion_entity_map` + `sync_conflicts` | 无 | Notion human-owned fields | 20 分钟 polling／人工同步 |
 | Template | Notion 人工内容 | SQLite `templates` 本机快照 | Notion 是编辑入口 | 明确 Refresh 时 |
 | Project Knowledge | Notion／受控 YAML 人工内容 | SQLite／Brain JSON 快照 | Notion 是编辑入口 | 明确 Refresh 时 |
 | Project Registry | Project repository 配置 | SQLite `projects` 运行快照 | Notion content | Project 载入时 |
@@ -65,6 +66,8 @@
 
 - 正式基础 Schema：`docs/mamba-schema.sql`
 - v3 Runtime Patch：`schema_migrations.version = 301`
+- SQLite 稳定核心：`schema_migrations.version = 303`
+- SQLite ↔ Notion CRM sync：`schema_migrations.version = 304`（默认 paused）
 - Runtime Service 只验证需要的表和字段，不在启动时执行 `CREATE`、`ALTER` 或 `RENAME`。
 - Migration 默认 dry-run，Apply 前必须没有近期活动 Campaign，并先建立 SQLite backup。
 

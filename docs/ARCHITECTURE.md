@@ -313,6 +313,14 @@ Campaigns、Campaign Runs、Conversation Summaries 和 AI Lead Reviews 八个固
 [`NOTION_CRM_V1.md`](NOTION_CRM_V1.md)。Legacy Blast／Ads／Recycle databases 在迁移期
 保持独立，CRM provisioner 不得覆盖它们的配置或把原始 message ledger 搬进 Notion。
 
+SQLite ↔ Notion CRM 同步由 migration 304 的 `notion_entity_map`、`sync_inbox`、
+`sync_conflicts` 与 `sync_audit_events` 支撑，并复用既有 `sync_jobs` outbox。同步 worker
+每 20 分钟扫描 SQLite row version；push 与 pull 都使用稳定 idempotency key。人工字段
+采用字段级三方合并，SQLite 与 Notion 同时修改同一字段时进入 `CONFLICT`，不得以整行
+last-write-wins 覆盖。原始 messages、conversation payload、secret 与 recovery state 永不
+进入 Notion。Dashboard 位于 `/notion-sync`；migration 304 应用后仍默认 paused，必须由
+操作员明确恢复。
+
 ### SQLite 启动与安全状态
 
 SQLite 启动顺序固定为：确认数据库文件 → `quick_check`／foreign key 检查 →
@@ -320,6 +328,9 @@ SQLite 启动顺序固定为：确认数据库文件 → `quick_check`／foreign
 写入健康状态 → `READY`。Migration 303 会先用 SQLite online backup 建立备份，另写
 包含 SHA-256、大小、原因和验证结果的 manifest；已应用 migration 的 checksum
 不得改变。
+
+Migration 304 使用独立的 default dry-run maintenance，并同时检查 run JSON 与
+`campaign_runs` ledger；任一活动／发送中 Campaign 都会阻止 apply。
 
 `metadata.database_id` 是数据库稳定身份，重启或重复 initialize 不得重建。Settings
 显示 database ID、最后健康检查、最后备份、WAL 和索引状态。任何 migration、checksum、

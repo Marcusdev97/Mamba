@@ -34,4 +34,23 @@ assert.match(inlineScript, /已送达客户装置（双勾）/);
 assert.match(inlineScript, /不能据此直接判定被封锁/);
 assert.match(html, /delivery-mark\.read/);
 
+// 客户摘要（本机关键词整理，不呼叫任何模型）+ 顶栏客户资料。
+assert.match(inlineScript, /function summarizeCustomer\(messages\)/);
+assert.match(inlineScript, /客户说过什么/);
+assert.match(inlineScript, /本机按关键词整理客户原话/);
+assert.match(inlineScript, /data-jump=/);
+assert.match(inlineScript, /function focusMessage\(id\)/);
+assert.match(inlineScript, /function intentPayload\(messages\)/);
+assert.match(inlineScript, /function applyTone\(text, tone\)/);
+assert.match(inlineScript, /data-tone="warm"/);
+assert.match(inlineScript, /contactCardToggle/);
+assert.match(inlineScript, /function sourceTag\(message\)/);
+assert.match(inlineScript, /自动发送/);
+assert.match(html, /class="msg-row/);
+
+// Tab 显示实际电话号码，Evolution 标签只留在 tooltip / fallback。
+assert.match(inlineScript, /function prettyPhone\(value\)/);
+assert.match(inlineScript, /function instanceLabel\(instance\)/);
+assert.match(inlineScript, /\$\{esc\(phone \|\| number\.instance\)\}/);
+
 console.log("✅ Chat Room follow-up UI tests passed");

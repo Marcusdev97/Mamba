@@ -161,7 +161,13 @@ assert.equal((await outbox.due()).length, 1, "卡住的要回到队列");
 // --- 退避曲线 ---
 assert.equal(backoffMinutes(1), 1);
 assert.equal(backoffMinutes(3), 15);
-assert.equal(backoffMinutes(99), 240, "退避有上限，不会无限拉长");
+assert.equal(backoffMinutes(99), 360, "退避有上限，不会无限拉长");
+
+await outbox.enqueue({ entityType: "crm_customer", entityId: "customer_bad", idempotencyKey: "crm_bad" });
+const permanent = new Error("Notion schema mismatch");
+permanent.retryable = false;
+report = await outbox.drain(async () => { throw permanent; }, { entityTypes: ["crm_customer"] });
+assert.equal(report.failed, 1, "permanent errors must fail immediately instead of retrying for six hours");
 
 const sendHtml = await fs.readFile(new URL("./send.html", import.meta.url), "utf8");
 const sendScript = sendHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";

@@ -22,6 +22,12 @@ export function registerInboxRoutes(router) {
       numbers = (open || [])
         .filter((item) => item?.name && item?.allowedOnThisDevice !== false)
         .map((item) => ({ instance: item.name, number: item.number || item.owner || "" }));
+      // Evolution 偶尔不回 ownerJid（刚重连时）。聊天室的 tab 要显示号码，
+      // 所以补一次本机 instance_identity 的对照 —— 查不到就留空，前端退回标签名。
+      for (const item of numbers) {
+        if (item.number || !runtime.instanceIdentity) continue;
+        item.number = await runtime.instanceIdentity.numberFor(item.instance).catch(() => "");
+      }
     } catch { /* 读不到号码就回空，前端显示「没有连接的号码」 */ }
     json(res, 200, { ok: true, numbers });
   });

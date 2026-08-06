@@ -15,8 +15,8 @@ import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
 
 const MAX_ATTEMPTS = 6;
-// 退避：1m → 5m → 15m → 1h → 4h，再来就等每晚那次兜底。
-const BACKOFF_MINUTES = [1, 5, 15, 60, 240];
+// 退避：1m → 5m → 15m → 1h → 6h，之后交给人工处理。
+const BACKOFF_MINUTES = [1, 5, 15, 60, 360];
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -109,15 +109,17 @@ ON CONFLICT(idempotency_key) DO UPDATE SET
   }
 
   // 到期的待办。RUNNING 不捞 —— 那是别人正在处理的。
-  async function due({ limit = 25 } = {}) {
+  async function due({ limit = 25, entityTypes = [] } = {}) {
     const database = await cli();
     const nowIso = clock().toISOString();
+    const types = [...new Set((Array.isArray(entityTypes) ? entityTypes : []).map(clean).filter(Boolean))];
+    const typeFilter = types.length ? ` AND entity_type IN (${types.map(sqlValue).join(",")})` : "";
     return database.query(`
 SELECT id, idempotency_key AS idempotencyKey, direction, entity_type AS entityType, entity_id AS entityId,
        status, attempt_count AS attemptCount, available_at AS availableAt, payload_json AS payloadJson,
        last_error_code AS lastErrorCode, last_error_message AS lastErrorMessage
 FROM sync_jobs
-WHERE status IN ('PENDING','RETRY') AND available_at <= ${sqlValue(nowIso)}
+WHERE status IN ('PENDING','RETRY') AND available_at <= ${sqlValue(nowIso)}${typeFilter}
 ORDER BY available_at, id
 LIMIT ${Math.max(1, Math.min(Number(limit) || 25, 500))};`);
   }
@@ -178,7 +180,9 @@ WHERE idempotency_key=${sqlValue(key)};`);
     const database = await cli();
     const attempt = Number(job.attemptCount || 0) + 1;
     const nowMs = clock().getTime();
-    const exhausted = attempt >= maxAttempts;
+    const permanent = error?.retryable === false
+      || ["permanent", "authentication", "conflict"].includes(clean(error?.category).toLowerCase());
+    const exhausted = permanent || attempt >= maxAttempts;
     const availableAt = new Date(nowMs + backoffMinutes(attempt) * 60_000).toISOString();
     const nowIso = new Date(nowMs).toISOString();
     await database.exec(`
@@ -195,10 +199,10 @@ WHERE id=${sqlValue(job.id)};`);
 
   // 把到期的推一轮。handler 回 false 代表「这笔现在处理不了但不算错」(例如 run
   // 档不见了)，直接结案不重试。
-  async function drain(handler, { limit = 25, onProgress = null } = {}) {
+  async function drain(handler, { limit = 25, onProgress = null, entityTypes = [] } = {}) {
     const report = { processed: 0, completed: 0, deferred: 0, retried: 0, failed: 0, skipped: 0, errors: [] };
     if (typeof handler !== "function") return report;
-    const jobs = await due({ limit });
+    const jobs = await due({ limit, entityTypes });
     for (let index = 0; index < jobs.length; index += 1) {
       const job = jobs[index];
       let payload = {};
