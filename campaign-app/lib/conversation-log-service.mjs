@@ -833,15 +833,27 @@ GROUP BY v.contact_key;`);
         ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
       ) = 'inbound'`);
     }
-    // 号码归属来自讯息 payload 里的 instanceName（每条讯息记着走哪个号码发/收）。
-    // connection_key 那条路在旧资料里是空的，靠不住 —— payload 才是可靠来源。
+    // 分页比对的是「号码」，不是「wa_01 这个代号」。
+    //
+    // 代号是每台机器自己的叫法，而且可以换绑：同一个 wa_01 在这台是 A 号码、在另一台
+    // 是 B 号码。以前这里直接比对讯息 payload 里的 instanceName，所以从别台搬进来的
+    // 对话会跑到错的号码底下 —— 代号相同不代表号码相同。
+    //
+    // 当初会用 payload 是因为旧资料的 connection_key 大量是空的；那批已经回填完
+    // （backfill-message-connection.mjs），现在每条讯息都带得出号码，可以用真正
+    // 不会变的那个身份来筛。代号只剩「查表用的入口」，不再是身份本身。
     const names = [...new Set((Array.isArray(instance) ? instance : [instance]).map(clean).filter(Boolean))];
     const instanceFilter = names.length
       ? `AND EXISTS (
           SELECT 1 FROM messages im
           JOIN conversations iv ON iv.id = im.conversation_id
           WHERE iv.contact_key = c.contact_key
-            AND json_extract(im.payload_json, '$.instanceName') IN (${names.map(sqlValue).join(", ")}))`
+            AND substr(im.connection_key, instr(im.connection_key, '::') + 2) IN (
+              SELECT replace(replace(whatsapp_number, '+', ''), ' ', '') FROM instance_identity
+              WHERE instance_name IN (${names.map(sqlValue).join(", ")})
+              UNION
+              SELECT replace(replace(whatsapp_number, '+', ''), ' ', '') FROM whatsapp_connections
+              WHERE instance_name IN (${names.map(sqlValue).join(", ")})))`
       : "";
     const rows = await database.query(`
 SELECT
