@@ -39,6 +39,10 @@ export function normalizeCampaignRunStatus(value, fallback = "") {
   return CAMPAIGN_RUN_STATUSES.includes(status) ? status : fallback;
 }
 
+export function isTerminalCampaignRunStatus(value) {
+  return ["COMPLETED", "FAILED", "CANCELLED"].includes(normalizeCampaignRunStatus(value));
+}
+
 export function normalizeCampaignMemberStatus(value, fallback = "") {
   const status = upper(value);
   return CAMPAIGN_MEMBER_STATUSES.includes(status) ? status : fallback;

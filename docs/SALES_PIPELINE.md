@@ -19,6 +19,9 @@ whether a transition or opportunity is valid.
 `/api/follow-up` integration remains temporarily available for old Notion reconciliation, but
 it is not an authority for migration 307 stage or task decisions.
 
+`/sales` and `/follow-up` keep the shared Mamba Sidebar and use `assets/mamba.css` as the only
+source for content colors, fonts, type scale, and base components.
+
 ## Stage and temperature
 
 Stages are `NEW`, `CONTACTED`, `REPLIED`, `QUALIFIED`, `WARM`, `APPOINTMENT`, `VIEWED`,

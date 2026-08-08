@@ -24,7 +24,8 @@ SQLite 是 identity、conversation、message、conflict、merge audit 与 backfi
 
 Confidence 不能解决语义冲突。如果同一 LID 已属于 customer A，而新证据同时指向
 customer B，系统写入 `identity_conflicts` 与 `identity_unresolved_events`，不覆盖 `lid_map`，
-也不移动该事件的消息。操作员在 `/customer-identity` 选择 KEEP、明确 MOVE 或 DISMISS。
+也不移动该事件的消息。操作员在 Settings 的 `Advanced Data Maintenance` 选择 KEEP、
+明确 MOVE 或 DISMISS。
 
 ## Conversation 与 Message
 
@@ -73,7 +74,8 @@ node scripts/maintenance/migrate-customer-identity.mjs \
 ```
 
 不要在 LIVE Campaign 运行时 apply、merge、reverse 或 restart Mamba。Migration 完成后，
-到 `/customer-identity` 检查 schema、冲突和 customer 数量，再决定是否恢复 Notion Sync。
+到 Settings 的 `Advanced Data Maintenance` 检查 schema、冲突和 customer 数量，再决定
+是否恢复 Notion Sync。旧 `/customer-identity` URL 会安全转到这个维护区。
 
 ## 代码入口
 
@@ -82,5 +84,5 @@ node scripts/maintenance/migrate-customer-identity.mjs \
 - `lib/conversation-log-service.mjs`：message-time identity placement。
 - `lib/lid-map-service.mjs`：LID evidence cache；冲突时不覆盖。
 - `routes/customer-identity.routes.mjs`：本机 admin API。
-- `customer-identity.html`：冲突和 merge 后台。
+- `settings.html` 的 `Advanced Data Maintenance`：冲突和 merge 后台。
 - `migrations/305-customer-identity.sql`：additive schema migration。

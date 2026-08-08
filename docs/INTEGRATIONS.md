@@ -200,6 +200,10 @@ membership transition 或 attribution。Campaign 未结束时不得把部分 met
 “加入 outbox”不代表“已经同步到 Notion”。UI 和日志必须区分
 `PENDING`、`RUNNING`、`RETRY`、`FAILED` 和 `COMPLETED`。
 
+Templates 面板的 Delete 是可追踪的安全 Retire：Backend 重新核对 Notion page 身份，
+拒绝停用尚未结束 Campaign 正在引用的模板，然后只把 `Status` 改为 `Retired`。不得 archive
+或永久删除 page；旧发送的 `Sent Count` 与 attribution 必须继续保留。
+
 ### Refresh Campaign Sync
 
 Refresh (`campaignType=RECYCLE`) 使用独立 outbox key

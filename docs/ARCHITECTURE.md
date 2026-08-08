@@ -5,7 +5,8 @@
 > 本文件说明 Mamba 现在如何运行，以及新增代码应该往哪里放。
 > 数据架构的正式决策见
 > [`MAMBA_ARCHITECTURE_ADR.md`](MAMBA_ARCHITECTURE_ADR.md)，每种资料的唯一来源见
-> [`DATA_OWNERSHIP.md`](DATA_OWNERSHIP.md)。
+> [`DATA_OWNERSHIP.md`](DATA_OWNERSHIP.md)。现有客户资料的旁路整理、SQL 修复、
+> 工具与 cutover 原则见 [`CUSTOMER_DATABASE_REBUILD.md`](CUSTOMER_DATABASE_REBUILD.md)。
 
 ## 1. 系统目标
 
@@ -54,6 +55,9 @@ Campaign 运行时重启后一起生效。Campaign 图片等业务资料仍按�
 
 `campaign-app/send.html` 只负责发送台的工作区导航与共同状态展示。页面结构保持
 单一标题区，右侧只保留一个 Campaign planning 入口：
+
+- 独立 `/campaigns` Campaign Planning 页面已移除；旧网址转向 `/send`。操作员只从
+  Campaign Center 规划和执行 Campaign，底层 migration 308 model 继续承担资料与归因。
 
 - Flow 1 与 Flow 2–10 是同一个 Campaign planning workspace 内的两种安排类型；
   顶层不得再为两个 Flow 建立独立 page control。现有 iframe 保持存活，内部切换
@@ -335,7 +339,9 @@ Customer Identity 由 migration 305 的 `customers`、`customer_identities`、
 `identity_conflicts`、`identity_unresolved_events` 与 `customer_merge_events` 支撑。
 Conversation／message／project lead 与 Notion Customer mapping 都引用稳定 `customer_id`；
 display name 永远不是 identity evidence，同一 LID 指向两个 customer 时必须暂停归档并由
-`/customer-identity` 人工处理。完整规则见 [`CUSTOMER_IDENTITY.md`](CUSTOMER_IDENTITY.md)。
+Settings 的 `Advanced Data Maintenance` 人工处理。Customer Search 仍是日常客户查找的唯一
+入口；Identity API 与 repository 继续作为后台安全层。完整规则见
+[`CUSTOMER_IDENTITY.md`](CUSTOMER_IDENTITY.md)。
 
 ### SQLite 启动与安全状态
 

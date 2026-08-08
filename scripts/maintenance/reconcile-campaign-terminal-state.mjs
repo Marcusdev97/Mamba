@@ -53,6 +53,19 @@ function terminalEvidence(run) {
   };
 }
 
+/**
+ * `campaign_runs.status` 的 CHECK 约束随 schema 版本变化：base schema 不接受
+ * `CANCELLED`，migration 308 重建该表时才补上。Reconcile 会在 308 之前跑，所以
+ * 必须先问清楚当前 schema 允许哪些值——否则一条不被接受的 status 会让整个事务
+ * 回滚，连本来能修的 run 一起失败。
+ */
+function allowedRunStatuses(binary, databasePath) {
+  const [row] = sqliteJson(binary, databasePath, "SELECT sql FROM sqlite_master WHERE type='table' AND name='campaign_runs';");
+  const match = /status[^,]*?CHECK\s*\(\s*status\s+IN\s*\(([^)]*)\)/is.exec(row?.sql || "");
+  if (!match) return null;
+  return new Set([...match[1].matchAll(/'([^']*)'/g)].map((item) => item[1]));
+}
+
 function databaseRuns(binary, databasePath) {
   return new Map(sqliteJson(binary, databasePath, `
 SELECT run_id AS runId, status, requested_count AS requested, sent_count AS sent,
@@ -62,7 +75,9 @@ FROM campaign_runs;`).map((row) => [row.runId, row]));
 
 function buildReport(binary, rootDir, databasePath) {
   const rows = databaseRuns(binary, databasePath);
+  const allowedStatuses = allowedRunStatuses(binary, databasePath);
   const repairable = [];
+  const deferredBySchema = [];
   const missingDatabase = [];
   const terminalConflicts = [];
   for (const run of runFiles(rootDir)) {
@@ -75,6 +90,15 @@ function buildReport(binary, rootDir, databasePath) {
     }
     const databaseStatus = clean(current.status).toUpperCase();
     if (REPAIRABLE_DATABASE_STATUSES.has(databaseStatus)) {
+      if (allowedStatuses && !allowedStatuses.has(evidence.status)) {
+        deferredBySchema.push({
+          runId: evidence.runId,
+          databaseStatus,
+          runFileStatus: evidence.status,
+          reason: "STATUS_NOT_ALLOWED_BY_SCHEMA",
+        });
+        continue;
+      }
       repairable.push({ ...evidence, databaseStatus });
     } else if (TERMINAL.has(databaseStatus) && databaseStatus !== evidence.status) {
       terminalConflicts.push({
@@ -86,8 +110,10 @@ function buildReport(binary, rootDir, databasePath) {
   }
   return {
     repairable,
+    deferredBySchema,
     missingDatabase,
     terminalConflicts,
+    allowedStatuses: allowedStatuses ? [...allowedStatuses] : null,
   };
 }
 
@@ -107,7 +133,13 @@ WHERE run_id=${sqlText(row.runId)}
   AND status IN ('QUEUED','RUNNING','PARTIAL');`);
   }
   statements.push("COMMIT;");
-  sqliteJson(binary, databasePath, statements.join("\n"), { readOnly: false });
+  // `-bail` 让任何一条语句失败都以非零退出；否则 sqlite3 会跳过错误继续执行，
+  // 工具会把一次没生效的修复报告成成功。
+  execFileSync(binary, ["-batch", "-bail", databasePath], {
+    input: statements.join("\n"),
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
   return rows.length;
 }
 
@@ -126,6 +158,7 @@ export function reconcileCampaignTerminalState({
     databasePath,
     activeRuns,
     repairable: comparison.repairable,
+    deferredBySchema: comparison.deferredBySchema,
     missingDatabase: comparison.missingDatabase,
     terminalConflicts: comparison.terminalConflicts,
   };

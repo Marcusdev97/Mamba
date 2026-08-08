@@ -307,7 +307,7 @@ POST /api/templates/update
 
 如果 `Flow Topic` 改了，backend 会用标准格式重建 `Template Name`，并同步对应的 `Flow No` / `Cohort Day`。
 
-### 删除模板
+### Delete 模板（安全 Retire）
 
 调用:
 
@@ -315,7 +315,13 @@ POST /api/templates/update
 POST /api/templates/delete
 ```
 
-它不会永久删除，只是把 Notion page archive，等于移动到 Notion trash，可以恢复。
+页面会显示明确的 Delete 按钮，并在执行前列出 Project、Template Name、Flow、Language、
+Part 与 Status。Backend 会重新读取 Notion page 核对目标；如果尚未结束的 Campaign 已经
+引用该 page id，则拒绝操作。
+
+成功后不会 archive 或永久删除 Notion page，而是把 `Status` 改成 `Retired`，并从正常
+Templates 列表隐藏。历史 `Sent Count`、Campaign attribution、本机图片和 alias 都保留。
+这与 `MAMBA_STANDARD.md` 的“Retired 永不删除”规则一致。
 
 ## 8. 发送时到底发什么
 
@@ -549,4 +555,3 @@ flowchart LR
   M --> N["notion_upload.mjs"]
   N --> O["Notion Blast Leads"]
 ```
-

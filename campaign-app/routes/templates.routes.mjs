@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { decideTemplateRetirement } from "../domain/template-retirement.mjs";
 import { httpError, json, readJson } from "../lib/http.mjs";
 
 function requireTemplates(runtime) {
@@ -155,6 +156,8 @@ export function registerTemplatesRoutes(router) {
 
     const items = [];
     for (const page of all.filter((item) => templatesSvc.nfSelect(item, "Project") === project)) {
+      const status = templatesSvc.nfSelect(page, "Status");
+      if (status === "Retired") continue;
       const imageName = templatesSvc.nfText(page, "Image Name");
       const mediaPath = templatesSvc.resolveMedia(imageName);
       let mediaExists = false;
@@ -173,7 +176,7 @@ export function registerTemplatesRoutes(router) {
         flowNo: page.properties?.["Flow No"]?.number ?? null,
         language: templatesSvc.nfSelect(page, "Language"),
         part: templatesSvc.nfSelect(page, "Part"),
-        status: templatesSvc.nfSelect(page, "Status"),
+        status,
         imageName,
         hasImageName: !!imageName,
         mediaUrl: mediaExists ? `/${mediaPath}` : "",
@@ -284,12 +287,74 @@ export function registerTemplatesRoutes(router) {
     const body = await readJson(req);
     const pageId = cleanPageId(body.pageId);
     if (!pageId) throw httpError(400, "缺少 template pageId。");
-    try {
-      await templates.notion("PATCH", `/pages/${pageId}`, { archived: true });
-    } catch (error) {
-      throw httpError(500, readableNotionError(error, "删除模板"));
+    if (body.confirmation !== "RETIRE_TEMPLATE") {
+      throw httpError(400, "请先确认要删除这条 Template。", { code: "TEMPLATE_RETIRE_CONFIRMATION_REQUIRED" });
     }
-    json(res, 200, { ok: true });
+
+    let page;
+    try {
+      page = await templates.notion("GET", `/pages/${pageId}`);
+    } catch (error) {
+      throw httpError(500, readableNotionError(error, "确认模板"));
+    }
+
+    const expectedDatabaseId = templateDatabaseId(templates);
+    const actualDatabaseId = cleanPageId(page?.parent?.database_id);
+    if (!expectedDatabaseId || actualDatabaseId !== expectedDatabaseId) {
+      throw httpError(409, "这条记录不属于当前 Templates database，已停止操作。", { code: "TEMPLATE_DATABASE_MISMATCH" });
+    }
+
+    const template = {
+      pageId: page.id || pageId,
+      name: templates.nfTitle(page, "Template Name"),
+      project: templates.nfSelect(page, "Project"),
+      flowTopic: templates.nfSelect(page, "Flow Topic"),
+      language: templates.nfSelect(page, "Language"),
+      part: templates.nfSelect(page, "Part"),
+      status: templates.nfSelect(page, "Status"),
+    };
+    const expectedProject = String(body.project || "").trim();
+    const expectedName = String(body.templateName || "").trim();
+    if ((expectedProject && expectedProject !== template.project) || (expectedName && expectedName !== template.name)) {
+      throw httpError(409, "Template 资料已经改变，请刷新后重新确认。", { code: "TEMPLATE_RETIRE_STALE_TARGET" });
+    }
+
+    const decision = decideTemplateRetirement({
+      pageId,
+      runners: runtime.campaign?.listRunners?.() || [],
+    });
+    if (!decision.allowed) {
+      throw httpError(409, `这条 Template 正被尚未结束的 Campaign ${decision.usage.runId || "(unknown)"} 使用，不能删除。请先完成或取消该 Campaign。`, {
+        code: decision.code,
+        usage: decision.usage,
+      });
+    }
+
+    if (template.status !== "Retired") {
+      try {
+        // Retired templates disappear from the active workspace but remain in
+        // Notion so historical send attribution and Sent Count stay traceable.
+        await templates.notion("PATCH", `/pages/${pageId}`, { properties: { Status: { select: { name: "Retired" } } } });
+      } catch (error) {
+        throw httpError(500, readableNotionError(error, "停用模板"));
+      }
+    }
+    let auditLogged = true;
+    try {
+      await runtime.systemLogs?.write({
+        level: "info",
+        area: "templates",
+        event: "template_retired",
+        message: "Template retired from active workspace.",
+        context: { pageId, project: template.project, flowTopic: template.flowTopic, previousStatus: template.status },
+      });
+    } catch (error) {
+      // The Notion change is already complete and idempotent, so returning an
+      // error would invite a misleading retry. Keep the audit failure visible.
+      auditLogged = false;
+      console.warn(`[templates] Template retired but audit log failed: ${error.message}`);
+    }
+    json(res, 200, { ok: true, retired: true, alreadyRetired: template.status === "Retired", recoverable: true, auditLogged, template });
   });
 
   router.post("/api/templates/add-project", async (req, res, runtime) => {

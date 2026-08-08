@@ -19,6 +19,7 @@
   .safety-card { order: 3; grid-column: 1 / -1; }
   .notion-card { order: 4; grid-column: span 6; }
   .database-card { order: 5; grid-column: span 6; }
+  .maintenance-card { order: 6; grid-column: 1 / -1; }
   .telegram-card { order: 6; grid-column: 1 / -1; }
   .private-contacts-card { order: 7; grid-column: 1 / -1; }
   .ai-card { order: 8; grid-column: 1 / -1; }
@@ -134,6 +135,23 @@
   .database-note { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
   .database-report { margin-top: 12px; border: 1px solid #1d4ed8; border-radius: var(--radius); background: rgba(29,78,216,.08); padding: 12px 14px; color: var(--text); font-size: 12px; line-height: 1.65; white-space: pre-line; }
   .database-report.hidden { display: none; }
+  .identity-maintenance { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+  .maintenance-card .identity-maintenance { border-top:0; margin-top:0; padding-top:0; }
+  .identity-maintenance > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:pointer; list-style:none; color:var(--text); font-weight:800; }
+  .identity-maintenance > summary::-webkit-details-marker { display:none; }
+  .identity-maintenance > summary::after { content:"＋"; color:var(--muted); font-size:18px; }
+  .identity-maintenance[open] > summary::after { content:"−"; }
+  .identity-maintenance-body { padding-top:16px; }
+  .identity-kpis { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin-bottom:16px; }
+  .identity-kpi { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:11px 12px; }
+  .identity-kpi span { display:block; color:var(--muted); font-size:11px; margin-bottom:4px; }
+  .identity-kpi b { display:block; font-size:17px; }
+  .identity-maintenance-section { border-top:1px solid var(--line); padding-top:16px; margin-top:16px; }
+  .identity-maintenance-section h3 { margin:0 0 5px; font-size:15px; }
+  .identity-merge-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; }
+  .identity-plan { margin-top:12px; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.55 var(--font-mono); color:var(--muted); }
+  .identity-value { font:11px/1.45 var(--font-mono); overflow-wrap:anywhere; }
+  .identity-danger { border-color:var(--red)!important; color:var(--red)!important; }
   .safety-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-bottom:16px; }
   .safety-stat { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); padding:11px 12px; }
   .safety-stat span { display:block; color:var(--muted); font-size:11px; margin-bottom:4px; }
@@ -169,7 +187,7 @@
   .model-grid, .model-grid.three { display: grid; grid-template-columns: 1fr; gap: 0; }
   .mode-note { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 13px; line-height: 1.55; }
   @media (max-width: 1050px) {
-    .notion-card, .database-card, .telegram-card, .private-contacts-card, .ai-card, .save-card, .test-card, .safety-card { grid-column: 1 / -1; }
+    .notion-card, .database-card, .maintenance-card, .telegram-card, .private-contacts-card, .ai-card, .save-card, .test-card, .safety-card { grid-column: 1 / -1; }
     .telegram-layout { grid-template-columns: 1fr; }
     .phone-overview { grid-template-columns: 1fr; }
     .ai-mode-row, .ai-columns { grid-template-columns: 1fr; }
@@ -186,7 +204,7 @@
     .phone-card th, .phone-card td { padding-left: 10px; padding-right: 10px; font-size: 12px; }
     .model-grid, .model-grid.three { grid-template-columns: 1fr; }
     .database-stats { grid-template-columns: 1fr; }
-    .safety-stats,.safety-layout,.safety-fields,.safety-fields.two { grid-template-columns:1fr; }
+    .safety-stats,.safety-layout,.safety-fields,.safety-fields.two,.identity-kpis,.identity-merge-grid { grid-template-columns:1fr; }
     .watchdog-setting { grid-template-columns: 1fr; gap: 8px; }
   }
 </style>
@@ -261,6 +279,49 @@
           每页 200 条慢速写回，并保存断点；中途断线或重启后再按会继续。只导入「有来有回」的客户对话，不会写重复。同步只影响这台电脑，不改 Notion、不发 WhatsApp。
         </div>
       </div>
+
+    </div>
+
+    <div class="card maintenance-card">
+      <details class="identity-maintenance" id="data-maintenance">
+        <summary>
+          <span>Advanced Data Maintenance</span>
+          <span class="safety-pill ok" id="identityMaintenanceBadge">检查中</span>
+        </summary>
+        <div class="identity-maintenance-body">
+          <div class="card-kicker">Customer Search 负责日常查找；这里仅处理少见的 WhatsApp identity 冲突与可逆客户合并。</div>
+          <div class="identity-kpis" style="margin-top:14px">
+            <div class="identity-kpi"><span>Identity Schema</span><b id="identitySchemaState">检查中</b></div>
+            <div class="identity-kpi"><span>Open Conflicts</span><b id="identityConflictCount">0</b></div>
+            <div class="identity-kpi"><span>Active Campaigns</span><b id="identityActiveCampaigns">0</b></div>
+          </div>
+          <div class="actions"><button class="btn" type="button" id="btnRefreshIdentityMaintenance">刷新 Identity 状态</button></div>
+          <div class="status-line" id="identityMaintenanceStatus">读取 Customer Identity 状态...</div>
+
+          <section class="identity-maintenance-section">
+            <h3>Open Identity Conflicts</h3>
+            <div class="card-kicker">系统不会凭姓名猜测。KEEP 保留现有绑定；MOVE 必须输入明确 customer_id；DISMISS 只关闭警示。</div>
+            <div style="overflow-x:auto;margin-top:12px">
+              <table><thead><tr><th>Identity</th><th>Customers</th><th>Evidence</th><th>Action</th></tr></thead><tbody id="identityConflictBody"><tr><td colspan="4" class="muted">读取中...</td></tr></tbody></table>
+            </div>
+          </section>
+
+          <section class="identity-maintenance-section">
+            <h3>Audited Customer Merge</h3>
+            <div class="card-kicker">先 Dry-run。Apply 需要精确输入 MERGE_CUSTOMER_IDENTITIES；有活动 Campaign 时自动封锁。</div>
+            <div class="identity-merge-grid">
+              <label class="fld"><span>保留的 customer_id</span><input id="identityMergeSurvivor" autocomplete="off" /></label>
+              <label class="fld"><span>重复的 customer_id</span><input id="identityMergeDuplicate" autocomplete="off" /></label>
+              <label class="fld"><span>合并原因</span><input id="identityMergeReason" autocomplete="off" placeholder="为什么要合并" /></label>
+            </div>
+            <div class="actions">
+              <button class="btn" type="button" id="btnPlanIdentityMerge">Dry-run</button>
+              <button class="btn identity-danger" type="button" id="btnApplyIdentityMerge" disabled>Apply Merge</button>
+            </div>
+            <div class="identity-plan" id="identityMergeResult"></div>
+          </section>
+        </div>
+      </details>
     </div>
 
     <div class="card telegram-card">
@@ -635,6 +696,8 @@ let qrTimer = null;
 let qrTicks = 0;
 let savedWorkInboxIgnoreCount = 0;
 let campaignSafetyPolicy = null;
+let identityMaintenanceState = { mutationsBlocked: true };
+let identityMergePlan = null;
 async function api(url, body) {
   const res = await fetch(url, body === undefined ? undefined : {
     method: "POST",
@@ -886,6 +949,103 @@ async function refreshLocalDatabase() {
   } finally {
     btn.disabled = false;
     btn.textContent = "刷新状态";
+  }
+}
+
+function renderIdentityConflicts(records) {
+  const rows = Array.isArray(records) ? records : [];
+  $("identityConflictBody").innerHTML = rows.length ? rows.map((row) => {
+    const moveDisabled = identityMaintenanceState.mutationsBlocked ? " disabled" : "";
+    return `<tr><td><b>${escapeHtml(row.identityType)}</b><div class="identity-value">${escapeHtml(row.identityValue)}</div></td><td class="identity-value">${escapeHtml(row.existingCustomerId || "—")}<br>↔ ${escapeHtml(row.candidateCustomerId || "—")}</td><td><span class="muted">${escapeHtml(row.evidence?.source || "—")}</span><br>${escapeHtml(row.lastSeenAt || "")}</td><td><div class="actions"><button class="btn" type="button" data-identity-action="KEEP_EXISTING" data-conflict-id="${escapeHtml(row.conflictId)}">KEEP</button><button class="btn" type="button" data-identity-action="MOVE_IDENTITY" data-conflict-id="${escapeHtml(row.conflictId)}"${moveDisabled}>MOVE</button><button class="btn" type="button" data-identity-action="DISMISS" data-conflict-id="${escapeHtml(row.conflictId)}">DISMISS</button></div></td></tr>`;
+  }).join("") : '<tr><td colspan="4" class="muted">没有 open identity conflict。</td></tr>';
+}
+
+async function refreshIdentityMaintenance() {
+  const btn = $("btnRefreshIdentityMaintenance");
+  btn.disabled = true;
+  btn.textContent = "查询中...";
+  try {
+    const [status, conflicts] = await Promise.all([
+      api("/api/customer-identity/status"),
+      api("/api/customer-identity/conflicts"),
+    ]);
+    identityMaintenanceState = status;
+    const ready = status.schema?.ready === true;
+    const conflictCount = Number(conflicts.count || 0);
+    const activeCount = Number(status.activeCampaigns?.length || 0);
+    $("identitySchemaState").textContent = ready ? "READY" : "SETUP REQUIRED";
+    $("identityConflictCount").textContent = String(conflictCount);
+    $("identityActiveCampaigns").textContent = String(activeCount);
+    $("identityMaintenanceBadge").textContent = !ready ? "SETUP REQUIRED" : conflictCount ? `${conflictCount} CONFLICT` : "HEALTHY";
+    $("identityMaintenanceBadge").className = `safety-pill ${!ready || conflictCount ? "warn" : "ok"}`;
+    $("identityMaintenanceStatus").textContent = !ready
+      ? "Customer Identity schema 尚未就绪；维护操作已封锁。"
+      : activeCount
+        ? `${activeCount} 个活动 Campaign；MOVE 与 Customer Merge 已封锁。`
+        : "Identity schema 正常；没有活动 Campaign。";
+    $("btnApplyIdentityMerge").disabled = !identityMergePlan || status.mutationsBlocked;
+    renderIdentityConflicts(conflicts.records);
+  } catch (error) {
+    $("identityMaintenanceBadge").textContent = "CHECK FAILED";
+    $("identityMaintenanceBadge").className = "safety-pill bad";
+    $("identityMaintenanceStatus").textContent = `读取失败：${error.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "刷新 Identity 状态";
+  }
+}
+
+async function resolveIdentityConflict(conflictId, action) {
+  let resolvedCustomerId = "";
+  if (action === "MOVE_IDENTITY") {
+    resolvedCustomerId = (prompt("输入明确的目标 customer_id。系统不会自行猜测：") || "").trim();
+    if (!resolvedCustomerId) return;
+  } else if (!confirm(`确认 ${action} 这个 identity conflict？`)) {
+    return;
+  }
+  try {
+    await api("/api/customer-identity/conflicts/resolve", { conflictId, action, resolvedCustomerId });
+    await refreshIdentityMaintenance();
+    message("Identity conflict 已处理。", "");
+  } catch (error) {
+    message("", error.message);
+  }
+}
+
+async function planIdentityMerge() {
+  identityMergePlan = null;
+  $("btnApplyIdentityMerge").disabled = true;
+  try {
+    const data = await api("/api/customer-identity/merge/plan", {
+      survivingCustomerId: $("identityMergeSurvivor").value.trim(),
+      duplicateCustomerId: $("identityMergeDuplicate").value.trim(),
+    });
+    identityMergePlan = data.result;
+    $("identityMergeResult").textContent = JSON.stringify(data.result, null, 2);
+    $("btnApplyIdentityMerge").disabled = identityMaintenanceState.mutationsBlocked;
+  } catch (error) {
+    $("identityMergeResult").textContent = `Dry-run 失败：${error.message}`;
+  }
+}
+
+async function applyIdentityMerge() {
+  if (!identityMergePlan) return;
+  const confirmation = prompt("输入 MERGE_CUSTOMER_IDENTITIES 执行合并：") || "";
+  if (confirmation !== "MERGE_CUSTOMER_IDENTITIES") return;
+  try {
+    const data = await api("/api/customer-identity/merge/apply", {
+      survivingCustomerId: $("identityMergeSurvivor").value.trim(),
+      duplicateCustomerId: $("identityMergeDuplicate").value.trim(),
+      reason: $("identityMergeReason").value.trim(),
+      confirmation,
+    });
+    $("identityMergeResult").textContent = JSON.stringify(data.result, null, 2);
+    identityMergePlan = null;
+    $("btnApplyIdentityMerge").disabled = true;
+    await refreshIdentityMaintenance();
+    message("Customer merge 已完成并写入可逆审计记录。", "");
+  } catch (error) {
+    message("", error.message);
   }
 }
 
@@ -1408,6 +1568,14 @@ $("btnInitDatabase").addEventListener("click", async () => {
 });
 
 $("btnRefreshDatabase").addEventListener("click", refreshLocalDatabase);
+$("btnRefreshIdentityMaintenance").addEventListener("click", refreshIdentityMaintenance);
+$("btnPlanIdentityMerge").addEventListener("click", planIdentityMerge);
+$("btnApplyIdentityMerge").addEventListener("click", applyIdentityMerge);
+$("identityConflictBody").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-identity-action]");
+  if (!button) return;
+  resolveIdentityConflict(button.dataset.conflictId, button.dataset.identityAction);
+});
 
 // ---- 聊天室历史同步（背景跑 + 轮询进度）----
 let syncHistoryTimer = null;
@@ -1568,7 +1736,12 @@ refreshInstances();
 refreshTelegramFilters();
 refreshWorkInboxIgnore();
 refreshLocalDatabase();
+refreshIdentityMaintenance();
 refreshCampaignSafety();
+if (new URLSearchParams(window.location.search).get("section") === "data-maintenance") {
+  $("data-maintenance").open = true;
+  $("data-maintenance").scrollIntoView({ block: "start" });
+}
 setInterval(() => { if (!qrTimer) refreshInstances(); }, 10000);
 </script>
 </body>

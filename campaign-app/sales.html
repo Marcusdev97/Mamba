@@ -4,29 +4,65 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Mamba Sales Pipeline</title>
+  <link rel="stylesheet" href="/assets/mamba.css" />
   <style>
-    :root{color-scheme:dark;--bg:#07110f;--panel:#0d1b18;--line:#203a34;--text:#edf8f4;--muted:#8eaaa1;--green:#45d99c;--amber:#f2b84b;--red:#ff6b73}
-    *{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#07110f,#0b151b);color:var(--text);font:14px Inter,system-ui,sans-serif}.wrap{max-width:1450px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center}.top h1{margin:0;font-size:27px}.sub{color:var(--muted);margin-top:5px}.tabs{display:flex;gap:8px;margin:22px 0}.tabs button,.btn{border:1px solid var(--line);background:#10221e;color:var(--text);padding:9px 13px;border-radius:9px;cursor:pointer}.tabs button.active,.btn.primary{background:var(--green);color:#052018;border-color:var(--green);font-weight:700}.cards{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px}.card,.panel{background:rgba(13,27,24,.94);border:1px solid var(--line);border-radius:13px}.card{padding:15px}.card span{display:block;color:var(--muted);font-size:12px}.card b{display:block;font-size:25px;margin-top:8px}.panel{padding:17px;margin-top:14px}.toolbar{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:12px}input,select,textarea{background:#081411;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;width:100%}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #173029;padding:10px 8px}th{color:var(--muted);font-size:11px;text-transform:uppercase}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#15342b;color:#8df0c5;font-size:11px}.late{color:var(--red)}.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}.form{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.form label{color:var(--muted);font-size:12px}.form label span{display:block;margin-bottom:5px}.wide{grid-column:1/-1}.timeline{max-height:520px;overflow:auto}.event{padding:11px 0;border-bottom:1px solid #173029}.event small{color:var(--muted)}.hidden{display:none!important}.empty{color:var(--muted);padding:20px;text-align:center}.status{color:var(--muted);min-height:20px}@media(max-width:950px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.form{grid-template-columns:1fr}.wrap{padding:18px}}
+    .wrap { max-width: 1180px; }
+    .sub { color: var(--muted); font-size: var(--fs-sub); }
+    .tabs { margin: 0 0 var(--sp-4); }
+    .page-status { min-height: var(--sp-5); margin-bottom: var(--sp-3); color: var(--muted); font-size: var(--fs-sub); }
+    .summary-grid { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: var(--sp-2); }
+    .summary-card { min-width: 0; padding: var(--sp-4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-l); }
+    .summary-card span { display: block; color: var(--muted); font-size: var(--fs-sub); }
+    .summary-card b { display: block; margin-top: var(--sp-2); font-size: var(--fs-h1); font-weight: 700; }
+    .panel { min-width: 0; margin-top: var(--sp-4); padding: var(--sp-4); overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-l); }
+    .panel > h3 { margin: 0 0 var(--sp-3); color: var(--muted); font-size: var(--fs-h2); font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+    .toolbar input { flex: 2 1 260px; }
+    .toolbar select { flex: 1 1 160px; }
+    .detail-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: var(--sp-4); }
+    .form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+    .form label { color: var(--muted); font-size: var(--fs-sub); }
+    .form label span { display: block; margin-bottom: var(--sp-1); }
+    .form select { width: 100%; }
+    .profile-actions { margin-top: var(--sp-4); }
+    .commission-heading { margin-top: var(--sp-5) !important; }
+    .commission-summary { margin-bottom: var(--sp-3); }
+    .commission-action { margin-top: var(--sp-3); }
+    .timeline { max-height: 520px; overflow: auto; }
+    .event { padding: var(--sp-3) 0; border-bottom: 1px solid var(--line); }
+    .event small,
+    td small { color: var(--muted); font-size: var(--fs-tiny); }
+    .late { color: var(--red); }
+    .empty { padding: var(--sp-5); color: var(--muted); font-size: var(--fs-sub); text-align: center; }
+    tbody tr[data-lead] { cursor: pointer; }
+    @media (max-width: 950px) {
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .detail-grid { grid-template-columns: 1fr; }
+      .form { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      header.top { align-items: flex-start; gap: var(--sp-3); }
+    }
   </style>
 </head>
 <body>
 <main class="wrap">
-  <div class="top"><div><h1>Sales Pipeline</h1><div class="sub">One stage, one next action, one auditable follow-up queue.</div></div><button class="btn" id="refresh">Refresh tasks</button></div>
-  <div class="tabs"><button data-view="today" class="active">Today</button><button data-view="customers">Customers</button></div>
-  <div id="status" class="status"></div>
+  <header class="top"><div><h1>Sales Pipeline</h1><div class="sub">One stage, one next action, one auditable follow-up queue.</div></div><button class="btn" id="refresh">Refresh tasks</button></header>
+  <div class="seg tabs"><button data-view="today" class="active">Today</button><button data-view="customers">Customers</button></div>
+  <div id="status" class="page-status"></div>
 
   <section id="todayView">
-    <div class="cards" id="cards"></div>
+    <div class="summary-grid" id="cards"></div>
     <div class="panel"><h3>Priority queue</h3><div id="taskList"></div></div>
   </section>
 
   <section id="customersView" class="hidden">
     <div class="panel">
-      <div class="toolbar"><input id="search" placeholder="Search name, phone or project" style="max-width:320px"><select id="stageFilter" style="max-width:190px"><option value="">All stages</option></select><select id="tempFilter" style="max-width:160px"><option value="">All temperatures</option><option>HOT</option><option>WARM</option><option>COLD</option><option>NURTURE</option><option>STOP</option></select><button class="btn" id="find">Search</button></div>
+      <div class="toolbar"><input id="search" placeholder="Search name, phone or project"><select id="stageFilter"><option value="">All stages</option></select><select id="tempFilter"><option value="">All temperatures</option><option>HOT</option><option>WARM</option><option>COLD</option><option>NURTURE</option><option>STOP</option></select><button class="btn" id="find">Search</button></div>
       <div id="leadList"></div>
     </div>
-    <div id="detail" class="grid hidden">
-      <div class="panel"><h3 id="customerTitle">Customer</h3><div class="form" id="leadForm"></div><div class="toolbar" style="margin-top:14px"><button class="btn primary" id="saveLead">Save profile</button><button class="btn" id="promote">Create opportunity</button></div><h3>Commission</h3><div id="commissionSummary" class="sub" style="margin-bottom:10px"></div><div class="form" id="commissionForm"></div><button class="btn" id="saveCommission" style="margin-top:12px">Update commission</button></div>
+    <div id="detail" class="detail-grid hidden">
+      <div class="panel"><h3 id="customerTitle">Customer</h3><div class="form" id="leadForm"></div><div class="toolbar profile-actions"><button class="btn primary" id="saveLead">Save profile</button><button class="btn" id="promote">Create opportunity</button></div><h3 class="commission-heading">Commission</h3><div id="commissionSummary" class="sub commission-summary"></div><div class="form" id="commissionForm"></div><button class="btn commission-action" id="saveCommission">Update commission</button></div>
       <div class="panel"><h3>Activity timeline</h3><div id="timeline" class="timeline"></div></div>
     </div>
   </section>
@@ -41,9 +77,9 @@ async function api(url,options={}){const r=await fetch(url,{headers:{"content-ty
 function note(message,error=false){$("status").textContent=message;$("status").style.color=error?"var(--red)":"var(--muted)"}
 stages.forEach(s=>$("stageFilter").insertAdjacentHTML("beforeend",`<option>${s}</option>`));
 document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-view]").forEach(x=>x.classList.toggle("active",x===b));$("todayView").classList.toggle("hidden",b.dataset.view!=="today");$("customersView").classList.toggle("hidden",b.dataset.view!=="customers");if(b.dataset.view==="customers")loadLeads()});
-async function loadToday(){try{note("Refreshing Today queue…");const d=await api("/api/sales/today");const labels={waitingForReply:"Waiting for Reply",dueToday:"Due Today",overdue:"Overdue",warmOver7Days:"Warm > 7 Days",appointmentConfirmation:"Appointment Confirmation",bookingSpaAction:"Booking / SPA"};$("cards").innerHTML=Object.entries(labels).map(([k,l])=>`<div class="card"><span>${l}</span><b>${d.counts[k]||0}</b></div>`).join("");const all=[...new Map(Object.values(d.buckets).flat().map(t=>[t.taskId,t])).values()].sort((a,b)=>(b.priorityScore||0)-(a.priorityScore||0));$("taskList").innerHTML=all.length?`<table><thead><tr><th>Priority</th><th>Customer</th><th>Task</th><th>Due</th><th>Next action</th><th></th></tr></thead><tbody>${all.map(t=>`<tr><td><span class="pill">${esc(t.priority)} · ${t.priorityScore}</span></td><td>${esc(t.customerName)}<br><small>${esc(t.projectCode)}</small></td><td>${esc(t.taskType)}<br><small>${esc(t.reason)}</small></td><td class="${new Date(t.dueAt)<new Date()?"late":""}">${fmt(t.dueAt)}</td><td>${esc(t.nextAction)}</td><td><button class="btn" data-complete="${esc(t.taskId)}">Complete</button></td></tr>`).join("")}</tbody></table>`:`<div class="empty">No open follow-up tasks.</div>`;document.querySelectorAll("[data-complete]").forEach(b=>b.onclick=()=>completeTask(b.dataset.complete));note(`Generated ${fmt(d.generatedAt)}`)}catch(e){note(e.message,true)}}
+async function loadToday(){try{note("Refreshing Today queue…");const d=await api("/api/sales/today");const labels={waitingForReply:"Waiting for Reply",dueToday:"Due Today",overdue:"Overdue",warmOver7Days:"Warm > 7 Days",appointmentConfirmation:"Appointment Confirmation",bookingSpaAction:"Booking / SPA"};$("cards").innerHTML=Object.entries(labels).map(([k,l])=>`<div class="summary-card"><span>${l}</span><b>${d.counts[k]||0}</b></div>`).join("");const all=[...new Map(Object.values(d.buckets).flat().map(t=>[t.taskId,t])).values()].sort((a,b)=>(b.priorityScore||0)-(a.priorityScore||0));$("taskList").innerHTML=all.length?`<table><thead><tr><th>Priority</th><th>Customer</th><th>Task</th><th>Due</th><th>Next action</th><th></th></tr></thead><tbody>${all.map(t=>`<tr><td><span class="badge b-sent">${esc(t.priority)} · ${t.priorityScore}</span></td><td>${esc(t.customerName)}<br><small>${esc(t.projectCode)}</small></td><td>${esc(t.taskType)}<br><small>${esc(t.reason)}</small></td><td class="${new Date(t.dueAt)<new Date()?"late":""}">${fmt(t.dueAt)}</td><td>${esc(t.nextAction)}</td><td><button class="btn sm" data-complete="${esc(t.taskId)}">Complete</button></td></tr>`).join("")}</tbody></table>`:`<div class="empty">No open follow-up tasks.</div>`;document.querySelectorAll("[data-complete]").forEach(b=>b.onclick=()=>completeTask(b.dataset.complete));note(`Generated ${fmt(d.generatedAt)}`)}catch(e){note(e.message,true)}}
 async function completeTask(taskId){const outcome=prompt("Record the task outcome:");if(!outcome)return;try{await api("/api/sales/tasks/complete",{method:"POST",body:JSON.stringify({taskId,outcome})});await loadToday()}catch(e){note(e.message,true)}}
-async function loadLeads(){try{const p=new URLSearchParams({q:$("search").value,stage:$("stageFilter").value,temperature:$("tempFilter").value});const d=await api(`/api/sales/leads?${p}`);$("leadList").innerHTML=d.leads.length?`<table><thead><tr><th>Customer</th><th>Project</th><th>Stage</th><th>Temperature</th><th>Next action</th><th>Follow-up</th><th>Tasks</th></tr></thead><tbody>${d.leads.map(l=>`<tr data-lead="${esc(l.projectLeadKey)}" style="cursor:pointer"><td>${esc(l.name)}<br><small>${esc(l.phone)}</small></td><td>${esc(l.projectCode)}</td><td><span class="pill">${esc(l.salesStage)}</span></td><td>${esc(l.temperature)}</td><td>${esc(l.nextAction||"-")}</td><td>${fmt(l.nextFollowUpAt)}</td><td>${l.openTaskCount}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">No project leads found.</div>`;document.querySelectorAll("[data-lead]").forEach(r=>r.onclick=()=>loadDetail(r.dataset.lead))}catch(e){note(e.message,true)}}
+async function loadLeads(){try{const p=new URLSearchParams({q:$("search").value,stage:$("stageFilter").value,temperature:$("tempFilter").value});const d=await api(`/api/sales/leads?${p}`);$("leadList").innerHTML=d.leads.length?`<table><thead><tr><th>Customer</th><th>Project</th><th>Stage</th><th>Temperature</th><th>Next action</th><th>Follow-up</th><th>Tasks</th></tr></thead><tbody>${d.leads.map(l=>`<tr data-lead="${esc(l.projectLeadKey)}"><td>${esc(l.name)}<br><small>${esc(l.phone)}</small></td><td>${esc(l.projectCode)}</td><td><span class="badge b-sent">${esc(l.salesStage)}</span></td><td>${esc(l.temperature)}</td><td>${esc(l.nextAction||"-")}</td><td>${fmt(l.nextFollowUpAt)}</td><td>${l.openTaskCount}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">No project leads found.</div>`;document.querySelectorAll("[data-lead]").forEach(r=>r.onclick=()=>loadDetail(r.dataset.lead))}catch(e){note(e.message,true)}}
 const field=(label,key,value,type="text",options=[])=>`<label><span>${label}</span>${type==="select"?`<select data-field="${key}">${options.map(x=>`<option ${x===value?"selected":""}>${x}</option>`).join("")}</select>`:`<input data-field="${key}" type="${type}" value="${esc(value??"")}">`}</label>`;
 async function loadDetail(key){
   try{

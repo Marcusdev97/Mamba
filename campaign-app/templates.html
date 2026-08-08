@@ -46,6 +46,9 @@
   .chip.other { color: #94a3b8; }
   .tpl { border: 1px solid #1f2a3d; border-radius: 10px; padding: 10px 12px; margin-top: 8px; cursor: pointer; background: #0f1728; }
   .tpl:hover { border-color: #38bdf8; }
+  .template-actions { display: flex; align-items: center; gap: 8px; }
+  .delete-template-btn { margin-left: auto; border-color: var(--red); color: var(--red); background: transparent; }
+  .delete-template-btn:hover { border-color: var(--red); background: var(--red-bg); }
   .tpl.dragging { opacity: .45; border-color: #38bdf8; }
   .flow.drop-ready { outline: 2px dashed #38bdf8; outline-offset: 4px; background: #17233a; }
   .flow.drop-ready .drop-hint { color: #7dd3fc; border-color: #38bdf8; }
@@ -104,7 +107,7 @@
     <span id="summary" class="pill"></span>
   </div>
 
-  <div class="note">流程:客户 <b>没回复</b> 就按天数继续下一轮;<b>一旦回复</b>就自动退出序列、转人工。绿色=有 Active 模板可发,黄色=只有 Testing,红色=缺模板要补。点每个小标签看内容;也可以直接拖模板到另一个 Flow 移动。</div>
+  <div class="note">流程:客户 <b>没回复</b> 就按天数继续下一轮;<b>一旦回复</b>就自动退出序列、转人工。绿色=有 Active 模板可发,黄色=只有 Testing,红色=缺模板要补。点模板可编辑,拖到另一个 Flow 可移动;旧项目模板可按 Delete 安全移出正常列表,历史记录仍保留在 Notion。</div>
 
   <div class="mobile-preview">
     <div class="mp-head">
@@ -129,7 +132,7 @@
   <div class="modal-box">
     <div class="modal-head" id="tplHead">模板内容</div>
     <div id="tplContent" class="modal-content"></div>
-    <div class="modal-actions"><button class="danger" id="tplDeleteBtn" style="display:none;">🗑 删除</button><button onclick="closeModal()">取消</button><button class="primary" id="tplSaveBtn">保存到 Notion</button></div>
+    <div class="modal-actions"><button class="danger" id="tplDeleteBtn" style="display:none;">🗑 Delete Template</button><button onclick="closeModal()">取消</button><button class="primary" id="tplSaveBtn">保存到 Notion</button></div>
   </div>
 </div>
 <div class="lb hidden" id="lightbox" onclick="closeLightbox()"><img id="lbImg" src="" alt=""></div>
@@ -359,9 +362,33 @@ async function saveTemplate(pageId) {
   } catch (e) { toast("保存失败:" + e.message, true); }
 }
 async function deleteTemplate(pageId) {
-  if (!confirm("确定删除这条模板?会移到 Notion 垃圾桶(可在 Notion 恢复)。")) return;
-  try { await api("/api/templates/delete", { pageId }); toast("已删除"); closeModal(); load(); }
-  catch (e) { toast("删除失败:" + e.message, true); }
+  const t = TEMPLATES.find((item) => item.pageId === pageId);
+  if (!t) return toast("找不到要删除的 Template,请刷新后再试。", true);
+  const target = [
+    `Project: ${CURRENT_PROJECT || "-"}`,
+    `Template: ${t.name || "-"}`,
+    `Flow: ${t.flowTopic || "-"}`,
+    `Language / Part: ${t.language || "-"} / ${t.part || "-"}`,
+    `Status: ${t.status || "-"}`,
+  ].join("\n");
+  if (!confirm(`Delete this Template?\n\n${target}\n\n它会从正常列表消失并在 Notion 标为 Retired。历史发送统计和图片文件不会删除。`)) return;
+  const modalDelete = document.getElementById("tplDeleteBtn");
+  modalDelete.disabled = true;
+  try {
+    await api("/api/templates/delete", {
+      pageId,
+      project: CURRENT_PROJECT,
+      templateName: t.name || "",
+      confirmation: "RETIRE_TEMPLATE",
+    });
+    toast("✅ Template 已删除;历史记录保留在 Notion");
+    closeModal();
+    await load();
+  } catch (e) {
+    toast("删除失败:" + e.message, true);
+  } finally {
+    modalDelete.disabled = false;
+  }
 }
 
 // ---- WhatsApp-style preview ----
@@ -472,7 +499,7 @@ function render() {
             if (t.mediaUrl) imgHtml = `<img class="thumb" src="${esc(t.mediaUrl)}" alt="" onclick="event.stopPropagation(); openLightbox('${esc(t.mediaUrl)}')">` + `<div class="imgok">✅ 本地有图(点图看大图),发送会带图</div>` + rmBtn;
             else if (t.imageName) imgHtml = `<div class="imgwarn">⚠️ 有图片名「${esc(t.imageName)}」但<b>本地没有图片文件</b> → 发送不带图,点开上传</div>` + rmBtn;
             return `<div class="tpl" draggable="true" onclick="editTemplate('${esc(t.pageId)}')" ondragstart="dragTemplateStart(event,'${esc(t.pageId)}')" ondragend="dragTemplateEnd(event)">
-                <div><span class="chip ${sc}">${esc(t.language || "?")} · ${esc(t.part || "?")} · ${esc(t.status || "")}</span></div>
+                <div class="template-actions"><span class="chip ${sc}">${esc(t.language || "?")} · ${esc(t.part || "?")} · ${esc(t.status || "")}</span><button type="button" class="chip delete-template-btn" onclick="event.stopPropagation(); deleteTemplate('${esc(t.pageId)}')">🗑 Delete</button></div>
                 ${textHtml}
                 ${imgHtml}
               </div>`;

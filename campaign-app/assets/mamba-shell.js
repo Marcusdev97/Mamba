@@ -12,11 +12,9 @@
       { code: "CR", label: "Chat Room", href: "/inbox", paths: ["/inbox"] },
       { code: "SP", label: "Sales Pipeline", href: "/sales", paths: ["/sales", "/follow-up"] },
       { code: "CS", label: "Customer Search", href: "/lookup", paths: ["/lookup"] },
-      { code: "CI", label: "Customer Identity", href: "/customer-identity", paths: ["/customer-identity"] },
       { code: "RF", label: "Refresh Customers", href: "/refresh", paths: ["/refresh"] },
     ] },
     { title: "Campaigns", links: [
-      { code: "CM", label: "Campaign Planning", href: "/campaigns", paths: ["/campaigns"] },
       { code: "CP", label: "Campaign Center", href: "/send", paths: ["/send", "/flow-1", "/next-flow"] },
       { code: "TF", label: "Templates & Flows", href: "/templates", paths: ["/templates"] },
       { code: "CA", label: "Campaign Automations", href: "/campaign-todo", paths: ["/campaign-todo"], wip: true },

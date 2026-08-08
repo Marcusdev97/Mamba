@@ -22,9 +22,10 @@ assert.equal(normalizeIdentityValue("PHONE_E164", "+60 12-000 0001"), "601200000
 assert.equal(normalizeIdentityValue("PHONE_E164", "0120000001"), "60120000001");
 assert.equal(normalizeIdentityValue("WHATSAPP_LID", "999:12@lid"), "999");
 
-const dashboardHtml = await fs.readFile(new URL("./customer-identity.html", import.meta.url), "utf8");
-const dashboardScript = dashboardHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
-assert.doesNotThrow(() => new vm.Script(dashboardScript), "Customer Identity dashboard JavaScript must parse");
+const settingsHtml = await fs.readFile(new URL("./settings.html", import.meta.url), "utf8");
+const settingsScript = settingsHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
+assert.match(settingsHtml, /id="data-maintenance"/, "Settings must contain guarded Customer Identity maintenance");
+assert.doesNotThrow(() => new vm.Script(settingsScript), "Settings Customer Identity maintenance JavaScript must parse");
 
 const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mamba-customer-identity-"));
 const dataDir = path.join(rootDir, "campaign-data");

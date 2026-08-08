@@ -17,7 +17,6 @@ const HTML_ROUTES = {
   "/logs": "logs.html",
   "/notion-sync": "notion-sync.html",
   "/conversations": "conversations.html",
-  "/customer-identity": "customer-identity.html",
   "/follow-up": "sales.html",
   "/sales": "sales.html",
   "/bot-rules": "bot-rules.html",
@@ -27,7 +26,6 @@ const HTML_ROUTES = {
   "/knowledge": "knowledge.html",
   "/project-brain": "project-brain.html",
   "/send": "send.html",
-  "/campaigns": "campaign-model.html",
   "/dashboard": "dashboard.html",
   "/campaign-todo": "campaign-todo.html",
   "/remote-mamba": "remote-mamba.html",
@@ -119,6 +117,23 @@ export function registerStaticRoutes(router, bootRuntime = null) {
 
     if (url.pathname === "/numbers") {
       res.writeHead(302, { Location: "/settings" });
+      res.end();
+      return true;
+    }
+
+    // Customer lookup remains a daily workspace. Identity conflict and merge
+    // operations are exceptional maintenance, so the old duplicate page now
+    // lands on the guarded Data Maintenance panel in Settings.
+    if (url.pathname === "/customer-identity") {
+      res.writeHead(302, { Location: "/settings?section=data-maintenance" });
+      res.end();
+      return true;
+    }
+
+    // Campaign Center is the single operator workspace for campaign setup and
+    // execution. Preserve old bookmarks without keeping a duplicate UI alive.
+    if (url.pathname === "/campaigns") {
+      res.writeHead(302, { Location: "/send" });
       res.end();
       return true;
     }

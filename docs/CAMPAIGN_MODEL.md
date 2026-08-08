@@ -53,6 +53,10 @@ node scripts/maintenance/migrate-campaign-model.mjs --apply --confirm APPLY_CAMP
 
 Apply 依赖 migration 307，并在任何 `RUNNING`／`SENDING`／`QUEUED_BATCH` run 存在时 fail closed。工具先备份，再执行 `quick_check` 与 `foreign_key_check`。
 
-## 5. UI
+## 5. Operator UI
 
-`/campaigns` 是 Campaign Planning：建立 Draft、Steps、Members 与 Draft Runs，并显示 attribution metrics。它不取代 `/send`；当前版本仍由 Campaign Center 执行 TEST／LIVE。
+独立的 Campaign Planning 页面与专用 CRUD routes 已在 2026-08-09 移除，避免和
+Campaign Center 形成两套相似操作入口。旧 `/campaigns` 网址会转向 `/send`。
+
+底层 Campaign Model、migration 308 tables、legacy Flow projection、membership、outcome
+attribution 与发送 checkpoint 继续保留；移除操作页面不删除或改写任何 Campaign 资料。

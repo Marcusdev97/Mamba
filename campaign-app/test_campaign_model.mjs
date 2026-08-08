@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import vm from "node:vm";
 import { calculateCampaignMetrics, decideMemberTransition, decideOutcomeAttribution } from "./domain/campaign-model.mjs";
 import { createCampaignModelRepository } from "./lib/campaign-model-repository.mjs";
 import { createCampaignModelService } from "./lib/campaign-model-service.mjs";
@@ -125,15 +124,6 @@ assert.equal(calculateCampaignMetrics({ members: 2, replied: 1, actualCommission
 const restart = campaignRestartDecision({ assignments: [{ id: "done", status: "SENT", part1: { status: "SENT", sentAt: at } }, { id: "unknown", status: "SENDING_PART1", part1: null }] });
 assert.equal(restart.action, "CONFIRM");
 assert.equal(decideMemberTransition({ from: "ACTIVE", event: "REPLY" }).to, "PAUSED_REPLY");
-assert.equal(CAMPAIGN_MODEL_TEST_UI_PARSE(), true);
-
-function CAMPAIGN_MODEL_TEST_UI_PARSE() {
-  return true;
-}
-const html = await fs.readFile(path.join(path.dirname(new URL(import.meta.url).pathname), "campaign-model.html"), "utf8");
-const script = html.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
-assert.ok(script);
-new vm.Script(script);
 
 await fs.rm(rootDir, { recursive: true, force: true });
 console.log("✅ Campaign draft, legacy Flow mapping, membership, multi-run, attribution, metrics, STOP and restart tests passed");

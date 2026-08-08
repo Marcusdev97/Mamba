@@ -57,6 +57,9 @@ const repository = createSalesPipelineRepository({ dataDir, sqliteBinary: binary
 const sales = createSalesPipelineService({ repository, clock: () => new Date(now) });
 assert.equal((await sales.schemaStatus()).ready, true);
 const salesHtml = await fs.readFile(new URL("./sales.html", import.meta.url), "utf8");
+assert.match(salesHtml, /<link rel="stylesheet" href="\/assets\/mamba\.css" \/>/, "Sales Pipeline must use the shared Mamba design system");
+assert.doesNotMatch(salesHtml, /<style>[\s\S]*?:root\s*\{/, "Sales Pipeline must not duplicate design tokens");
+assert.match(salesHtml, /<header class="top">/, "Sales Pipeline must use the standard Mamba page header");
 assert.doesNotThrow(() => new vm.Script(salesHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] || ""), "Sales Pipeline UI JavaScript must parse");
 
 // 1. First confirmed outbound moves NEW → CONTACTED and records activity.
