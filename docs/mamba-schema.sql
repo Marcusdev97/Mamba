@@ -1,11 +1,15 @@
 -- =============================================================================
 -- Mamba 本机数据库 Schema(SQLite)—— systematic full design
--- 版本: v3 (target)   生成: 2026-07-17
+-- 版本: v3 base   生成: 2026-07-17
+-- 注意: 当前运行 schema 还必须依次应用 numbered migrations 301–305。
+-- Migration 305 已将稳定「谁」提升为 customers.customer_id；本文件中的
+-- contact_key=phone 是 legacy compatibility key，不再是最终 customer identity。
 --
 -- 设计原则(对应 docs/MAMBA_ARCHITECTURE_ADR.md):
 --   1. SQLite 是本机"运行真相源",Notion 是异步镜像 + 人看的面板。
---   2. 双键策略(见 docs/MAMBA_DATABASE_KEYS.md「Most Important Decision」):
---        contact_key      = 归一化电话           → 回答"这是谁"(全局身份、STOP)
+--   2. Customer Identity + Project Lead 双键策略:
+--        customer_id      = 稳定客户 ID(migration 305) → 回答"这是谁"
+--        contact_key      = 归一化电话           → legacy phone alias、STOP compatibility
 --        project_lead_key = project_code:phone   → 回答"这个人在哪个盘"(flow 状态)
 --   3. 路由用稳定 key,不用会变的东西:
 --        project_code(gen_starz)、device_key(cici_macbook_pro)
@@ -50,9 +54,9 @@ CREATE TABLE IF NOT EXISTS devices (
 -- A3. WhatsApp 连接。两台电脑都可能有 wa_01,所以 instance_name 不是唯一键。
 --     connection_key = device_key::whatsapp_number,与现有 Device Ownership 一致。
 CREATE TABLE IF NOT EXISTS whatsapp_connections (
-  connection_key   TEXT PRIMARY KEY,          -- cici_macbook_pro::601133698121
+  connection_key   TEXT PRIMARY KEY,          -- office_mac::60100000001
   instance_name    TEXT NOT NULL DEFAULT '',  -- wa_01(本机 Evolution 名称,可重复)
-  whatsapp_number  TEXT NOT NULL DEFAULT '',  -- 601133698121
+  whatsapp_number  TEXT NOT NULL DEFAULT '',  -- 60100000001
   owner            TEXT NOT NULL DEFAULT '',
   team             TEXT NOT NULL DEFAULT '',
   device_key       TEXT,                      -- 当前挂在哪台电脑
@@ -105,7 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_contacts_stop ON contacts(stop_flag);
 -- B2. 项目线索 = "一个人 × 一个项目"的一行,承载 flow 序列状态。
 --     业务唯一键 project_lead_key = project_code:phone(同一人可同时在多个盘)。
 CREATE TABLE IF NOT EXISTS project_leads (
-  project_lead_key  TEXT PRIMARY KEY,         -- gen_starz:601133698121
+  project_lead_key  TEXT PRIMARY KEY,         -- sample_project:60100000001
   notion_page_id    TEXT UNIQUE,              -- Notion 镜像页 ID
   contact_key       TEXT NOT NULL,            -- → contacts
   project_code      TEXT NOT NULL,            -- → projects
@@ -312,7 +316,8 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conv_time ON messages(conversation_id, sent_at);
 
--- WhatsApp LID 与电话号码的本机证据映射。confidence 防止低可信来源覆盖高可信来源。
+-- WhatsApp LID 与电话号码的 legacy lookup cache。Migration 305 后 semantic conflict
+-- 由 customer_identities / identity_conflicts 管理；confidence 不授权自动覆盖不同号码。
 CREATE TABLE IF NOT EXISTS lid_map (
   lid         TEXT PRIMARY KEY,
   phone       TEXT NOT NULL,

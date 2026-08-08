@@ -84,12 +84,24 @@
   .change-files summary { width:max-content; max-width:100%; cursor:pointer; color:var(--faint); font-family:var(--font-sans); }
   .change-files div { margin-top:7px; }
   .empty { padding:30px; border:1px dashed var(--line-2); border-radius:var(--radius-l); color:var(--muted); text-align:center; }
+  .contract-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+  .contract-panel { padding:16px; border:1px solid var(--line); border-radius:var(--radius-l); background:var(--panel); }
+  .contract-form { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .contract-form input,.contract-form textarea,.contract-form select { width:100%; padding:9px; color:var(--text); background:var(--panel-2); border:1px solid var(--line); border-radius:var(--radius); }
+  .contract-form textarea { grid-column:1/-1; min-height:72px; }
+  .contract-form button { padding:9px; border:1px solid rgba(37,211,102,.45); border-radius:var(--radius); background:var(--green-bg); color:var(--green); cursor:pointer; }
+  .contract-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .contract-actions button { padding:7px 9px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); color:var(--text); cursor:pointer; }
+  .contract-task { padding:10px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .contract-task:hover { background:var(--panel-2); }
+  .task-status { float:right; color:var(--green); font-size:11px; }
   @media (max-width:900px) {
     .change-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .change-intro { flex-direction:column; }
     .change-standard { justify-content:flex-start; max-width:none; }
   }
   @media (max-width:760px) {
+    .contract-grid { grid-template-columns:1fr; }
     .change-head { flex-direction:column; }
     .change-meta { justify-content:flex-start; max-width:none; }
     .change-compare, .change-details, .verification-list { grid-template-columns:1fr; }
@@ -111,6 +123,11 @@
     </div>
     <span class="badge b-sent" id="updatedAt">读取中</span>
   </header>
+
+  <section class="contract-grid" aria-label="AI Task Contracts">
+    <div class="contract-panel"><h2>Task Contracts</h2><p class="muted">Planner → Builder → Reviewer → Human. Scope drift, protected files and failed tests pause automatically.</p><div id="taskContracts"><div class="empty">正在读取 Task Contracts…</div></div></div>
+    <div class="contract-panel"><h2>New Contract</h2><div class="contract-form"><input id="taskTitle" placeholder="Task title"><select id="taskRisk"><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select><input id="taskBranch" placeholder="Branch, e.g. codex/task"><input id="taskScope" placeholder="Allowed scope, comma separated"><input id="taskFiles" placeholder="Allowed files, comma separated"><textarea id="taskGoal" placeholder="Goal"></textarea><textarea id="taskAcceptance" placeholder="Acceptance criteria, one per line"></textarea><textarea id="taskSteps" placeholder="Steps, one per line"></textarea><button id="createContract">Create planned task</button></div><div class="contract-actions" id="contractActions" hidden><button data-contract-action="approve">Approve</button><button data-contract-action="start">Start step</button><button data-contract-action="file">Record file</button><button data-contract-action="test">Record test</button><button data-contract-action="step">Complete step</button><button data-contract-action="review">Review</button><button data-contract-action="complete">Human complete</button><button data-contract-action="pause">Pause</button><button data-contract-action="rollback">Record rollback</button><button data-contract-action="resume">Resume package</button></div><pre id="taskDetail" class="muted" style="white-space:pre-wrap"></pre></div>
+  </section>
 
   <section class="change-intro" aria-label="AI Changes recording standard">
     <div>
@@ -156,6 +173,13 @@ const today = new Date().toLocaleDateString("en-CA");
 let changes = [];
 let activeFilter = "All";
 let searchTerm = "";
+let selectedContract = null;
+
+async function contractApi(url, options={}) { const response=await fetch(url,{headers:{"content-type":"application/json"},...options}); const data=await response.json(); if(!response.ok||data.ok===false) throw new Error(data.error||"Request failed"); return data; }
+async function selectContract(taskId){selectedContract=await contractApi(`/api/ai-changes/detail?taskId=${encodeURIComponent(taskId)}`);$("contractActions").hidden=false;$("taskDetail").textContent=JSON.stringify(selectedContract,null,2)}
+async function loadContracts(){try{const data=await contractApi("/api/ai-changes");$("taskContracts").innerHTML=data.tasks.length?data.tasks.map(task=>`<div class="contract-task" data-task="${esc(task.taskId)}"><span class="task-status">${esc(task.status)}</span><strong>${esc(task.title)}</strong><div class="muted">${esc(task.riskLevel)} · ${esc(task.branch)}</div></div>`).join(""):"<div class=\"empty\">No Task Contracts.</div>";document.querySelectorAll("[data-task]").forEach(item=>item.onclick=()=>selectContract(item.dataset.task))}catch(error){$("taskContracts").innerHTML=`<div class="empty">${esc(error.message)}</div>`}}
+$('createContract').onclick=async()=>{try{const lines=id=>$(id).value.split(/\n|,/).map(x=>x.trim()).filter(Boolean);await contractApi("/api/ai-changes",{method:"POST",body:JSON.stringify({title:$("taskTitle").value,goal:$("taskGoal").value,riskLevel:$("taskRisk").value,branch:$("taskBranch").value,allowedScope:lines("taskScope"),allowedFiles:lines("taskFiles"),acceptanceCriteria:lines("taskAcceptance"),steps:lines("taskSteps").map(title=>({title}))})});await loadContracts()}catch(error){$("taskDetail").textContent=error.message}};
+document.querySelectorAll("[data-contract-action]").forEach(button=>button.onclick=async()=>{if(!selectedContract)return;const taskId=selectedContract.task.taskId,step=selectedContract.steps.find(item=>item.status==="IN_PROGRESS")||selectedContract.steps.find(item=>["PLANNED","APPROVED","BLOCKED"].includes(item.status)),stepId=step?.stepId,action=button.dataset.contractAction;try{let route=action,body={taskId};if(action==="approve")body.approvedBy=prompt("Approved by:","Marcus")||"";if(action==="start"){route="start-step";body.stepId=stepId}if(action==="file"){body={taskId,stepId,filePath:prompt("File path:")||"",reason:prompt("Why is this file needed?")||""}}if(action==="test"){body={taskId,stepId,command:prompt("Test command:")||"",status:prompt("PASSED / FAILED / SKIPPED:","PASSED")||"",summary:prompt("Test summary:")||""}}if(action==="step"){route="complete-step";body={taskId,stepId,commitSha:prompt("Commit SHA:")||""}}if(action==="review")body={taskId,checklist:{requirementCoverage:true,scope:true,dataLoss:true,duplicateSend:true,tests:true,rollback:true,docs:true}};if(action==="complete")body={taskId,approvedBy:prompt("Final human approver:","Marcus")||""};if(action==="pause")body={taskId,stepId,condition:prompt("Pause condition:","REQUIREMENT_CONFLICT")||"",message:prompt("Reason:")||""};if(action==="rollback")body={taskId,stepId,rollbackRef:prompt("Rollback reference:")||"",approvedBy:prompt("Approved by:","Marcus")||""};if(action==="resume"){const data=await contractApi(`/api/ai-changes/resume-package?taskId=${encodeURIComponent(taskId)}`);$("taskDetail").textContent=JSON.stringify(data,null,2);return}await contractApi(`/api/ai-changes/${route}`,{method:"POST",body:JSON.stringify(body)});await selectContract(taskId);await loadContracts()}catch(error){$("taskDetail").textContent=error.message}});
 
 function searchableText(item) {
   return [
@@ -294,6 +318,7 @@ $("searchInput").addEventListener("input", (event) => {
 });
 
 loadChanges();
+loadContracts();
 </script>
 </body>
 </html>

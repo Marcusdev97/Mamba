@@ -6,12 +6,31 @@ import { FileBlob, SpreadsheetFile } from "./xlsx_compat.mjs";
 import { getTestLeads } from "./campaign_core.mjs";
 import { loadDeviceIdentity } from "./lib/device-identity.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
+import { createSendEligibilityRepository } from "./lib/send-eligibility-repository.mjs";
+import { createSendEligibilityService } from "./lib/send-eligibility-service.mjs";
+import { createSalesPipelineRepository } from "./lib/sales-pipeline-repository.mjs";
+import { createSalesPipelineService } from "./lib/sales-pipeline-service.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
 const campaignDir = path.join(rootDir, "campaign-assets");
 const dataDir = path.join(rootDir, "campaign-data");
 const runsDir = path.join(dataDir, "runs");
+const salesPipeline = createSalesPipelineService({ repository: createSalesPipelineRepository({ dataDir }) });
+const sendEligibility = createSendEligibilityService({
+  repository: createSendEligibilityRepository({ dataDir }),
+  activityObserver: {
+    onSendConfirmed: ({ options, result }) => salesPipeline.recordOutbound({
+      customerId: options.recipient?.customerId,
+      phone: options.recipient?.phone,
+      projectCode: options.projectLead?.projectCode,
+      sourceEvent: result?.messageId || options.jobId,
+      actorId: options.connection?.instanceName || "legacy-runner",
+      occurredAt: result?.sentAt,
+    }),
+    onError: ({ error }) => console.log(`[sales-pipeline] ${error.message}`),
+  },
+});
 
 function normalizePhone(value) {
   let digits = String(value ?? "").replace(/\D/g, "");
@@ -206,28 +225,23 @@ async function sendMedia(instanceName, number, text, relativeMediaPath) {
   return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
 }
 
-function collectMessageObjects(value, found = []) {
-  if (!value || typeof value !== "object") return found;
-  if (value.key && (value.messageTimestamp || value.createdAt)) found.push(value);
-  for (const child of Object.values(value)) collectMessageObjects(child, found);
-  return found;
-}
-
-async function repliedSince(instanceName, phone, sinceIso) {
-  try {
-    const response = await api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
-      method: "POST",
-      body: JSON.stringify({ where: { key: { remoteJid: `${phone}@s.whatsapp.net` } } }),
-    });
-    const since = new Date(sinceIso).getTime();
-    return collectMessageObjects(response).some((message) => {
-      const timestamp = Number(message.messageTimestamp ?? 0);
-      const milliseconds = timestamp < 100000000000 ? timestamp * 1000 : timestamp;
-      return message?.key?.fromMe === false && milliseconds >= since;
-    });
-  } catch {
-    return false;
-  }
+async function sendEligibleMedia(job, partNumber, text, relativeMediaPath) {
+  return sendEligibility.withSendLock({
+    recipient: { phone: job.lead.phone, customerId: job.lead.customerId },
+    projectLead: { projectCode: job.lead.projectCode || config.projectId || config.campaignId },
+    campaign: {
+      campaignId: state.campaignId,
+      runId: state.runId,
+      projectId: config.projectId || config.campaignId,
+      mode: state.mode,
+      flowTopic: config.flowTopic || config.campaignId,
+      startAt: state.startAt,
+      endAt: state.endAt,
+    },
+    connection: { instanceName: job.instanceName, available: true },
+    requestedAction: "FLOW_1",
+    jobId: `${job.id}:part:${partNumber}`,
+  }, () => sendMedia(job.instanceName, job.lead.phone, text, relativeMediaPath));
 }
 
 function summary() {
@@ -264,19 +278,12 @@ async function processJob(job) {
     job.status = "SENDING_PART1";
     await saveState();
     showProgress(`Part 1 -> ${job.lead.name} (${maskPhone(job.lead.phone)}) via ${job.instanceName}`);
-    job.part1 = await sendMedia(job.instanceName, job.lead.phone, job.part1Text, config.part1.media);
+    job.part1 = await sendEligibleMedia(job, 1, job.part1Text, config.part1.media);
     job.status = "WAITING_PART2";
     await saveState();
 
     await wait(config.delivery.partGapSeconds * 1000);
     if (stopped) return;
-
-    if (config.delivery.cancelPart2WhenCustomerReplies && await repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
-      job.status = "REPLIED_WARM";
-      await saveState();
-      showProgress(`Reply detected -> ${job.lead.name}; Part 2 cancelled`);
-      return;
-    }
 
     if (Date.now() > new Date(state.endAt).getTime()) {
       job.status = "PART1_ONLY_END_TIME";
@@ -287,7 +294,7 @@ async function processJob(job) {
     job.status = "SENDING_PART2";
     await saveState();
     showProgress(`Part 2 -> ${job.lead.name} (${maskPhone(job.lead.phone)}) via ${job.instanceName}`);
-    job.part2 = await sendMedia(job.instanceName, job.lead.phone, job.part2Text, config.part2.media);
+    job.part2 = await sendEligibleMedia(job, 2, job.part2Text, config.part2.media);
     job.status = "SENT";
     await saveState();
   } catch (error) {

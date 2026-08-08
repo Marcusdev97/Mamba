@@ -20,10 +20,30 @@ import { makeHub } from "./telegram_hub.mjs";
 import { classifyReplyText } from "./flow_sequence.mjs";
 import { addLocalStop } from "./suppression.mjs";
 import { filterInstancesForDevice, loadDeviceSenderPolicy } from "./lib/device-sender-policy.mjs";
+import { createSendEligibilityRepository } from "./lib/send-eligibility-repository.mjs";
+import { createSendEligibilityService } from "./lib/send-eligibility-service.mjs";
+import { createSalesPipelineRepository } from "./lib/sales-pipeline-repository.mjs";
+import { createSalesPipelineService } from "./lib/sales-pipeline-service.mjs";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(appDir, "..");
 const statePath = path.join(rootDir, "campaign-data", "followup-state.json");
+const salesDataDir = path.join(rootDir, "campaign-data");
+const salesPipeline = createSalesPipelineService({ repository: createSalesPipelineRepository({ dataDir: salesDataDir }) });
+const sendEligibility = createSendEligibilityService({
+  repository: createSendEligibilityRepository({ dataDir: salesDataDir }),
+  activityObserver: {
+    onMeaningfulReply: ({ input, result }) => salesPipeline.recordInbound({
+      customerId: result?.customerId,
+      phone: input.phone,
+      projectCode: input.projectCode,
+      sourceEvent: input.idempotencyKey,
+      category: input.category,
+      occurredAt: input.occurredAt,
+    }),
+    onError: ({ error }) => console.log(`[sales-pipeline] ${error.message}`),
+  },
+});
 
 const TZ = "Asia/Kuala_Lumpur";
 
@@ -158,6 +178,23 @@ async function applyInbound(sync, hit, event, phone = null) {
     // Sequence Status moves off "Running", so the lead drops out of the
     // "Ready for Next Flow" queue until a human deliberately resumes it.
     const verdict = classifyReplyText(event.text);
+    if (verdict.stopFlag) {
+      await sendEligibility.propagateStop({
+        phone,
+        source: "morning_followup",
+        reasonCode: verdict.route || "EXPLICIT_STOP",
+        reason: event.text,
+        idempotencyKey: event.id ? `morning-stop:${event.id}` : "",
+      });
+    } else {
+      await sendEligibility.propagateReply({
+        phone,
+        source: "morning_followup",
+        category: verdict.route || "OTHER",
+        text: event.text,
+        idempotencyKey: event.id ? `morning-reply:${event.id}` : "",
+      });
+    }
     const props = {
       Status: blastChoice("Status", verdict.status),
       "Sequence Status": selProp(verdict.sequenceStatus),

@@ -9,6 +9,9 @@ import { createNotionCrmSyncEngine } from "./lib/notion-crm-sync-engine.mjs";
 import { createNotionCrmSyncRepository } from "./lib/notion-crm-sync-repository.mjs";
 import { createSqliteCli, findSqliteCli } from "./lib/sqlite-cli.mjs";
 import { migrateSqliteNotionSync, sqliteNotionSyncMigrationPlan } from "../scripts/maintenance/migrate-sqlite-notion-sync.mjs";
+import { migrateCustomerIdentity } from "../scripts/maintenance/migrate-customer-identity.mjs";
+import { migrateSendEligibility } from "../scripts/maintenance/migrate-send-eligibility.mjs";
+import { migrateSalesPipeline } from "../scripts/maintenance/migrate-sales-stage-followup.mjs";
 
 const binary = await findSqliteCli();
 if (!binary) {
@@ -54,6 +57,30 @@ const db = await createSqliteCli({ databasePath: local.databasePath, sqliteBinar
 const at = "2026-08-06T00:00:00.000Z";
 await db.exec(`INSERT INTO contacts(contact_key,phone,display_name,created_at,updated_at)
 VALUES ('contact-1','60120000001','Alice','${at}','${at}');`);
+const identityApplied = migrateCustomerIdentity({
+  rootDir,
+  databasePath: local.databasePath,
+  binary,
+  apply: true,
+  confirmation: "APPLY_CUSTOMER_IDENTITY_V1",
+});
+assert.equal(identityApplied.verification.quickCheck, "ok");
+const eligibilityApplied = migrateSendEligibility({
+  rootDir,
+  databasePath: local.databasePath,
+  binary,
+  apply: true,
+  confirmation: "APPLY_SEND_ELIGIBILITY_V1",
+});
+assert.equal(eligibilityApplied.verification.quickCheck, "ok");
+const salesPipelineApplied = migrateSalesPipeline({
+  rootDir,
+  databasePath: local.databasePath,
+  binary,
+  apply: true,
+  confirmation: "APPLY_SALES_PIPELINE_V1",
+});
+assert.equal(salesPipelineApplied.verification.quickCheck, "ok");
 
 let editSequence = 0;
 const pages = [];

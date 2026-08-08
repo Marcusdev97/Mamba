@@ -10,6 +10,11 @@
     "sync:cloudflare-assets": "node cloudflare_assets_sync.mjs",
     "check:cloudflare-assets": "node cloudflare_assets_sync.mjs --dry-run",
     "db:v4:dry-run": "node migrate_v3_to_v4.mjs --dry-run",
+    "db:eligibility:dry-run": "node ../scripts/maintenance/migrate-send-eligibility.mjs --dry-run",
+    "db:sales-pipeline:dry-run": "node ../scripts/maintenance/migrate-sales-stage-followup.mjs --dry-run",
+    "db:campaign-model:dry-run": "node ../scripts/maintenance/migrate-campaign-model.mjs --dry-run",
+    "db:dashboard-ai:dry-run": "node ../scripts/maintenance/migrate-dashboard-ai-auditor.mjs --dry-run",
+    "db:ai-changes:dry-run": "node ../scripts/maintenance/migrate-ai-change-tracking.mjs --dry-run",
     "test:db:v4": "node test_account_device_binding_v4.mjs"
   },
   "dependencies": {

@@ -106,6 +106,7 @@ assert.equal(notInterestedProps["Stop Flag"], undefined, "soft rejection must no
     normalizePhone: (phone) => String(phone || "").replace(/\D/g, ""),
     device,
     updateLocalDisposition: async () => { order.push("local"); return { updated: 1 }; },
+    propagateStop: async () => { order.push("eligibility-stop"); },
     addLocalStop: async () => { order.push("local-stop"); },
     clock: () => fixedNow,
   });
@@ -115,7 +116,7 @@ assert.equal(notInterestedProps["Stop Flag"], undefined, "soft rejection must no
     phone: baseRecord.phone,
     dispositionKey: "DO_NOT_CONTACT",
   });
-  assert.deepEqual(order, ["local", "local-stop", "notion"], "DNC must fail closed locally before Notion");
+  assert.deepEqual(order, ["local", "eligibility-stop", "local-stop", "notion"], "DNC must propagate through central eligibility before Notion");
   assert.equal(result.stopFlag, true);
   assert.equal(cachedRecords[0].stopFlag, true);
   assert.equal(cachedRecords[0].stopReason, "Manual: Do Not Contact");

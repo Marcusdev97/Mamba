@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createSqliteCli, findSqliteCli } from "./lib/sqlite-cli.mjs";
-import { CampaignRunner, getTestLeads } from "./campaign_core.mjs";
+import { getTestLeads } from "./campaign_core.mjs";
 
 assert.deepEqual(getTestLeads(""), [], "没有 TEST_LEADS 时必须 fail closed，不能内建真人号码");
 assert.deepEqual(
@@ -64,33 +64,16 @@ await log.recordOutbound({
   flowTopic: FLOW, source: "blast",
 });
 
-function runnerWith(config = {}) {
-  const runner = new CampaignRunner({
-    config: { delivery: {}, ...config },
-    env: {},
-    conversationLog: log,
-  });
-  runner.state = { mode: "LIVE", templateFlow: FLOW, campaignId: "binastra" };
-  return runner;
-}
-
-const job = (phone) => ({ id: `job_${phone}`, lead: { name: `Lead ${phone}`, phone } });
-
-// --- 昨天收过的人 -> 挡下来 ---
-const runner = runnerWith();
-const blocked = await runner.recentSendSkip(job("60111000111"));
-assert.ok(blocked, "昨天已经收过 Flow 1 的人必须被挡下");
-assert.equal(blocked.status, "SKIPPED_RECENT_SEND");
-assert.match(blocked.error, /已经收过/);
-assert.match(blocked.error, new RegExp(FLOW));
+// The central repository consumes this evidence. The conversation ledger owns
+// only the historical lookup and no longer makes an independent send decision.
+const recentFlow1 = await log.sentFlowSince(["60111000111"], { flowTopic: FLOW, sinceDays: 7 });
+assert.equal(recentFlow1.has("60111000111"), true, "昨天已经收过 Flow 1 的人必须有本机发送证据");
 
 // --- 没收过的人 -> 照发 ---
-assert.equal(await runner.recentSendSkip(job("60111000222")), null, "没收过的人不该被挡");
+assert.equal((await log.sentFlowSince(["60111000222"], { flowTopic: FLOW, sinceDays: 7 })).size, 0, "没收过的人不应出现历史命中");
 
 // --- 不同 flow -> 照发。Flow 2 不能因为收过 Flow 1 就被挡 ---
-const flow2 = runnerWith();
-flow2.state = { mode: "LIVE", templateFlow: "Flow 2 - Layout", campaignId: "binastra" };
-assert.equal(await flow2.recentSendSkip(job("60111000111")), null, "换一个 flow 就该放行");
+assert.equal((await log.sentFlowSince(["60111000111"], { flowTopic: "Flow 2 - Layout", sinceDays: 7 })).size, 0, "不同 flow 不应命中");
 
 // --- 冷却期外 -> 放行 ---
 await log.recordOutbound({
@@ -98,44 +81,9 @@ await log.recordOutbound({
   messageId: "OLD-1", sentAt: new Date(Date.now() - 30 * 24 * 3600_000).toISOString(),
   flowTopic: FLOW, source: "blast",
 });
-assert.equal(await runner.recentSendSkip(job("60111000222")), null, "30 天前发的不该再挡(预设冷却 7 天)");
-const longCooldown = runnerWith({ delivery: { resendCooldownDays: 60 } });
-assert.ok(await longCooldown.recentSendSkip(job("60111000222")), "冷却期拉到 60 天就该挡住那笔 30 天前的");
-
-const refreshRunner = runnerWith();
-refreshRunner.state = {
-  mode: "LIVE",
-  campaignType: "RECYCLE",
-  templateFlow: "Refresh - Reconnect",
-  refreshCooldownDays: 30,
-  campaignId: "binastra",
-};
-assert.ok(
-  await refreshRunner.recentSendSkip(job("60111000111")),
-  "Refresh cooldown must block any recent outbound message, not only the Refresh flow topic",
-);
-
-// --- 关掉冷却 -> 整道闸停用 ---
-const off = runnerWith({ delivery: { resendCooldownDays: 0 } });
-assert.equal(off.resendCooldownDays(), 0, "设成 0 = 停用这道闸");
-
-// --- 读不到纪录 -> 跳过而不是硬发(fail-closed) ---
-const broken = new CampaignRunner({
-  config: { delivery: {} }, env: {},
-  conversationLog: { async sentFlowSince() { throw new Error("database is locked"); } },
-});
-broken.state = { mode: "LIVE", templateFlow: FLOW };
-const failed = await broken.recentSendSkip(job("60111000111"));
-assert.ok(failed, "查不到纪录时必须跳过，不可以默默重发");
-assert.equal(failed.status, "SKIPPED_SEND_CHECK_FAILED");
-assert.match(failed.error, /database is locked/);
-
-// --- flowTopic 的取值顺序 ---
-const topic = runnerWith();
-topic.state = { campaignId: "binastra" };
-assert.equal(topic.flowTopic(), "binastra", "没有 templateFlow 就退回 campaignId");
-topic.state = { templateFlow: "Flow 3", flowLabel: "别的", campaignId: "binastra" };
-assert.equal(topic.flowTopic(), "Flow 3", "templateFlow 优先");
+assert.equal((await log.sentFlowSince(["60111000222"], { flowTopic: FLOW, sinceDays: 7 })).size, 0, "30 天前不应命中 7 天窗口");
+assert.equal((await log.sentFlowSince(["60111000222"], { flowTopic: FLOW, sinceDays: 60 })).has("60111000222"), true, "60 天窗口应命中旧发送");
+assert.equal((await log.sentFlowSince(["60111000111"], { flowTopic: "", sinceDays: 30 })).has("60111000111"), true, "Refresh 可查询任何近期 outbound evidence");
 
 await fs.rm(dataDir, { recursive: true, force: true });
 console.log("✅ all resend guard tests passed");

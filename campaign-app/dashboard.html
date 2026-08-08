@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mamba Action Dashboard</title>
+  <link rel="stylesheet" href="/assets/mamba.css">
+  <style>
+    .wrap { max-width: 1400px; }
+    .top-actions, .toolbar, .metrics, .funnel, .split { display: flex; gap: var(--sp-3); }
+    .top-actions, .toolbar { align-items: center; flex-wrap: wrap; }
+    .toolbar { justify-content: space-between; }
+    .filters { display: grid; grid-template-columns: repeat(6, minmax(130px, 1fr)); gap: var(--sp-3); flex: 1; }
+    .filters .fld { margin: 0; }
+    .metrics, .funnel { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); }
+    .metric { margin: 0; min-width: 0; }
+    .metric strong { display: block; margin-top: var(--sp-2); font-size: 26px; line-height: 1; }
+    .split { display: grid; grid-template-columns: 1.1fr .9fr; }
+    .table-wrap { overflow-x: auto; }
+    .table-wrap table { min-width: 780px; }
+    .status-line { min-height: 22px; margin: var(--sp-2) 0 var(--sp-3); color: var(--muted); font-size: var(--fs-sub); }
+    .overdue { color: var(--red); }
+    .setup { padding: var(--sp-8); text-align: center; }
+    .setup h2 { color: var(--text); font-size: 20px; text-transform: none; letter-spacing: 0; margin: var(--sp-3) 0 var(--sp-2); }
+    .setup p { color: var(--muted); max-width: 620px; margin: 0 auto var(--sp-4); }
+    .setup-actions { display: flex; justify-content: center; gap: var(--sp-2); flex-wrap: wrap; }
+    .empty { color: var(--muted); padding: var(--sp-4) 0; }
+    [hidden] { display: none !important; }
+    @media (max-width: 1050px) {
+      .filters { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+      .metrics, .funnel { grid-template-columns: repeat(3, 1fr); }
+      .split { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .wrap { padding: var(--sp-4); }
+      header.top { align-items: flex-start; }
+      .filters { grid-template-columns: 1fr 1fr; }
+      .metrics, .funnel { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+  <script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <div>
+        <h1>Action Dashboard</h1>
+        <div class="sub">SQLite-only operations view · rules first, AI advisory second.</div>
+      </div>
+      <div class="top-actions">
+        <span class="pill" id="health"><span class="dot"></span>Checking local data…</span>
+      </div>
+    </header>
+
+    <section class="card setup" id="setup" hidden>
+      <span class="badge b-warm">Setup Required</span>
+      <h2>Dashboard data layer is not ready yet</h2>
+      <p id="setupMessage">Your customer data has not been changed. Finish the active Campaign work first, then run the reviewed Dashboard migration.</p>
+      <div class="setup-actions">
+        <a class="btn" href="/settings">Open Settings</a>
+        <button class="btn primary" id="checkSetup" type="button">Check again</button>
+      </div>
+    </section>
+
+    <div id="dashboard" hidden>
+      <section class="card">
+        <h2>Filters</h2>
+        <div class="toolbar">
+          <div class="filters">
+            <label class="fld"><span>From</span><input id="dateFrom" type="date"></label>
+            <label class="fld"><span>To</span><input id="dateTo" type="date"></label>
+            <label class="fld"><span>Project</span><input id="project" type="text" placeholder="All projects"></label>
+            <label class="fld"><span>Campaign</span><input id="campaign" type="text" placeholder="All campaigns"></label>
+            <label class="fld"><span>Agent</span><input id="agent" type="text" placeholder="All agents"></label>
+            <label class="fld"><span>Source</span><select id="source"><option value="">All sources</option><option>BLAST</option><option>RECYCLE</option><option>ADS</option><option>OWN</option></select></label>
+          </div>
+          <button class="btn primary" id="refresh" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <div class="status-line" id="status"></div>
+      <section class="metrics" id="cards"></section>
+
+      <section class="card">
+        <h2>Action Queue</h2>
+        <div class="table-wrap" id="actions"></div>
+      </section>
+
+      <div class="split">
+        <section class="card">
+          <h2>Sales Funnel</h2>
+          <div class="funnel" id="funnel"></div>
+        </section>
+        <section class="card">
+          <h2>AI Audit Quality</h2>
+          <div id="quality"></div>
+          <p class="sub">AI can suggest only. It cannot send, change STOP or stage, book, merge, delete, or change commission.</p>
+        </section>
+      </div>
+
+      <section class="card">
+        <h2>Campaign Performance</h2>
+        <div class="table-wrap" id="campaigns"></div>
+      </section>
+
+      <section class="card">
+        <h2>Opportunity Board</h2>
+        <div class="table-wrap" id="opportunities"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+    const fmt = (value) => value ? new Date(value).toLocaleString("en-MY", { timeZone: "Asia/Kuala_Lumpur" }) : "-";
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, { headers: { "content-type": "application/json" }, ...options });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        const error = new Error(data.message || "Request failed");
+        error.code = data.code || "REQUEST_FAILED";
+        error.payload = data;
+        throw error;
+      }
+      return data;
+    }
+
+    function table(headers, rows) {
+      if (!rows.length) return '<div class="empty">No records.</div>';
+      return `<table><thead><tr>${headers.map((header) => `<th>${esc(header[0])}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((header) => `<td>${header[2] ? header[2](row) : esc(row[header[1]] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    }
+
+    function query() {
+      const params = new URLSearchParams();
+      ["dateFrom", "dateTo", "project", "campaign", "agent", "source"].forEach((key) => {
+        if ($(key).value) params.set(key, $(key).value);
+      });
+      return params;
+    }
+
+    function showSetup(schema = {}) {
+      $("dashboard").hidden = true;
+      $("setup").hidden = false;
+      const missingCount = Array.isArray(schema.missing) ? schema.missing.length : 0;
+      $("setupMessage").textContent = missingCount
+        ? `Your customer data has not been changed. ${missingCount} Dashboard components still need setup. Finish active Campaign work first, then run migration 308 and 309.`
+        : "Your customer data has not been changed. Finish active Campaign work first, then run the reviewed Dashboard migration.";
+      $("health").innerHTML = '<span class="dot" style="background:var(--amber)"></span>Setup Required';
+    }
+
+    async function audit(projectLeadKey, button) {
+      button.disabled = true;
+      button.textContent = "Auditing…";
+      try {
+        const data = await api("/api/dashboard/audit", { method: "POST", body: JSON.stringify({ projectLeadKey }) });
+        alert(`AI score ${data.analysis.score} · ${data.analysis.interest_level}\n${data.analysis.reasons.join("\n")}`);
+        await load();
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Audit";
+      }
+    }
+
+    async function load() {
+      try {
+        $("status").className = "status-line";
+        $("status").textContent = "Reading SQLite…";
+        const data = await api(`/api/dashboard?${query()}`);
+        const labels = {
+          waitingForReply: "Waiting for Marcus",
+          dueToday: "Due today",
+          overdue: "Overdue",
+          warmOver7Days: "Warm > 7 days",
+          appointmentConfirmation: "Confirm appointments",
+          bookingSpaAction: "Booking / SPA",
+        };
+        $("cards").innerHTML = Object.entries(labels).map(([key, label]) => `<div class="card metric"><span class="sub">${esc(label)}</span><strong>${data.actions.counts[key] || 0}</strong></div>`).join("");
+        $("health").innerHTML = `<span class="dot ${data.health.healthy ? "on" : "off"}"></span>SQLite · pending ${data.health.pendingSync || 0} · conflicts ${data.health.identityConflicts || 0}`;
+        $("actions").innerHTML = table([
+          ["Priority", "priority", (row) => `<span class="badge b-go">${esc(row.priority)} · ${row.priorityScore}</span>`],
+          ["Customer", "customerName"], ["Project", "projectCode"], ["Reason", "reason"], ["Stage", "salesStage"], ["Temp", "temperature"],
+          ["Last contact", "lastContactAt", (row) => fmt(row.lastContactAt)], ["Next action", "nextAction"],
+          ["Due", "dueAt", (row) => `<span class="${row.dueAt && new Date(row.dueAt) < new Date() ? "overdue" : ""}">${fmt(row.dueAt)}</span>`],
+          ["Channel", "recommendedChannel"],
+        ], data.actions.actions);
+        $("funnel").innerHTML = data.funnel.map((item) => `<div class="card metric"><span class="sub">${esc(item.stage)}</span><strong>${item.count}</strong></div>`).join("");
+        $("quality").innerHTML = `Analysed <b>${data.quality.analysed}</b> · Reviewed <b>${data.quality.reviewed}</b><br>Acceptance ${data.quality.acceptanceRate == null ? "-" : `${Math.round(data.quality.acceptanceRate * 100)}%`} · Accuracy ${data.quality.classificationAccuracy == null ? "-" : `${Math.round(data.quality.classificationAccuracy * 100)}%`}`;
+        $("campaigns").innerHTML = table([["Campaign", "name"], ["Project", "projectId"], ["Status", "status"], ["Members", "members"], ["Replies", "replies"], ["Appointments", "appointments"], ["Conversions", "conversions"], ["Commission", "attributedCommission"]], data.campaigns);
+        $("opportunities").innerHTML = table([["Customer", "customerName"], ["Project", "projectCode"], ["Human stage", "stage"], ["Temperature", "temperature"], ["Human %", "humanProbability"], ["AI score", "aiScore"], ["AI interest", "aiInterest"], ["Expected commission", "expectedCommission"], ["Audit", "projectLeadKey", (row) => `<button class="btn sm" data-audit="${esc(row.projectLeadKey)}">Audit</button>`]], data.opportunities);
+        document.querySelectorAll("[data-audit]").forEach((button) => { button.onclick = () => audit(button.dataset.audit, button); });
+        $("status").textContent = `Generated ${fmt(data.generatedAt)} · ${data.source}`;
+      } catch (error) {
+        if (error.code === "DASHBOARD_SETUP_REQUIRED") {
+          showSetup(error.payload?.schema);
+          return;
+        }
+        $("status").textContent = "Dashboard data could not be loaded. Check System Logs and try again.";
+        $("status").className = "status-line overdue";
+      }
+    }
+
+    async function initialize() {
+      try {
+        const status = await api("/api/dashboard/status");
+        if (!status.schema?.ready) {
+          showSetup(status.schema);
+          return;
+        }
+        $("setup").hidden = true;
+        $("dashboard").hidden = false;
+        await load();
+      } catch {
+        $("setup").hidden = true;
+        $("dashboard").hidden = false;
+        $("status").textContent = "Dashboard status is temporarily unavailable. Check System Logs and try again.";
+        $("status").className = "status-line overdue";
+      }
+    }
+
+    $("refresh").onclick = load;
+    $("checkSetup").onclick = initialize;
+    initialize();
+  </script>
+</body>
+</html>

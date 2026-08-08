@@ -649,7 +649,7 @@ export function buildAssignments(leads, instances, startAt, endAt, config) {
 // Drives one campaign run. Holds state in memory and mirrors it to disk so the
 // web console can poll progress and other tools can read active-run.json.
 export class CampaignRunner {
-  constructor({ config, env, onLog, systemLogs, conversationLog, customerCheckpoint, transportPreflight } = {}) {
+  constructor({ config, env, onLog, systemLogs, conversationLog, customerCheckpoint, transportPreflight, sendEligibility } = {}) {
     this.config = config;
     this.env = env;
     this.api = makeApi(env);
@@ -665,6 +665,10 @@ export class CampaignRunner {
     // background monitor catches sustained outages; this preflight closes the
     // wake-from-sleep window before the next customer can be attempted.
     this.transportPreflight = transportPreflight ?? null;
+    // Every production WhatsApp request is authorized here, immediately before
+    // transport. Routes and preview pages can explain eligibility, but cannot
+    // grant permission on their own.
+    this.sendEligibility = sendEligibility ?? null;
     this.state = null;
     this.runPath = null;
     this.stopped = false;
@@ -967,38 +971,66 @@ export class CampaignRunner {
       );
     }
 
-    const sendKey = `${this.state?.runId || "run"}:${job.id}:part:${partNumber}`;
-    const attempt = {
-      attemptId: `${sendKey}:attempt:${history.length + 1}`,
-      sendKey,
-      partNumber,
-      status: "DISPATCHING",
-      startedAt: new Date().toISOString(),
-      operatorApprovedRetry: approvedUnknownRetry,
-    };
-    history.push(attempt);
-    job.approvedUnconfirmedPart = null;
-    await this.saveState();
-
-    try {
-      const sentInfo = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, text, media);
-      this.setPartSentInfo(job, partNumber, sentInfo);
-      attempt.status = "CONFIRMED";
-      attempt.confirmedAt = sentInfo?.sentAt || new Date().toISOString();
-      attempt.messageId = sentInfo?.messageId || null;
-      attempt.apiStatus = sentInfo?.apiStatus || null;
-      await this.saveState();
-      return sentInfo;
-    } catch (error) {
-      attempt.status = error?.code === "SEND_OUTCOME_UNCONFIRMED" || isUnconfirmedSendOutcome(error)
-        ? "UNKNOWN"
-        : isRecipientNotOnWhatsAppError(error) ? "REJECTED" : "FAILED";
-      attempt.failedAt = new Date().toISOString();
-      attempt.errorCode = String(error?.code || "");
-      attempt.error = String(error?.message || error);
-      await this.saveState().catch(() => {});
+    if (!this.sendEligibility && this.state?.mode === "LIVE") {
+      const error = new Error("LIVE Send Eligibility service 没有载入；发送已安全停止。");
+      error.code = "SEND_ELIGIBILITY_UNAVAILABLE";
       throw error;
     }
+
+    const dispatch = async () => {
+      const sendKey = `${this.state?.runId || "run"}:${job.id}:part:${partNumber}`;
+      const attempt = {
+        attemptId: `${sendKey}:attempt:${history.length + 1}`,
+        sendKey,
+        partNumber,
+        status: "DISPATCHING",
+        startedAt: new Date().toISOString(),
+        operatorApprovedRetry: approvedUnknownRetry,
+      };
+      history.push(attempt);
+      job.approvedUnconfirmedPart = null;
+      await this.saveState();
+
+      try {
+        const sentInfo = await this.sendMediaWithRetry(job.instanceName, job.lead.phone, text, media);
+        this.setPartSentInfo(job, partNumber, sentInfo);
+        attempt.status = "CONFIRMED";
+        attempt.confirmedAt = sentInfo?.sentAt || new Date().toISOString();
+        attempt.messageId = sentInfo?.messageId || null;
+        attempt.apiStatus = sentInfo?.apiStatus || null;
+        await this.saveState();
+        return sentInfo;
+      } catch (error) {
+        attempt.status = error?.code === "SEND_OUTCOME_UNCONFIRMED" || isUnconfirmedSendOutcome(error)
+          ? "UNKNOWN"
+          : isRecipientNotOnWhatsAppError(error) ? "REJECTED" : "FAILED";
+        attempt.failedAt = new Date().toISOString();
+        attempt.errorCode = String(error?.code || "");
+        attempt.error = String(error?.message || error);
+        await this.saveState().catch(() => {});
+        throw error;
+      }
+    };
+
+    if (!this.sendEligibility) return dispatch();
+    const requestedAction = this.sendEligibility.requestedActionForRunner({ state: this.state, job });
+    return this.sendEligibility.withSendLock({
+      recipient: { phone: job.lead.phone, customerId: job.lead.customerId },
+      projectLead: { projectCode: job.lead.projectCode || this.state?.projectId },
+      campaign: {
+        campaignId: this.state?.campaignId,
+        runId: this.state?.runId,
+        projectId: this.state?.projectId,
+        mode: this.state?.mode,
+        flowTopic: this.flowTopic(),
+        resendCooldownDays: this.resendCooldownDays(),
+        startAt: this.state?.startAt,
+        endAt: this.state?.endAt,
+      },
+      connection: { instanceName: job.instanceName, available: true },
+      requestedAction,
+      jobId: `${job.id}:part:${partNumber}`,
+    }, dispatch);
   }
 
   async sendMedia(instanceName, number, text, relativeMediaPath) {
@@ -1044,29 +1076,6 @@ export class CampaignRunner {
     }
     const value = Number(this.config?.delivery?.resendCooldownDays ?? DEFAULT_RESEND_COOLDOWN_DAYS);
     return Number.isFinite(value) && value >= 0 ? value : DEFAULT_RESEND_COOLDOWN_DAYS;
-  }
-
-  // 回传 null = 可以发；回传物件 = 要跳过，附上人看得懂的原因。
-  async recentSendSkip(job) {
-    const days = this.resendCooldownDays();
-    // Refresh 不是普通 Flow 重试；冷却期内任何我方讯息都代表客户最近
-    // 已经被联系过，不能只比较 Refresh 的 flow topic。
-    const flow = this.state?.campaignType === "RECYCLE" ? "" : this.flowTopic();
-    try {
-      const hits = await this.conversationLog.sentFlowSince([job.lead.phone], { flowTopic: flow, sinceDays: days });
-      const hit = [...hits.values()][0];
-      if (!hit) return null;
-      const when = String(hit.sentAt || "").slice(0, 16).replace("T", " ");
-      return {
-        status: "SKIPPED_RECENT_SEND",
-        error: `${days} 天内已经收过「${flow || "同一批"}」(${when}${hit.times > 1 ? ` · 共 ${hit.times} 次` : ""})，跳过避免重发。`,
-      };
-    } catch (error) {
-      return {
-        status: "SKIPPED_SEND_CHECK_FAILED",
-        error: `读不到本机发送纪录，无法确认是否重发，先跳过。修好后可续跑。原因：${error.message}`,
-      };
-    }
   }
 
   // 写进本机数据库。只记名单里的号码(service 自己会挡)，而且永远不能影响真的发送 ——
@@ -1133,23 +1142,6 @@ export class CampaignRunner {
     return { messageId: result?.key?.id ?? null, apiStatus: result?.status ?? null, sentAt: new Date().toISOString() };
   }
 
-  async repliedSince(instanceName, phone, sinceIso) {
-    try {
-      const response = await this.api(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
-        method: "POST",
-        body: JSON.stringify({ where: { key: { remoteJid: `${phone}@s.whatsapp.net` } } }),
-      });
-      const since = new Date(sinceIso).getTime();
-      return collectMessageObjects(response).some((message) => {
-        const timestamp = Number(message.messageTimestamp ?? 0);
-        const milliseconds = timestamp < 100000000000 ? timestamp * 1000 : timestamp;
-        return message?.key?.fromMe === false && milliseconds >= since;
-      });
-    } catch {
-      return false;
-    }
-  }
-
   async waitUntil(isoTime) {
     while (!this.stopped) {
       const remaining = new Date(isoTime).getTime() - Date.now();
@@ -1198,81 +1190,6 @@ export class CampaignRunner {
       await this.saveState();
       return;
     }
-    // GLOBAL suppression gate (A1), send-time check: even if a lead slipped
-    // into the cohort (imported before the STOP, or an old cohort file),
-    // nothing goes out to a phone on the global STOP list.
-    const supPhone = normalizePhone(job.lead?.phone);
-    if (this.state?.mode !== "TEST" && supPhone && this.suppression?.has(supPhone)) {
-      job.status = "SKIPPED_SUPPRESSED";
-      job.error = "Global STOP list (opted out — possibly in another project).";
-      await this.saveState();
-      this.showProgress(`⛔ ${job.lead.name} skipped — global STOP list.`);
-      await this.systemLog("info", "suppression_skip", "Lead skipped by global STOP list.", {
-        jobId: job.id,
-        name: job.lead.name,
-        phone: job.lead.phone,
-        instanceName: job.instanceName,
-      });
-      return;
-    }
-
-    // P2 (2026-07-11): 未结算回复防线。客户之前回复过但没人结算 (tracker 没开 /
-    // 早间没跑) 的话, Notion 状态还是 Running, cohort 挡不住 — 这里发 Part 1 前
-    // 直接问 Evolution: 这个号最近 N 天有没有 inbound? 有 -> 跳过, 等结算处理。
-    // repliedSince 查询失败时 fail-open (返回 false), 所以这是安全网不是唯一闸门。
-    if (!job.part1?.sentAt) {
-      const lookbackDays = Number(this.config?.delivery?.replyLookbackDays ?? 7);
-      if (lookbackDays > 0) {
-        const sinceIso = new Date(Date.now() - lookbackDays * 86400000).toISOString();
-        if (await this.repliedSince(job.instanceName, supPhone ?? job.lead.phone, sinceIso)) {
-          job.status = "SKIPPED_REPLIED";
-          job.error = `Inbound reply within last ${lookbackDays}d — settle it (早间跟进/tracker) before re-sending.`;
-          await this.saveState();
-          this.showProgress(`✋ ${job.lead.name} skipped — 有未结算的回复,先跑早间跟进。`);
-          await this.systemLog("info", "unsettled_reply_skip", "Lead skipped: recent inbound reply not yet settled.", {
-            jobId: job.id,
-            name: job.lead.name,
-            phone: job.lead.phone,
-            instanceName: job.instanceName,
-            lookbackDays,
-          });
-          return;
-        }
-      }
-    }
-
-    // 重发防线 (2026-07-22)：这个号码最近已经收过同一个 flow 就跳过。
-    //
-    // 起因：中途 STOP 的 campaign 不会跑 Notion 收尾(autoAdvanceFlow /
-    // creditSentCounts 只在 COMPLETED 时执行)，所以已发的人在 Notion 里看起来
-    // 从没发过，隔天重开就整批重发。之前唯一的防线就是那个 Notion 栏位。
-    // 这里改成问本机纪录，STOP 与否、Notion 通不通都不影响。
-    //
-    // 查不到就跳过这个客户(fail-closed)：宁可这批少发几个、画面上写清楚原因，
-    // 也不要因为读不到纪录就默默把同一条再发一次。
-    // 没接上纪录服务 = 这道闸整个失效，而且是静默的。宁可吵一次也不要重演事故。
-    if (!this.conversationLog && !this.warnedNoConversationLog) {
-      this.warnedNoConversationLog = true;
-      this.showProgress("⚠️ 没有接上本机发送纪录，防重发闸门停用中 —— 这批有可能重复发给已收过的客户。");
-      await this.systemLog("warn", "resend_guard_disabled", "Campaign is running without the conversation log; duplicate sends cannot be detected.", {
-        runId: this.state?.runId ?? null,
-      });
-    }
-
-    if (!job.part1?.sentAt && this.conversationLog && this.resendCooldownDays() > 0) {
-      const skip = await this.recentSendSkip(job);
-      if (skip) {
-        job.status = skip.status;
-        job.error = skip.error;
-        await this.saveState();
-        this.showProgress(`🔁 ${job.lead.name} skipped — ${skip.error}`);
-        await this.systemLog("info", "recent_send_skip", "Lead skipped: already received this flow recently.", {
-          jobId: job.id, name: job.lead.name, phone: job.lead.phone, flow: this.flowTopic(), detail: skip.error,
-        });
-        return;
-      }
-    }
-
     try {
       if (!job.part1?.sentAt) {
         await this.assertTransport(job.instanceName);
@@ -1299,13 +1216,6 @@ export class CampaignRunner {
         await this.waitBetweenParts(job, 2);
         if (this.stopped) return;
 
-        if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
-          job.status = "REPLIED_WARM";
-          await this.saveState();
-          this.showProgress(`Reply detected → ${job.lead.name}; Part 2 cancelled`);
-          return;
-        }
-
         if (this.pastFixedEnd()) {
           job.status = "PART1_ONLY_END_TIME";
           await this.saveState();
@@ -1330,12 +1240,6 @@ export class CampaignRunner {
         if (await this.pauseForManualPartConfirmation(job, k + 3)) return;
         await this.waitBetweenParts(job, k + 3);
         if (this.stopped) { await this.saveState(); return; }
-        if (this.config.delivery.cancelPart2WhenCustomerReplies && await this.repliedSince(job.instanceName, job.lead.phone, job.part1.sentAt)) {
-          job.status = "REPLIED_WARM";
-          await this.saveState();
-          this.showProgress(`Reply detected → ${job.lead.name}; remaining parts cancelled`);
-          return;
-        }
         if (this.pastFixedEnd()) {
           // A fixed-window cutoff is not evidence that the remaining Part was sent.
           // Keep the customer resumable and block the per-customer Flow checkpoint.
@@ -1360,6 +1264,26 @@ export class CampaignRunner {
       this.consecutiveFailures = 0;
       await this.saveState();
     } catch (error) {
+      if (error?.code === "SEND_ELIGIBILITY_BLOCKED") {
+        job.status = `SKIPPED_ELIGIBILITY_${error.reasonCode || "BLOCKED"}`;
+        job.error = error.message;
+        job.eligibility = {
+          decisionId: error.decision?.decision_id || null,
+          reasonCode: error.reasonCode || "SEND_ELIGIBILITY_BLOCKED",
+          retryAt: error.retryAt || null,
+          requiredAction: error.requiredAction || null,
+        };
+        this.consecutiveFailures = 0;
+        await this.saveState();
+        this.showProgress(`⛔ ${job.lead.name} skipped — ${error.reasonCode}: ${error.message}`);
+        await this.systemLog("info", "send_eligibility_blocked", "Customer was blocked by the central send eligibility decision.", {
+          jobId: job.id,
+          reasonCode: error.reasonCode,
+          decisionId: error.decision?.decision_id || null,
+          instanceName: job.instanceName,
+        });
+        return;
+      }
       if (error?.code === "CAMPAIGN_TRANSPORT_UNHEALTHY") {
         job.error = error.message;
         await this.interruptForTransportFailure({
@@ -1591,20 +1515,6 @@ export class CampaignRunner {
 
   async run() {
     if (!this.state) throw new Error("Call prepare() before run().");
-    // GLOBAL suppression gate (A1): refresh the STOP snapshot from Notion at
-    // campaign start; if Notion is unreachable, fall back to the last local
-    // snapshot so an outage never turns the gate off entirely.
-    try {
-      const { syncSuppressionList } = await import("./suppression.mjs");
-      const { set, updatedAt } = await syncSuppressionList();
-      this.suppression = set;
-      this.pushLog(`Suppression list refreshed: ${set.size} phone(s) blocked (as of ${updatedAt}).`);
-    } catch (err) {
-      const { loadSuppressionSync } = await import("./suppression.mjs");
-      const { set, updatedAt } = loadSuppressionSync();
-      this.suppression = set;
-      this.pushLog(`Suppression refresh failed (${err?.message}) — using local snapshot: ${set.size} phone(s)${updatedAt ? ` from ${updatedAt}` : ""}.`);
-    }
     this.running = true;
     this.stopped = false;
     this.interrupted = false;
@@ -1726,6 +1636,7 @@ export class CampaignRunner {
             localAdvance: this.state.localAdvance ?? null,
             notionSync: this.state.notionSync ?? null,
             interruption: this.state.interruption ?? null,
+            eligibilityPreview: this.state.eligibilityPreview ?? null,
             resumeProgress: campaignResumeSummary(this.state),
             assignments: this.state.assignments.map((job) => ({
               id: job.id,
@@ -1750,11 +1661,4 @@ export class CampaignRunner {
       log: this.log.slice(-120),
     };
   }
-}
-
-function collectMessageObjects(value, found = []) {
-  if (!value || typeof value !== "object") return found;
-  if (value.key && (value.messageTimestamp || value.createdAt)) found.push(value);
-  for (const child of Object.values(value)) collectMessageObjects(child, found);
-  return found;
 }

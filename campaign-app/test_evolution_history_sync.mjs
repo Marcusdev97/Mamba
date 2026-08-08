@@ -24,11 +24,14 @@ function fakeConversationLog({ initialIds = [], initialState = null } = {}) {
   const outbound = [];
 
   function report(rows, target, idKey) {
+    let written = 0;
     for (const row of rows) {
+      if (ids.has(row[idKey])) continue;
       target.push(row);
       ids.add(row[idKey]);
+      written += 1;
     }
-    return { written: rows.length, failed: [] };
+    return { written, failed: [] };
   }
 
   return {
@@ -193,6 +196,45 @@ const pages = {
   const result = await sync.syncAll();
   assert.deepEqual(calledPages, [1, 1], "empty history finishes after one page per pass");
   assert.equal(result.results[0].customers, 0);
+}
+
+// Tracker startup catch-up reads only a recent, page-bounded window and stays
+// idempotent when the same Tracker session is checked again.
+{
+  const log = fakeConversationLog();
+  const calls = [];
+  const recentPages = {
+    1: [
+      rawMessage({ id: "recent_in", phone: "60111111111", fromMe: false, timestamp: 1_780_000_000, text: "Recent inbound" }),
+      rawMessage({ id: "recent_group", phone: "60111111111", fromMe: false, timestamp: 1_780_000_001, jid: "123@g.us" }),
+    ],
+    2: [rawMessage({ id: "recent_out", phone: "60111111111", fromMe: true, timestamp: 1_780_000_002, text: "Recent outbound" })],
+  };
+  const sync = createEvolutionHistorySync({
+    api: async (_path, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      return { messages: { total: 20, pages: 5, currentPage: body.page, records: recentPages[body.page] || [] } };
+    },
+    conversationLog: log,
+    listInstances: async () => [{ name: "wa_01" }],
+    pageSize: 2,
+    pageDelayMs: 0,
+    retryDelayMs: 0,
+    clock: () => new Date("2026-08-08T12:00:00.000Z"),
+  });
+
+  const first = await sync.syncRecent({ lookbackMs: 60 * 60 * 1000, maxPages: 2 });
+  assert.equal(first.added, 2);
+  assert.equal(first.results[0].truncated, true);
+  assert.equal(first.results[0].pagesRead, 2);
+  assert.deepEqual(log.inbound.map((row) => row.id), ["recent_in"]);
+  assert.deepEqual(log.outbound.map((row) => row.messageId), ["recent_out"]);
+  assert.ok(calls.every((body) => body.where.messageTimestamp.gte === "2026-08-08T11:00:00.000Z"));
+  assert.equal(calls.length, 2, "bounded catch-up must stop at maxPages");
+
+  const second = await sync.syncRecent({ lookbackMs: 60 * 60 * 1000, maxPages: 2 });
+  assert.equal(second.added, 0, "a repeated catch-up must not duplicate messages");
 }
 
 // ---- LID 定址 ----

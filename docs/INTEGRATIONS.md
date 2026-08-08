@@ -1,6 +1,6 @@
 # Mamba Integrations
 
-> 状态：Current · 更新日期：2026-08-05
+> 状态：Current · 更新日期：2026-08-08
 >
 > 本文件记录外部系统的责任、资料方向、失败行为与修改边界。
 > Secret value 不得写入本文。
@@ -55,6 +55,9 @@ WhatsApp → Evolution webhook/history → Mamba
 - Webhook 同时订阅 `MESSAGES_UPSERT` 与 `MESSAGES_UPDATE`。前者写对话，后者按
   Evolution message id 更新原本的 SQLite 出站消息；投递状态与
   `serverAckAt`／`deliveredAt`／`readAt` 保存在 `messages.payload_json`。
+- Tracker ready 时执行一次 bounded catch-up：默认只读最近 24 小时、每个 instance
+  最多 3 页。它使用相同 Evolution message id 幂等写入 SQLite，不发送消息、不推进
+  Campaign，也不把短暂失败误报成同步完成。完整 History Sync 仍只由操作员明确启动。
 - 手机人工 Follow-up 的即时 webhook 若因断网漏失，定时 history reconciliation
   会用相同 Evolution message id 幂等补写 SQLite，再将 Notion `Follow Up At`
   安排到下一天 10:00（Asia/Kuala_Lumpur）。本机写入失败时不得先推进 Notion，
@@ -84,6 +87,9 @@ WhatsApp → Evolution webhook/history → Mamba
 - 已退役的 Mamba Global PostgreSQL 汇总工具与 Evolution 内部数据库无关；维护
   Evolution compose 时不得因为移除 Global 汇总层而删除其数据库或 volume。
 - Instance name 不是客户或 sender 的永久业务 ID。
+- 客户的永久业务 ID 是 SQLite `customers.customer_id`。Evolution remote JID、LID 与
+  phone 只作为 `customer_identities` aliases；同一 LID 指向两个 customer 时写入 conflict，
+  不可用较高 confidence 静默覆盖，也不可只靠 profile/display name 猜测。
 - Settings 的「重新扫码」只对未连接 instance 开放：先 logout 失效的 Baileys
   session，再向 `/instance/connect/<name>` 请求新 QR。它不得调用 instance delete，
   因此原 instance name、Mamba connection key 与本机 conversation ledger 保持不变。
@@ -160,6 +166,14 @@ CRM v1 的 Customers 与 Project Leads 使用双向受控同步：SQLite row ver
 dirty entity 加入既有 `sync_jobs`；Notion `last_edited_time` polling 先写 durable inbox，
 再套用 human-owned 字段。system-owned 字段只允许 SQLite → Notion。同步默认 20 分钟，
 另有 nightly reconciliation 和人工「立即同步／暂停／恢复／重试／对账」入口。
+Customers 的 Notion stable ID 从 migration 305 起等于 `customers.customer_id`；旧
+`contact_key` mapping 在 migration 内原地换 key，继续使用同一 Notion page。
+
+CRM schema v2 在原本八个 databases 上增加 Sales Stage、Temperature、客户需求、统一
+Follow-up Task 与 Commission 字段。Notion 的人工 stage edit 仍先进入 durable inbox：
+无新理由的倒退、没有 Lost Reason 的 Lost，以及双方同时修改同一字段都会进入
+`CONFLICT`，不得直接覆盖 SQLite。`sales_opportunities` 不会因为 Notion 中存在导入号码
+就自动建立，只接受 qualified intent 或明确的人工 promotion。
 
 ### CRM v1 Structure
 
@@ -172,6 +186,10 @@ human-owned field 时标记 `Conflict`，不采用 last-write-wins。完整规�
 [`NOTION_CRM_V1.md`](NOTION_CRM_V1.md)。
 
 ### Campaign Sync 时机
+
+Migration 308 后，Notion Campaigns／Campaign Runs 仍只是业务可见镜像。完整 Campaign
+计划、Steps、Members、Send Jobs 与 Outcomes 的权威来源是 SQLite；Notion 不负责实时
+membership transition 或 attribution。Campaign 未结束时不得把部分 metrics 当成最终结果。
 
 1. 每位客户的发送结果先写入 SQLite。
 2. 对应 Notion job 进入 outbox。
@@ -277,6 +295,7 @@ Settings 的「私人联系人 / 不进入工作 Inbox」是本机工作边界�
 - `campaign-app/telegram.mjs`
 - `campaign-app/telegram_hub.mjs`
 - `campaign-app/lib/settings-service.mjs`
+- `campaign-app/integrations/ai/structured-json-client.mjs`（Lead Auditor structured JSON）
 - `campaign-app/lib/telegram-filter-service.mjs`
 - `campaign-app/brain_service.mjs`
 
@@ -320,6 +339,10 @@ Kimi／Moonshot 已从产品和配置中移除，不得重新加入 fallback。
 - Provider 缺 Key 或请求失败时，回到明确的下一个 Provider 或 rules。
 - Project fact 必须来自已验证 Knowledge。
 - 不把完整 API response 或 secret 写入 log。
+- Lead Auditor 只接收经过 privacy redaction、消息数量与字段长度限制的 package；输出必须通过
+  strict JSON validation 才可写入分析 cache。Provider 失败不得阻塞 SQLite Dashboard。
+- Lead Auditor Provider 复用 Brain Provider 默认配置；可用 `LEAD_AUDITOR_PROVIDER` 单独设为
+  `rules`、`openai`、`gemini`、`anthropic` 或 `auto`。`rules` 不产生外部请求。
 
 ## 6. Cloudflare R2
 
@@ -379,6 +402,22 @@ SQLite 不是外部 integration，但它是所有 integration 的安全边界。
   追加 event，并记录来源、发生时间、可选证据参考及 expiry。
 - `campaign_safety_checks` 使用稳定 scope／contact／check type idempotency key，
   重复读取同一个 preflight 不会堆积重复审计行。
+- Migration 306 后，`send_eligibility_decisions` 是 allow／block 解释账本，
+  `send_eligibility_locks` 是跨 sender／campaign 的最终 customer lock。Evolution request
+  不得绕过 `send-eligibility-service`；connection 健康只提供输入，不自行授权发送。
+- STOP 先以一个 SQLite transaction 更新 customer、project lead、campaign membership、
+  pending send job、global suppression 与 audit，再排入 Notion outbox。Notion 写入失败不会
+  解除本机 STOP，也不会把已取消任务恢复成可发送。
+- Sales Brain 无论使用 rules、OpenAI、Anthropic 或 Gemini，都只产生 proposal；人工批准
+  后仍须重新取得 eligibility customer lock。
+- Migration 307 后，`project_leads.sales_stage`、`sales_opportunities`、
+  `customer_follow_up_tasks` 与 `sales_activities` 是销售执行主账。五分钟 follow-up job
+  只建立幂等 task，不调用 Evolution，也不会在 Snooze 到期后自动发送。
+- Migration 309 后，Dashboard cards／funnel／Campaign performance／opportunity board 只从 SQLite
+  查询；Notion 仅作为同步健康状态显示，不是 Dashboard query source。Schema 未 ready
+  时 API 回传 `DASHBOARD_SETUP_REQUIRED`，页面使用共享 Mamba design system 显示 setup
+  指引，不泄露缺表查询或 stack trace。
+- Migration 310 的 AI Change Tracking 只写开发证据表；只读 Git inspector 不执行 Git mutation。
 
 ## 8. Configuration Ownership
 

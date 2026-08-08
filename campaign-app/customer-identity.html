@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Customer Identity · Mamba</title>
+<link rel="stylesheet" href="/assets/mamba.css" />
+<style>
+  .kpis,.merge-grid{display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:12px}.kpi{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}.kpi b{display:block;font-size:25px;margin-top:4px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.actions{display:flex;gap:8px;flex-wrap:wrap}.small{font-size:12px}.identity{font-family:monospace;font-size:11px}.merge-grid input{width:100%}.plan{white-space:pre-wrap;font:12px/1.55 monospace}.danger{border-color:var(--red)!important}.pill{display:inline-block;padding:3px 7px;border-radius:999px;background:var(--panel2);font-size:11px}@media(max-width:800px){.kpis,.merge-grid{grid-template-columns:1fr}}
+</style>
+<script src="/assets/mamba-shell.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><div><h1>Customer Identity</h1><div class="sub">稳定 customer_id、WhatsApp identity、冲突审查与可逆合并</div></div><button class="btn" id="refresh">刷新</button></header>
+  <div class="card">
+    <h2>Safety Status</h2>
+    <div id="status" class="muted">Loading…</div>
+    <div class="kpis" id="kpis" style="margin-top:14px"></div>
+    <div id="error" class="err"></div>
+  </div>
+  <div class="card">
+    <h2>Open Identity Conflicts</h2>
+    <p class="muted small">系统不会猜测或移动讯息。KEEP 保留现有绑定；MOVE 需要人工输入目标 customer_id；DISMISS 只关闭警示。</p>
+    <table><thead><tr><th>Identity</th><th>Customers</th><th>Evidence</th><th>Action</th></tr></thead><tbody id="conflicts"></tbody></table>
+  </div>
+  <div class="card">
+    <div class="top"><div><h2>Customers</h2><div class="muted small">点 customer_id 查看 identities 与各 WhatsApp connection 的 conversations。</div></div><div class="actions"><input id="query" placeholder="号码、姓名或 customer_id" /><button class="btn" id="search">搜索</button></div></div>
+    <table><thead><tr><th>Customer</th><th>Primary phone</th><th>Status</th><th>Identities</th><th>Updated</th></tr></thead><tbody id="customers"></tbody></table>
+    <div id="detail" class="plan" style="margin-top:14px"></div>
+  </div>
+  <div class="card">
+    <h2>Audited Merge</h2>
+    <p class="muted small">先 Dry-run。Apply 需要精确输入 <span class="identity">MERGE_CUSTOMER_IDENTITIES</span>；有活动 Campaign 时自动封锁。</p>
+    <div class="merge-grid">
+      <label>保留的 customer_id<input id="survivor" /></label>
+      <label>重复的 customer_id<input id="duplicate" /></label>
+      <label>原因<input id="reason" placeholder="为什么要合并" /></label>
+    </div>
+    <div class="actions" style="margin-top:12px"><button class="btn" id="plan">Dry-run</button><button class="btn danger" id="apply" disabled>Apply Merge</button></div>
+    <div id="mergeResult" class="plan muted" style="margin-top:12px"></div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function request(path,options){const response=await fetch(path,options);const data=await response.json();if(!data.ok)throw new Error(data.error||"Request failed");return data}const post=(path,body)=>request(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+let status={};let lastPlan=null;
+async function load(){try{const [s,c,u]=await Promise.all([request("/api/customer-identity/status"),request("/api/customer-identity/conflicts"),request(`/api/customer-identity/customers?q=${encodeURIComponent($("query").value)}`)]);status=s;const ready=s.schema.ready;$("status").innerHTML=`<b class="${ready?"ok":"bad"}">${ready?"Migration 305 ready":"Migration 305 required"}</b>${s.mutationsBlocked?` · <span class="warn">${s.activeCampaigns.length} 个活动 Campaign，MOVE/MERGE 已封锁</span>`:" · 没有活动 Campaign"}`;$("kpis").innerHTML=[["Customers",u.count],["Open conflicts",c.count],["Active Campaigns",s.activeCampaigns.length]].map(x=>`<div class="kpi"><span>${x[0]}</span><b>${x[1]}</b></div>`).join("");renderConflicts(c.records);renderCustomers(u.records);$("error").textContent=""}catch(e){$("error").textContent=e.message}}
+function renderConflicts(rows){$("conflicts").innerHTML=rows.length?rows.map(r=>`<tr><td><span class="pill">${esc(r.identityType)}</span><div class="identity">${esc(r.identityValue)}</div></td><td class="identity">${esc(r.existingCustomerId)}<br/>↔ ${esc(r.candidateCustomerId)}</td><td class="small">${esc(r.evidence?.source||"")}<br/>${esc(r.lastSeenAt||"")}</td><td><div class="actions"><button class="btn" onclick="resolveConflict('${esc(r.conflictId)}','KEEP_EXISTING')">KEEP</button><button class="btn" onclick="moveConflict('${esc(r.conflictId)}')" ${status.mutationsBlocked?"disabled":""}>MOVE</button><button class="btn" onclick="resolveConflict('${esc(r.conflictId)}','DISMISS')">DISMISS</button></div></td></tr>`).join(""):'<tr><td colspan="4" class="muted">没有 open conflict。</td></tr>'}
+function renderCustomers(rows){$("customers").innerHTML=rows.length?rows.map(r=>`<tr><td><button class="btn identity" onclick="detail('${esc(r.customerId)}')">${esc(r.customerId)}</button><div>${esc(r.displayName)}</div></td><td>${esc(r.primaryPhone||"—")}</td><td>${esc(r.globalStatus)}</td><td>${esc(r.identityCount)}</td><td class="small">${esc(r.updatedAt)}</td></tr>`).join(""):'<tr><td colspan="5" class="muted">没有 customer。</td></tr>'}
+async function detail(id){try{const d=(await request(`/api/customer-identity/customer?customerId=${encodeURIComponent(id)}`)).record;$("detail").textContent=JSON.stringify(d,null,2)}catch(e){$("error").textContent=e.message}}
+async function resolveConflict(conflictId,action,resolvedCustomerId=""){if(!confirm(`确认 ${action} 这个 identity conflict？`))return;try{await post("/api/customer-identity/conflicts/resolve",{conflictId,action,resolvedCustomerId});await load()}catch(e){$("error").textContent=e.message}}
+function moveConflict(id){const target=prompt("输入明确的目标 customer_id。系统不会自行猜测：");if(target)resolveConflict(id,"MOVE_IDENTITY",target.trim())}
+async function planMerge(){try{lastPlan=(await post("/api/customer-identity/merge/plan",{survivingCustomerId:$("survivor").value.trim(),duplicateCustomerId:$("duplicate").value.trim()})).result;$("mergeResult").textContent=JSON.stringify(lastPlan,null,2);$("apply").disabled=status.mutationsBlocked}catch(e){$("error").textContent=e.message}}
+async function applyMerge(){if(!lastPlan)return;const token=prompt("输入 MERGE_CUSTOMER_IDENTITIES 执行合并：");if(token!=="MERGE_CUSTOMER_IDENTITIES")return;try{const data=await post("/api/customer-identity/merge/apply",{survivingCustomerId:$("survivor").value.trim(),duplicateCustomerId:$("duplicate").value.trim(),reason:$("reason").value.trim(),confirmation:token});$("mergeResult").textContent=JSON.stringify(data.result,null,2);lastPlan=null;$("apply").disabled=true;await load()}catch(e){$("error").textContent=e.message}}
+$("refresh").onclick=load;$("search").onclick=load;$("plan").onclick=planMerge;$("apply").onclick=applyMerge;load();
+</script>
+</body>
+</html>

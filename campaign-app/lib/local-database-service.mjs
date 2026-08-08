@@ -589,6 +589,26 @@ ORDER BY COALESCE(source_row, 2147483647), created_at, member_id;
        );`,
     ];
     for (const member of normalized) {
+      // A Flow 1 import is identity evidence, not permission to send. Creating
+      // the minimal contact/project-lead rows here lets migration 305 attach a
+      // stable customer_id before the migration 306 preview and final gate.
+      statements.push(`INSERT INTO contacts(
+        contact_key, phone, display_name, stop_flag, stop_reason, reply_count,
+        last_reply_text, created_at, updated_at
+      ) VALUES (
+        ${sqlText(member.phone)}, ${sqlText(member.phone)}, ${sqlText(member.name)}, 0, '', 0, '', ${sqlText(now)}, ${sqlText(now)}
+      ) ON CONFLICT(contact_key) DO UPDATE SET
+        display_name=CASE WHEN contacts.display_name='' AND excluded.display_name<>'' THEN excluded.display_name ELSE contacts.display_name END,
+        updated_at=excluded.updated_at;
+      INSERT INTO project_leads(
+        project_lead_key, contact_key, project_code, phone, name,
+        sequence_status, status, created_at, updated_at
+      ) VALUES (
+        ${sqlText(`${code}:${member.phone}`)}, ${sqlText(member.phone)}, ${sqlText(code)}, ${sqlText(member.phone)}, ${sqlText(member.name)},
+        'NEW', 'NEW', ${sqlText(now)}, ${sqlText(now)}
+      ) ON CONFLICT(project_lead_key) DO UPDATE SET
+        name=CASE WHEN project_leads.name='' AND excluded.name<>'' THEN excluded.name ELSE project_leads.name END,
+        updated_at=excluded.updated_at;`);
       statements.push(`INSERT INTO lead_group_members(
         group_id, member_id, phone, name, language, source_row, created_at, updated_at
       ) VALUES (

@@ -19,7 +19,11 @@ SQLite 是运行事实来源，Notion 是业务可见镜像。v1 同步 Customer
 - `sync_audit_events`：只记录方向、entity、operation 与字段名，不记录原始对话。
 - `sync_reconciliation_runs`：nightly／manual 对账报告。
 
-## Migration 304
+Customer stable ID 从 migration 305 起直接使用 `customers.customer_id`。`contact_key` 仍是
+兼容 alias，不再作为 Notion Customers 的业务 ID。Project Lead relation 也通过
+`project_leads.customer_id` 查找对应 Customer page。
+
+## Migration 304 + 305
 
 默认只 dry-run：
 
@@ -35,6 +39,10 @@ Apply 必须同时满足 migration 303 已应用、没有活动 Campaign、已�
 node scripts/maintenance/migrate-sqlite-notion-sync.mjs \
   --apply --confirm APPLY_SQLITE_NOTION_SYNC_V1
 ```
+
+完成 304 后还要按 [`CUSTOMER_IDENTITY.md`](CUSTOMER_IDENTITY.md) apply migration 305。
+当前 sync repository 会保持未就绪，直到 305 建立稳定 customer_id；这样不会继续用
+电话号码 alias 建立新的 Notion Customer mapping。
 
 ## 运行与失败
 

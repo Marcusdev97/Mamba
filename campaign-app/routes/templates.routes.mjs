@@ -43,6 +43,10 @@ export function registerTemplatesRoutes(router) {
     const includeTesting = body.includeTesting === true;
     if (!projectName) throw httpError(400, "请选择项目。");
     if (!phone) throw httpError(400, "电话号码格式不对。例子: 60123456789。");
+    const allowedTestPhones = new Set((templates.getTestLeads?.() || []).map((lead) => templates.normalizePhone(lead.phone)).filter(Boolean));
+    if (!allowedTestPhones.size) throw httpError(409, "Settings 没有 TEST_LEADS；Mobile Preview 已安全停止。");
+    if (!allowedTestPhones.has(phone)) throw httpError(409, "Mobile Preview 只允许发送给 Settings 的 TEST_LEADS。");
+    if (!runtime.sendEligibility) throw httpError(503, "Send Eligibility service 尚未载入；Mobile Preview 已停止。");
 
     const opened = await templates.openInstances();
     const sender = requestedInstance ? opened.find((item) => item.name === requestedInstance) : opened[0];
@@ -52,41 +56,49 @@ export function registerTemplatesRoutes(router) {
     const flowResults = [];
     let sentMessages = 0;
 
-    await previewRunner.sendText(
-      sender.name,
-      phone,
-      `Mamba Mobile Preview\nProject: ${projectName}\nLanguage: ${requestedLanguage}\nSender: ${sender.name}\n\n下面会发送自动序列的真实模板。这个测试不会更新 Notion。`,
-    );
-    sentMessages += 1;
-    await templates.shortPause();
-
-    for (const flow of templates.flowSequence) {
-      const byLang = await templates.fetchFlowTemplates(projectName, flow.label, { includeTesting });
-      const picked = templates.pickPreviewLanguage(byLang, requestedLanguage);
-      if (!picked.parts.length) {
-        flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: 0, skipped: true, draft: false });
-        continue;
-      }
-
-      const draftTag = picked.usedTesting ? " · Testing 草稿" : "";
-      await previewRunner.sendText(sender.name, phone, `${flow.label} (${flow.cohortDay})${draftTag}`);
+    await runtime.sendEligibility.withSendLock({
+      recipient: { phone },
+      campaign: { campaignId: "mobile-template-preview", runId: `preview:${Date.now()}`, mode: "TEST" },
+      connection: { instanceName: sender.name, available: true },
+      requestedAction: "MOBILE_TEMPLATE_PREVIEW",
+      jobId: `mobile-preview:${phone}:${Date.now()}`,
+      lockTtlMs: 15 * 60 * 1000,
+    }, async () => {
+      await previewRunner.sendText(
+        sender.name,
+        phone,
+        `Mamba Mobile Preview\nProject: ${projectName}\nLanguage: ${requestedLanguage}\nSender: ${sender.name}\n\n下面会发送自动序列的真实模板。这个测试不会更新 Notion。`,
+      );
       sentMessages += 1;
       await templates.shortPause();
 
-      let flowSent = 0;
-      for (const part of picked.parts) {
-        await previewRunner.sendMediaWithRetry(
-          sender.name,
-          phone,
-          templates.personalize(part.text || "", name),
-          part.media || "",
-        );
+      for (const flow of templates.flowSequence) {
+        const byLang = await templates.fetchFlowTemplates(projectName, flow.label, { includeTesting });
+        const picked = templates.pickPreviewLanguage(byLang, requestedLanguage);
+        if (!picked.parts.length) {
+          flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: 0, skipped: true, draft: false });
+          continue;
+        }
+
+        const draftTag = picked.usedTesting ? " · Testing 草稿" : "";
+        await previewRunner.sendText(sender.name, phone, `${flow.label} (${flow.cohortDay})${draftTag}`);
         sentMessages += 1;
-        flowSent += 1;
         await templates.shortPause();
+        let flowSent = 0;
+        for (const part of picked.parts) {
+          await previewRunner.sendMediaWithRetry(
+            sender.name,
+            phone,
+            templates.personalize(part.text || "", name),
+            part.media || "",
+          );
+          sentMessages += 1;
+          flowSent += 1;
+          await templates.shortPause();
+        }
+        flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: flowSent, skipped: false, draft: picked.usedTesting });
       }
-      flowResults.push({ flow: flow.label, cohortDay: flow.cohortDay, language: picked.language, sent: flowSent, skipped: false, draft: picked.usedTesting });
-    }
+    });
 
     json(res, 200, {
       ok: true,

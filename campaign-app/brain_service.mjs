@@ -46,6 +46,10 @@ import { makeHub } from "./telegram_hub.mjs";
 import { createTelegramFilterService } from "./lib/telegram-filter-service.mjs";
 import { createWorkInboxIgnoreService } from "./lib/work-inbox-ignore-service.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createSendEligibilityRepository } from "./lib/send-eligibility-repository.mjs";
+import { createSendEligibilityService } from "./lib/send-eligibility-service.mjs";
+import { createSalesPipelineRepository } from "./lib/sales-pipeline-repository.mjs";
+import { createSalesPipelineService } from "./lib/sales-pipeline-service.mjs";
 import { selectLocalWebhookInstances } from "./lib/device-sender-policy.mjs";
 import {
   decideAction, logRouteOf, detectLanguage, pickModel, buildPrompt,
@@ -65,6 +69,28 @@ const skipWebhookSetup = process.argv.includes("--no-webhook");
 
 const brainDir = path.join(paths.dataDir, "brain");
 const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const salesPipeline = createSalesPipelineService({ repository: createSalesPipelineRepository({ dataDir: paths.dataDir }) });
+const sendEligibility = createSendEligibilityService({
+  repository: createSendEligibilityRepository({ dataDir: paths.dataDir }),
+  activityObserver: {
+    onSendConfirmed: ({ options, result }) => salesPipeline.recordOutbound({
+      phone: options.recipient?.phone,
+      projectCode: options.projectLead?.projectCode,
+      sourceEvent: result?.messageId || options.jobId,
+      actorId: options.connection?.instanceName || "sales-brain",
+      occurredAt: result?.sentAt,
+    }),
+    onMeaningfulReply: ({ input, result }) => salesPipeline.recordInbound({
+      customerId: result?.customerId,
+      phone: input.phone,
+      projectCode: input.projectCode,
+      sourceEvent: input.idempotencyKey,
+      category: input.category,
+      occurredAt: input.occurredAt,
+    }),
+    onError: ({ error }) => console.log(`[sales-pipeline] ${error.message}`),
+  },
+});
 const pendingPath = path.join(brainDir, "pending.json");
 const brainLogPath = path.join(brainDir, "reply_log.jsonl");
 const stopRequestsPath = path.join(brainDir, "stop_requests.jsonl");
@@ -523,6 +549,17 @@ async function recordStop(event) {
   await appendJsonl(stopRequestsPath, { at: new Date().toISOString(), phone: event.phone, text: event.text });
   // 本地全局 STOP 名单马上生效 (跨盘跨号), 不等 Notion。
   try { await addLocalStop(event.phone, "BRAIN_STOP"); } catch { /* jsonl + sessionStops still hold */ }
+  try {
+    await sendEligibility.propagateStop({
+      phone: event.phone,
+      source: "sales_brain",
+      reasonCode: "EXPLICIT_STOP",
+      reason: event.text,
+      idempotencyKey: event.id ? `brain-stop:${event.id}` : "",
+    });
+  } catch (error) {
+    console.log(`[stop] SQLite STOP propagation failed for ${event.phone}: ${error.message}`);
+  }
   if (SIMULATE) { console.log("[simulate] Stop Flag -> Notion"); return; }
   try {
     const dbId = configuredDb("blastLeads", null);
@@ -567,6 +604,23 @@ async function pushDraft(card, pendingId, project = null, phone = null) {
   return tg.sendWithButtons(card, draftButtons(pendingId));
 }
 
+async function queueApprovalDraft({ event, classified, draft, tier, project, mediaMap = {}, lead }) {
+  if (!SIMULATE) {
+    await sendEligibility.check({
+      recipient: { phone: event.phone },
+      campaign: { campaignId: "sales-brain", runId: `brain-proposal:${event.id}`, mode: "LIVE" },
+      connection: { instanceName: event.instanceName },
+      requestedAction: "AI_PROPOSED_SEND",
+    });
+  }
+  const pendingId = crypto.randomBytes(6).toString("base64url");
+  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier, project, mediaMap }), pendingId, project, event.phone);
+  if (message.filtered) return { filtered: true };
+  pending[pendingId] = { event, classified, draft, tier, project, mediaMap, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
+  await savePending();
+  return { pendingId, filtered: false };
+}
+
 // ---------- the pipeline ----------
 
 async function handleEvent(event) {
@@ -598,14 +652,36 @@ async function handleEvent(event) {
   const projectCtx = loadProjectContext(project);
   console.log(`[${classified.route}] ${lead.name ?? event.pushName ?? "?"} (${event.phone}) 🏢${project}${projectCtx.matched ? "" : " (无 YAML sheet)"} "${event.text}" -> ${policy.mode}`);
 
-  // 3a) simple route: canned reply, out it goes.
+  if (classified.route !== "STOP_DNC") {
+    await sendEligibility.propagateReply({
+      phone: event.phone,
+      projectCode: project,
+      source: "sales_brain",
+      category: classified.route || "OTHER",
+      text: event.text,
+      idempotencyKey: event.id ? `brain-reply:${event.id}` : "",
+    }).catch((error) => console.log(`[reply] SQLite pause failed for ${event.phone}: ${error.message}`));
+  }
+
+  // Simple routes are drafts too. Classification or AI output never grants
+  // permission to contact a customer without a human approval action.
   if (policy.mode === "auto") {
-    await sendWhatsApp(event.instanceName, event.phone, classified.suggestedReply);
-    await logReply({ event, classified, aiDraft: null, finalSent: classified.suggestedReply, action: "Sent As-Is", project });
     if (classified.route === "STOP_DNC") {
       sessionStops.add(event.phone);
       await recordStop(event);
+      await logReply({ event, classified, aiDraft: classified.suggestedReply, finalSent: null, action: "Suppressed", project });
+      return;
     }
+    const queued = await queueApprovalDraft({
+      event,
+      classified,
+      draft: classified.suggestedReply,
+      tier: "rules",
+      project,
+      mediaMap: projectCtx.sheet?.media ?? {},
+      lead,
+    });
+    await logReply({ event, classified, aiDraft: classified.suggestedReply, finalSent: null, action: queued.filtered ? "Telegram Filtered" : "Awaiting Approval", project });
     return;
   }
 
@@ -662,14 +738,11 @@ async function handleEvent(event) {
   console.log(`[ai] draft ready via ${provider}/${model}`);
 
   const mediaMap = projectCtx.sheet?.media ?? {};
-  const pendingId = crypto.randomBytes(6).toString("base64url");
-  const message = await pushDraft(draftCard({ event, classified, draft, lead, tier: draftTier, project, mediaMap }), pendingId, project, event.phone);
-  if (message.filtered) {
+  const queued = await queueApprovalDraft({ event, classified, draft, tier: draftTier, project, mediaMap, lead });
+  if (queued.filtered) {
     await logReply({ event, classified, aiDraft: draft, finalSent: null, action: "Telegram Filtered", project });
     return;
   }
-  pending[pendingId] = { event, classified, draft, tier: draftTier, project, mediaMap, tgMessageId: message.message_id, createdAt: new Date().toISOString() };
-  await savePending();
 }
 
 // ---------- Telegram button loop (long-poll getUpdates, 缺口 2) ----------
@@ -678,7 +751,14 @@ async function resolvePending(pendingId, action, finalText) {
   const p = pending[pendingId];
   if (!p) return null;
   if (action !== "take") {
-    await sendReply(p.event.instanceName, p.event.phone, finalText, p.mediaMap ?? {});
+    await sendEligibility.withSendLock({
+      recipient: { phone: p.event.phone },
+      campaign: { campaignId: "sales-brain", runId: `brain-approved:${pendingId}`, mode: "LIVE" },
+      connection: { instanceName: p.event.instanceName },
+      requestedAction: "AI_APPROVED_REPLY",
+      jobId: `brain-approved:${pendingId}`,
+      lockTtlMs: 5 * 60 * 1000,
+    }, () => sendReply(p.event.instanceName, p.event.phone, finalText, p.mediaMap ?? {}));
   }
   await logReply({
     event: p.event, classified: p.classified, aiDraft: p.draft,

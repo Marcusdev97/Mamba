@@ -1,4 +1,5 @@
 import { mergeNotionHumanFields } from "../domain/notion-crm-sync.mjs";
+import { decideStageTransition, normalizeSalesStage } from "../domain/sales-pipeline.mjs";
 import { customerHumanValuesFromPage, customerProperties } from "./notion-crm-sync-service.mjs";
 import { projectLeadHumanValuesFromPage, projectLeadProperties, stableIdFromPage } from "./notion-crm-project-lead-mapper.mjs";
 
@@ -87,6 +88,38 @@ export function createNotionCrmSyncEngine({ notion, repository, databaseIds = {}
       sqliteValues: local.humanValues,
       notionValues,
     });
+    if (inbox.entityType === "crm_project_lead" && merge.applyFromNotion["Project Stage"] !== undefined) {
+      const stageReason = clean(notionValues["Stage Change Reason"]);
+      const hasFreshStageReason = Boolean(stageReason) && stageReason !== clean(baseValues["Stage Change Reason"]);
+      const stageDecision = decideStageTransition({
+        from: local.salesStage || local.status,
+        to: merge.applyFromNotion["Project Stage"],
+        source: "notion",
+        reason: hasFreshStageReason ? stageReason : "",
+        lostReason: notionValues["Lost Reason"],
+        allowBackward: hasFreshStageReason,
+      });
+      if (!stageDecision.allowed) {
+        merge.conflicts.push({
+          field: "Project Stage",
+          baseValue: baseValues["Project Stage"] ?? null,
+          sqliteValue: local.humanValues["Project Stage"] ?? normalizeSalesStage(local.salesStage || local.status),
+          notionValue: notionValues["Project Stage"],
+          reasonCode: stageDecision.code,
+        });
+        delete merge.applyFromNotion["Project Stage"];
+      }
+    }
+    if (inbox.entityType === "crm_project_lead" && clean(merge.applyFromNotion.Temperature).toUpperCase() === "STOP" && !Number(local.stopFlag)) {
+      merge.conflicts.push({
+        field: "Temperature",
+        baseValue: baseValues.Temperature ?? null,
+        sqliteValue: local.humanValues.Temperature ?? null,
+        notionValue: notionValues.Temperature,
+        reasonCode: "USE_GLOBAL_STOP_WORKFLOW",
+      });
+      delete merge.applyFromNotion.Temperature;
+    }
     const snapshot = { ...baseValues, ...merge.applyFromNotion };
     let conflictIds = [];
     if (merge.conflicts.length) {
@@ -191,7 +224,7 @@ export function createNotionCrmSyncEngine({ notion, repository, databaseIds = {}
     if (job.entityType === "crm_customer") {
       properties = customerProperties(local, stableNotionId);
     } else {
-      const customerMap = await repository.mapping("crm_customer", local.contactKey);
+      const customerMap = await repository.mapping("crm_customer", local.customerId);
       properties = projectLeadProperties(local, stableNotionId, { customerPageId: customerMap?.notionPageId || "" });
     }
     page = page

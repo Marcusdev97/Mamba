@@ -10,6 +10,10 @@ const REQUIRED_TABLES = Object.freeze([
   "sync_conflicts",
   "sync_audit_events",
   "sync_reconciliation_runs",
+  "customers",
+  "customer_identities",
+  "sales_opportunities",
+  "sales_activities",
 ]);
 
 function clean(value) {
@@ -23,6 +27,34 @@ function parseJson(value, fallback = {}) {
 function eventId(prefix, ...parts) {
   const digest = crypto.createHash("sha256").update(parts.map(clean).join("\u001f")).digest("hex").slice(0, 24);
   return `${prefix}_${digest}`;
+}
+
+function opportunityId(projectLeadKey) {
+  const digest = crypto.createHash("sha256").update(clean(projectLeadKey)).digest("hex").slice(0, 28);
+  return `opportunity_${digest}`;
+}
+
+function notionStage(value) {
+  const normalized = clean(value).replace(/[\s-]+/g, "_").toUpperCase();
+  return ({
+    NEW: "New", CONTACTED: "Contacted", REPLIED: "Replied", QUALIFIED: "Qualified", WARM: "Warm",
+    APPOINTMENT: "Appointment", VIEWED: "Viewed", VIEWING: "Viewed", LOAN: "Loan Processing",
+    LOAN_PROCESSING: "Loan Processing", BOOKING: "Booking", SPA: "SPA Signed", SPA_SIGNED: "SPA Signed",
+    WON: "Won", LOST: "Lost",
+  })[normalized] || "New";
+}
+
+function sqliteStage(value) {
+  return clean(value).replace(/[\s-]+/g, "_").toUpperCase();
+}
+
+function legacyStatus(value) {
+  return ({ LOAN_PROCESSING: "LOAN", SPA_SIGNED: "SPA" })[sqliteStage(value)] || sqliteStage(value);
+}
+
+function notionTemperature(value) {
+  const normalized = clean(value).toUpperCase();
+  return ({ HOT: "Hot", WARM: "Warm", COLD: "Cold", NURTURE: "Nurture", STOP: "Stop" })[normalized] || "Cold";
 }
 
 function customerHumanValues(row = {}) {
@@ -44,17 +76,28 @@ function projectLeadHumanValues(row = {}) {
   return approvedHumanFields("projectLeads", {
     Project: crm.Project ?? row.projectCode ?? "",
     "Lead Source": crm["Lead Source"] ?? "",
-    "Buying Purpose": crm["Buying Purpose"] ?? "Unknown",
-    "Budget Min": crm["Budget Min"] ?? null,
-    "Budget Max": crm["Budget Max"] ?? null,
-    "Preferred Area": crm["Preferred Area"] ?? [],
+    "Buying Purpose": row.buyingPurpose || crm["Buying Purpose"] || "Unknown",
+    "Budget Min": row.budgetMin ?? crm["Budget Min"] ?? null,
+    "Budget Max": row.budgetMax ?? crm["Budget Max"] ?? null,
+    "Preferred Area": clean(row.preferredArea) ? clean(row.preferredArea).split(",").map((item) => item.trim()).filter(Boolean) : crm["Preferred Area"] ?? [],
+    "Preferred Property Type": row.preferredPropertyType || crm["Preferred Property Type"] || "",
     "Unit Preference": crm["Unit Preference"] ?? "",
-    "Buying Timeline": crm["Buying Timeline"] ?? "Unknown",
-    "Interest Level": crm["Interest Level"] ?? "Cold",
-    "Project Stage": crm["Project Stage"] ?? row.status ?? "New",
-    "Next Follow-up At": crm["Next Follow-up At"] ?? row.followUpAt ?? null,
-    "Assigned Agent": crm["Assigned Agent"] ?? row.assignedSales ?? "",
-    "Lost Reason": crm["Lost Reason"] ?? "",
+    "Room Requirement": row.roomRequirement || crm["Room Requirement"] || "",
+    "Tenure Preference": row.tenurePreference || crm["Tenure Preference"] || "",
+    "Transport Requirement": row.transportRequirement || crm["Transport Requirement"] || "",
+    "Buying Timeline": row.buyingTimeline || crm["Buying Timeline"] || "Unknown",
+    Temperature: notionTemperature(row.temperature || crm.Temperature),
+    "Interest Level": crm["Interest Level"] ?? (["HOT", "WARM"].includes(clean(row.temperature).toUpperCase()) ? notionTemperature(row.temperature) : "Cold"),
+    "Project Stage": notionStage(row.salesStage || row.status),
+    "Main Objection": row.mainObjection || crm["Main Objection"] || "",
+    "Decision Maker": row.decisionMaker || crm["Decision Maker"] || "",
+    "Loan Readiness": row.loanReadiness || crm["Loan Readiness"] || "",
+    "Current Property Ownership": row.currentPropertyOwnership || crm["Current Property Ownership"] || "",
+    "Next Action": row.nextAction || crm["Next Action"] || "",
+    "Next Follow-up At": row.nextFollowUpAt ?? crm["Next Follow-up At"] ?? row.followUpAt ?? null,
+    "Assigned Agent": row.assignedAgent || crm["Assigned Agent"] || row.assignedSales || "",
+    "Lost Reason": row.lostReason || crm["Lost Reason"] || "",
+    "Stage Change Reason": crm["Stage Change Reason"] || "",
   });
 }
 
@@ -78,7 +121,7 @@ export function createNotionCrmSyncRepository({
     const db = await database();
     const rows = await db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${REQUIRED_TABLES.map(sqlValue).join(",")});`);
     const present = new Set(rows.map((row) => row.name));
-    const [migration] = await db.query("SELECT version FROM schema_migrations WHERE version=304 LIMIT 1;").catch(() => []);
+    const [migration] = await db.query("SELECT version FROM schema_migrations WHERE version=307 LIMIT 1;").catch(() => []);
     const missing = REQUIRED_TABLES.filter((table) => !present.has(table));
     return { ready: Boolean(migration) && missing.length === 0, migration: migration?.version || null, missing };
   }
@@ -86,7 +129,7 @@ export function createNotionCrmSyncRepository({
   async function assertSchemaReady() {
     const status = await schemaStatus();
     if (!status.ready) {
-      const error = new Error(`SQLite ↔ Notion sync schema 尚未就绪：${status.missing.join(", ") || "migration 304 未记录"}。`);
+      const error = new Error(`SQLite ↔ Notion sync schema 尚未就绪：${status.missing.join(", ") || "migration 307 未记录"}。`);
       error.code = "SQLITE_NOTION_SYNC_SCHEMA_REQUIRED";
       error.retryable = false;
       error.schema = status;
@@ -95,23 +138,28 @@ export function createNotionCrmSyncRepository({
     return status;
   }
 
-  async function loadCustomer(contactKey) {
+  async function loadCustomer(customerId) {
     await assertSchemaReady();
     const db = await database();
     const [row] = await db.query(`
-SELECT c.contact_key AS contactKey, c.phone, c.display_name AS displayName, c.stop_flag AS stopFlag,
-       c.last_reply_at AS lastReplyAt, c.updated_at AS updatedAt, c.row_version AS contactVersion,
-       p.language, p.owner, p.global_status AS globalStatus, p.next_follow_up_at AS nextFollowUpAt,
+SELECT u.customer_id AS customerId, c.contact_key AS contactKey, u.primary_phone AS phone,
+       COALESCE(NULLIF(u.display_name,''),c.display_name,'') AS displayName,
+       CASE WHEN u.global_status='Stop' THEN 1 ELSE COALESCE(c.stop_flag,0) END AS stopFlag,
+       c.last_reply_at AS lastReplyAt, u.updated_at AS updatedAt, COALESCE(c.row_version,0) AS contactVersion,
+       p.language, p.owner, COALESCE(p.global_status,u.global_status) AS globalStatus, p.next_follow_up_at AS nextFollowUpAt,
        p.current_sales_stage AS currentSalesStage, p.main_objection AS mainObjection, p.notes,
-       COALESCE(p.row_version, 0) AS profileVersion,
-       (SELECT MAX(COALESCE(m.sent_at, m.created_at)) FROM conversations v JOIN messages m ON m.conversation_id=v.id WHERE v.contact_key=c.contact_key) AS lastContactAt
-FROM contacts c LEFT JOIN crm_customer_profiles p ON p.contact_key=c.contact_key
-WHERE c.contact_key=${sqlValue(contactKey)} LIMIT 1;`);
+       COALESCE(p.row_version, 0) AS profileVersion, u.row_version AS customerVersion,
+       (SELECT MAX(COALESCE(m.sent_at, m.created_at)) FROM messages m WHERE m.customer_id=u.customer_id) AS lastContactAt
+FROM customers u
+LEFT JOIN contacts c ON c.customer_id=u.customer_id AND c.phone=u.primary_phone
+LEFT JOIN crm_customer_profiles p ON p.customer_id=u.customer_id
+WHERE u.customer_id=${sqlValue(customerId)}
+ORDER BY p.updated_at DESC LIMIT 1;`);
     if (!row) return null;
     return {
       ...row,
-      customerId: stableCrmId("CUS", row.contactKey),
-      rowVersion: Number(row.contactVersion || 0) + Number(row.profileVersion || 0),
+      customerId: row.customerId,
+      rowVersion: Number(row.customerVersion || 0) + Number(row.contactVersion || 0) + Number(row.profileVersion || 0),
       humanValues: customerHumanValues(row),
     };
   }
@@ -120,10 +168,19 @@ WHERE c.contact_key=${sqlValue(contactKey)} LIMIT 1;`);
     await assertSchemaReady();
     const db = await database();
     const [row] = await db.query(`
-SELECT project_lead_key AS projectLeadKey, contact_key AS contactKey, project_code AS projectCode,
+SELECT p.project_lead_key AS projectLeadKey, p.contact_key AS contactKey, p.project_code AS projectCode,
+       p.customer_id AS customerId,
        p.phone, p.name, p.status, p.sequence_status AS sequenceStatus, p.last_flow_sent AS lastFlowSent,
        p.next_flow AS nextFlow, p.last_blast_at AS lastContactAt, p.follow_up_at AS followUpAt,
-       p.assigned_sales AS assignedSales, p.payload_json AS payloadJson, p.updated_at AS updatedAt,
+       p.assigned_sales AS assignedSales,p.sales_stage AS salesStage,p.temperature,
+       p.buying_purpose AS buyingPurpose,p.budget_min AS budgetMin,p.budget_max AS budgetMax,
+       p.preferred_area AS preferredArea,p.preferred_property_type AS preferredPropertyType,
+       p.room_requirement AS roomRequirement,p.tenure_preference AS tenurePreference,
+       p.transport_requirement AS transportRequirement,p.buying_timeline AS buyingTimeline,
+       p.main_objection AS mainObjection,p.decision_maker AS decisionMaker,p.loan_readiness AS loanReadiness,
+       p.current_property_ownership AS currentPropertyOwnership,p.next_action AS nextAction,
+       p.next_follow_up_at AS nextFollowUpAt,p.assigned_agent AS assignedAgent,p.lost_reason AS lostReason,
+       p.payload_json AS payloadJson, p.updated_at AS updatedAt,
        p.row_version AS rowVersion, c.stop_flag AS stopFlag
 FROM project_leads p JOIN contacts c ON c.contact_key=p.contact_key
 WHERE project_lead_key=${sqlValue(projectLeadKey)} LIMIT 1;`);
@@ -141,8 +198,8 @@ WHERE project_lead_key=${sqlValue(projectLeadKey)} LIMIT 1;`);
     const mapped = await mappingByStableId(entityType, stableId);
     if (mapped) return mapped.sqliteEntityId;
     if (entityType === "crm_customer") {
-      const rows = await db.query("SELECT contact_key AS entityId FROM contacts;");
-      return rows.find((row) => stableCrmId("CUS", row.entityId) === stableId)?.entityId || "";
+      const [row] = await db.query(`SELECT customer_id AS entityId FROM customers WHERE customer_id=${sqlValue(stableId)} LIMIT 1;`);
+      return row?.entityId || "";
     }
     if (entityType === "crm_project_lead") {
       const rows = await db.query("SELECT project_lead_key AS entityId FROM project_leads;");
@@ -256,15 +313,20 @@ ON CONFLICT(inbox_id,field_name) DO NOTHING;`);
     const db = await database();
     const at = clock().toISOString();
     const changedFields = Object.keys(values);
+    const allowedGlobalStatuses = new Set(["Active", "Stop", "Invalid", "Won", "Lost", "Merged"]);
+    const canonicalGlobalStatus = allowedGlobalStatuses.has(merged["Global Status"])
+      ? merged["Global Status"]
+      : current.globalStatus;
     await db.exec(`
 BEGIN IMMEDIATE;
-UPDATE contacts SET display_name=${sqlValue(merged["Display Name"])}, updated_at=${sqlValue(at)} WHERE contact_key=${sqlValue(entityId)};
-INSERT INTO crm_customer_profiles(contact_key,language,owner,global_status,next_follow_up_at,current_sales_stage,main_objection,notes,updated_at)
-VALUES (${sqlValue(entityId)},${sqlValue(merged.Language)},${sqlValue(merged.Owner)},${sqlValue(merged["Global Status"])},
+UPDATE customers SET display_name=${sqlValue(merged["Display Name"])},global_status=${sqlValue(canonicalGlobalStatus)},updated_at=${sqlValue(at)} WHERE customer_id=${sqlValue(entityId)};
+UPDATE contacts SET display_name=${sqlValue(merged["Display Name"])}, updated_at=${sqlValue(at)} WHERE customer_id=${sqlValue(entityId)};
+INSERT INTO crm_customer_profiles(contact_key,customer_id,language,owner,global_status,next_follow_up_at,current_sales_stage,main_objection,notes,updated_at)
+VALUES (${sqlValue(current.contactKey)},${sqlValue(entityId)},${sqlValue(merged.Language)},${sqlValue(merged.Owner)},${sqlValue(merged["Global Status"])},
   ${sqlValue(merged["Next Follow-up At"])},${sqlValue(merged["Current Sales Stage"])},${sqlValue(merged["Main Objection"])},${sqlValue(merged.Notes)},${sqlValue(at)})
 ON CONFLICT(contact_key) DO UPDATE SET language=excluded.language,owner=excluded.owner,global_status=excluded.global_status,
   next_follow_up_at=excluded.next_follow_up_at,current_sales_stage=excluded.current_sales_stage,
-  main_objection=excluded.main_objection,notes=excluded.notes,updated_at=excluded.updated_at;
+  main_objection=excluded.main_objection,notes=excluded.notes,customer_id=excluded.customer_id,updated_at=excluded.updated_at;
 INSERT INTO sync_audit_events(event_id,direction,entity_type,entity_id,operation,changed_fields_json,detail_json,created_at)
 VALUES (${sqlValue(eventId("audit", inbox.inboxId, "apply"))},'NOTION_TO_LOCAL','crm_customer',${sqlValue(entityId)},'APPLY_HUMAN_FIELDS',
   ${sqlValue(JSON.stringify(changedFields))},${sqlValue(JSON.stringify({ inboxId: inbox.inboxId }))},${sqlValue(at)})
@@ -291,14 +353,43 @@ COMMIT;`);
     assertReducedSyncPayload(payload);
     const at = clock().toISOString();
     const db = await database();
+    const nextStage = sqliteStage(mergedHuman["Project Stage"] || current.salesStage);
+    const nextLegacyStatus = legacyStatus(nextStage);
+    const opportunityKey = opportunityId(current.projectLeadKey);
+    const activityType = nextStage !== sqliteStage(current.salesStage) ? "STAGE_CHANGED" : "PROFILE_UPDATED";
     await db.exec(`
 BEGIN IMMEDIATE;
 UPDATE project_leads SET
-  status=${sqlValue(mergedHuman["Project Stage"] || current.status)},
-  follow_up_at=${sqlValue(mergedHuman["Next Follow-up At"])},
-  assigned_sales=${sqlValue(mergedHuman["Assigned Agent"])},
+  sales_stage=${sqlValue(nextStage)},
+  status=${sqlValue(nextLegacyStatus)},
+  temperature=${sqlValue(clean(mergedHuman.Temperature || current.temperature).toUpperCase())},
+  buying_purpose=${sqlValue(mergedHuman["Buying Purpose"])},budget_min=${sqlValue(mergedHuman["Budget Min"])},budget_max=${sqlValue(mergedHuman["Budget Max"])},
+  preferred_area=${sqlValue((mergedHuman["Preferred Area"] || []).join(", "))},preferred_property_type=${sqlValue(mergedHuman["Preferred Property Type"])},
+  room_requirement=${sqlValue(mergedHuman["Room Requirement"])},tenure_preference=${sqlValue(mergedHuman["Tenure Preference"])},
+  transport_requirement=${sqlValue(mergedHuman["Transport Requirement"])},buying_timeline=${sqlValue(mergedHuman["Buying Timeline"])},
+  main_objection=${sqlValue(mergedHuman["Main Objection"])},decision_maker=${sqlValue(mergedHuman["Decision Maker"])},
+  loan_readiness=${sqlValue(mergedHuman["Loan Readiness"])},current_property_ownership=${sqlValue(mergedHuman["Current Property Ownership"])},
+  next_action=${sqlValue(mergedHuman["Next Action"])},next_follow_up_at=${sqlValue(mergedHuman["Next Follow-up At"])},
+  follow_up_at=${sqlValue(mergedHuman["Next Follow-up At"])},assigned_agent=${sqlValue(mergedHuman["Assigned Agent"])},
+  assigned_sales=${sqlValue(mergedHuman["Assigned Agent"])},lost_reason=${sqlValue(mergedHuman["Lost Reason"])},
   payload_json=${sqlValue(JSON.stringify(payload))}, updated_at=${sqlValue(at)}
 WHERE project_lead_key=${sqlValue(entityId)};
+INSERT OR IGNORE INTO sales_opportunities(opportunity_id,customer_id,project_lead_key,project_code,stage,probability_percent,trigger_type,trigger_event_id,created_at,updated_at)
+SELECT ${sqlValue(opportunityKey)},customer_id,project_lead_key,project_code,${sqlValue(nextStage)},
+  CASE ${sqlValue(nextStage)} WHEN 'REPLIED' THEN 10 WHEN 'QUALIFIED' THEN 25 WHEN 'WARM' THEN 35 WHEN 'APPOINTMENT' THEN 45 WHEN 'VIEWED' THEN 55 WHEN 'LOAN_PROCESSING' THEN 65 WHEN 'BOOKING' THEN 80 WHEN 'SPA_SIGNED' THEN 90 WHEN 'WON' THEN 100 ELSE 0 END,
+  'MANUAL_PROMOTION',${sqlValue(inbox.inboxId)},${sqlValue(at)},${sqlValue(at)}
+FROM project_leads WHERE project_lead_key=${sqlValue(entityId)} AND ${sqlValue(nextStage)} NOT IN ('NEW','CONTACTED');
+UPDATE sales_opportunities SET stage=${sqlValue(nextStage)},lost_reason=${sqlValue(mergedHuman["Lost Reason"])},
+  won_at=CASE WHEN ${sqlValue(nextStage)}='WON' THEN COALESCE(won_at,${sqlValue(at)}) ELSE won_at END,
+  lost_at=CASE WHEN ${sqlValue(nextStage)}='LOST' THEN COALESCE(lost_at,${sqlValue(at)}) ELSE lost_at END,updated_at=${sqlValue(at)}
+WHERE project_lead_key=${sqlValue(entityId)} AND ${sqlValue(nextStage)} NOT IN ('NEW','CONTACTED');
+INSERT INTO sales_activities(activity_id,idempotency_key,customer_id,project_lead_key,opportunity_id,activity_type,actor_type,summary,reason,before_json,after_json,source_event,occurred_at,created_at)
+VALUES (${sqlValue(eventId("sales_activity", inbox.inboxId))},${sqlValue(`notion-sales:${inbox.inboxId}`)},${sqlValue(current.customerId)},${sqlValue(entityId)},
+  (SELECT opportunity_id FROM sales_opportunities WHERE project_lead_key=${sqlValue(entityId)}),${sqlValue(activityType)},'NOTION',
+  ${sqlValue(activityType === "STAGE_CHANGED" ? `${current.salesStage} → ${nextStage}` : "Sales profile updated from Notion")},
+  ${sqlValue(mergedHuman["Stage Change Reason"])},${sqlValue(JSON.stringify(current.humanValues))},${sqlValue(JSON.stringify(mergedHuman))},
+  ${sqlValue(inbox.inboxId)},${sqlValue(at)},${sqlValue(at)})
+ON CONFLICT(idempotency_key) DO NOTHING;
 INSERT INTO sync_audit_events(event_id,direction,entity_type,entity_id,operation,changed_fields_json,detail_json,created_at)
 VALUES (${sqlValue(eventId("audit", inbox.inboxId, "apply"))},'NOTION_TO_LOCAL','crm_project_lead',${sqlValue(entityId)},'APPLY_HUMAN_FIELDS',
   ${sqlValue(JSON.stringify(Object.keys(approved)))},${sqlValue(JSON.stringify({ inboxId: inbox.inboxId }))},${sqlValue(at)})
@@ -384,11 +475,17 @@ ON CONFLICT(event_id) DO NOTHING;`);
     const at = clock().toISOString();
     await db.exec(`
 INSERT INTO sync_jobs(idempotency_key,direction,entity_type,entity_id,status,attempt_count,available_at,payload_json,created_at,updated_at)
-SELECT 'LOCAL_TO_NOTION:crm_customer:' || c.contact_key || ':' || (c.row_version + COALESCE(p.row_version,0)),
-  'LOCAL_TO_NOTION','crm_customer',c.contact_key,'PENDING',0,${sqlValue(at)},'{}',${sqlValue(at)},${sqlValue(at)}
-FROM contacts c LEFT JOIN crm_customer_profiles p ON p.contact_key=c.contact_key
-LEFT JOIN notion_entity_map m ON m.entity_type='crm_customer' AND m.sqlite_entity_id=c.contact_key
-WHERE m.sqlite_entity_id IS NULL OR m.last_sqlite_version < (c.row_version + COALESCE(p.row_version,0))
+SELECT 'LOCAL_TO_NOTION:crm_customer:' || customer_id || ':' || local_version,
+  'LOCAL_TO_NOTION','crm_customer',customer_id,'PENDING',0,${sqlValue(at)},'{}',${sqlValue(at)},${sqlValue(at)}
+FROM (
+  SELECT u.customer_id,u.row_version + COALESCE(MAX(c.row_version),0) + COALESCE(MAX(p.row_version),0) AS local_version
+  FROM customers u
+  LEFT JOIN contacts c ON c.customer_id=u.customer_id
+  LEFT JOIN crm_customer_profiles p ON p.customer_id=u.customer_id
+  GROUP BY u.customer_id,u.row_version
+) local_customer
+LEFT JOIN notion_entity_map m ON m.entity_type='crm_customer' AND m.sqlite_entity_id=local_customer.customer_id
+WHERE m.sqlite_entity_id IS NULL OR m.last_sqlite_version < local_customer.local_version
 ON CONFLICT(idempotency_key) DO NOTHING;
 INSERT INTO sync_jobs(idempotency_key,direction,entity_type,entity_id,status,attempt_count,available_at,payload_json,created_at,updated_at)
 SELECT 'LOCAL_TO_NOTION:crm_project_lead:' || p.project_lead_key || ':' || p.row_version,
@@ -464,7 +561,7 @@ ON CONFLICT(idempotency_key) DO NOTHING;`);
     await assertSchemaReady();
     const db = await database();
     const [counts] = await db.query(`SELECT
-      (SELECT COUNT(*) FROM contacts) AS customers,
+      (SELECT COUNT(*) FROM customers) AS customers,
       (SELECT COUNT(*) FROM project_leads) AS projectLeads,
       (SELECT COUNT(*) FROM notion_entity_map) AS mappings,
       (SELECT COUNT(*) FROM notion_entity_map WHERE sync_status='ARCHIVED') AS archivedPages,

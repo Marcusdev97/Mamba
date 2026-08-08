@@ -6,7 +6,7 @@
 // 幂等：靠 messageId 去重，随时可以再跑补新的。
 // 续跑：每完成一页就把断点写进 SQLite；中途断线或重启，下次从下一页继续。
 
-import { describeMessage, messageMediaKind, resolvePhone, resolvePhoneWithLid, lidPhonePair } from "../reply_intake.mjs";
+import { describeMessage, messageMediaKind, resolvePhoneWithLid, resolveLid, lidPhonePair } from "../reply_intake.mjs";
 
 const DEFAULT_PAGE_SIZE = 200;
 // 扫完一整轮，如果私聊讯息里认得出号码的不到这个比例，就当成「坏掉」而不是
@@ -15,6 +15,8 @@ const MIN_RESOLVE_RATIO = 0.05;
 const DEFAULT_PAGE_DELAY_MS = 750;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_RECENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RECENT_MAX_PAGES = 3;
 const EARLIEST_MESSAGE_AT = "1970-01-01T00:00:00.000Z";
 const EXCLUDED_JID_MARKERS = ["@g.us", "@broadcast", "@newsletter"];
 const SYSTEM_MESSAGE_KEYS = new Set([
@@ -55,6 +57,8 @@ function decode(instance, message, lookup = null) {
   if (!phone || !text) return null;
   const sentAt = messageTimeIso(message);
   const messageId = String(key.id || message?.id || `${instance}_${phone}_${sentAt}`);
+  const remoteJid = String(key.remoteJid ?? message?.remoteJid ?? "");
+  const lid = resolveLid(message);
   if (key.fromMe) {
     return {
       phone,
@@ -64,6 +68,8 @@ function decode(instance, message, lookup = null) {
         text,
         mediaKind: messageMediaKind(message),
         instanceName: instance,
+        remoteJid,
+        lid,
         messageId,
         sentAt,
         source: "phone",
@@ -80,6 +86,8 @@ function decode(instance, message, lookup = null) {
       text,
       mediaKind: messageMediaKind(message),
       instanceName: instance,
+      remoteJid,
+      lid,
       receivedAt: sentAt,
       name: message.pushName || "",
     },
@@ -101,6 +109,7 @@ export function createEvolutionHistorySync({
   conversationLog,
   listInstances,
   lidMap = null,
+  identityRepository = null,
   pageSize = DEFAULT_PAGE_SIZE,
   pageDelayMs = DEFAULT_PAGE_DELAY_MS,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
@@ -116,8 +125,17 @@ export function createEvolutionHistorySync({
   const safePageDelayMs = Math.max(0, Number(pageDelayMs) || 0);
   const safeRetryDelayMs = Math.max(0, Number(retryDelayMs) || 0);
   const safeMaxAttempts = Math.max(1, Number(maxAttempts) || DEFAULT_MAX_ATTEMPTS);
+  let identityStateEnabled = null;
 
-  async function fetchPage(instance, page, cutoffAt, onProgress) {
+  async function canSaveIdentityState() {
+    if (!identityRepository) return false;
+    if (identityStateEnabled === null) {
+      identityStateEnabled = identityRepository.schemaStatus().then((status) => status.ready).catch(() => false);
+    }
+    return identityStateEnabled;
+  }
+
+  async function fetchPage(instance, page, cutoffAt, onProgress, lowerBoundAt = EARLIEST_MESSAGE_AT) {
     let lastError = null;
     for (let attempt = 1; attempt <= safeMaxAttempts; attempt += 1) {
       try {
@@ -126,7 +144,7 @@ export function createEvolutionHistorySync({
           body: JSON.stringify({
             where: {
               messageTimestamp: {
-                gte: EARLIEST_MESSAGE_AT,
+                gte: lowerBoundAt,
                 lte: cutoffAt,
               },
             },
@@ -170,6 +188,18 @@ export function createEvolutionHistorySync({
   async function saveState(instance, state, dryRun) {
     if (dryRun || typeof conversationLog.saveHistorySyncState !== "function") return;
     await conversationLog.saveHistorySyncState(instance, state);
+    if (await canSaveIdentityState()) {
+      await identityRepository.saveBackfillState(`evolution_history:${instance}`, {
+        status: String(state.status || "running").toUpperCase(),
+        cursor: { phase: state.phase, page: state.page, pages: state.pages, cutoffAt: state.cutoffAt },
+        processedCount: Number(state.fetched || 0),
+        unresolvedCount: Number(state.unresolved || 0),
+        startedAt: state.startedAt,
+        completedAt: state.status === "completed" ? state.finishedAt : null,
+        errorCode: state.status === "failed" ? "EVOLUTION_HISTORY_FAILED" : "",
+        errorMessage: state.error || "",
+      });
+    }
   }
 
   async function pauseBetweenPages(page, pages) {
@@ -430,5 +460,113 @@ export function createEvolutionHistorySync({
     };
   }
 
-  return { syncInstance, syncAll };
+  // Tracker 的 webhook 是实时入口；这段只补它离线期间的缺口。时间窗和页数都设上限，
+  // 避免每次 Tracker 重启都意外触发一次完整历史扫描。
+  async function syncRecent({
+    instance = "",
+    dryRun = false,
+    lookbackMs = DEFAULT_RECENT_LOOKBACK_MS,
+    maxPages = DEFAULT_RECENT_MAX_PAGES,
+    onProgress = null,
+  } = {}) {
+    let names = (await listInstances()).map((item) => item.name || item?.instance?.instanceName).filter(Boolean);
+    if (instance) names = names.filter((name) => name === instance);
+    if (!names.length) {
+      throw new Error(instance
+        ? `找不到号码 ${instance}，或它现在没连上 Evolution。`
+        : "Evolution 上没有任何已连接的号码，无法补回近期消息。");
+    }
+
+    const safeLookbackMs = Math.max(60_000, Math.min(Number(lookbackMs) || DEFAULT_RECENT_LOOKBACK_MS, 7 * 24 * 60 * 60 * 1000));
+    const safeMaxPages = Math.max(1, Math.min(Number(maxPages) || DEFAULT_RECENT_MAX_PAGES, 10));
+    const cutoffAt = clock().toISOString();
+    const lowerBoundAt = new Date(clock().getTime() - safeLookbackMs).toISOString();
+    if (lidMap) await lidMap.warm().catch(() => {});
+
+    const before = await conversationLog.stats();
+    const results = [];
+    for (const name of names) {
+      let page = 1;
+      let availablePages = 1;
+      let fetched = 0;
+      let written = 0;
+      let failed = 0;
+      let inboundCount = 0;
+      let outboundCount = 0;
+      let privateSeen = 0;
+      let resolved = 0;
+
+      while (page <= availablePages && page <= safeMaxPages) {
+        const batch = await fetchPage(name, page, cutoffAt, onProgress, lowerBoundAt);
+        availablePages = Math.max(1, batch.pages || 1);
+        await learnPairs(batch, dryRun);
+        const decoded = [];
+        for (const message of batch.records) {
+          if (!isPrivateMessage(message)) continue;
+          privateSeen += 1;
+          const item = decode(name, message, lookupLid);
+          if (!item) continue;
+          resolved += 1;
+          decoded.push(item);
+        }
+        const inbound = decoded.filter((item) => item.dir === "in").map((item) => item.row);
+        const outbound = decoded.filter((item) => item.dir === "out").map((item) => item.row);
+        let pageWritten = decoded.length;
+        let pageFailed = 0;
+        if (!dryRun) {
+          const inboundReport = await conversationLog.recordReplies(inbound, { force: true });
+          const outboundReport = await conversationLog.recordOutbounds(outbound, { force: true });
+          pageWritten = inboundReport.written + outboundReport.written;
+          pageFailed = inboundReport.failed.length + outboundReport.failed.length;
+        }
+        fetched += batch.records.length;
+        written += pageWritten;
+        failed += pageFailed;
+        inboundCount += inbound.length;
+        outboundCount += outbound.length;
+        onProgress?.({
+          instance: name,
+          phase: "catch_up",
+          page,
+          pages: Math.min(availablePages, safeMaxPages),
+          fetched,
+          written,
+          failed,
+          sinceAt: lowerBoundAt,
+          cutoffAt,
+        });
+        await pauseBetweenPages(page, Math.min(availablePages, safeMaxPages));
+        page += 1;
+      }
+
+      assertResolvable(name, { privateSeen, resolved });
+      results.push({
+        instance: name,
+        inbound: inboundCount,
+        outbound: outboundCount,
+        fetched,
+        written: dryRun ? 0 : written,
+        failed,
+        unresolved: privateSeen - resolved,
+        pagesRead: page - 1,
+        truncated: availablePages > safeMaxPages,
+        dryRun,
+      });
+    }
+
+    const after = await conversationLog.stats();
+    return {
+      mode: "bounded_catch_up",
+      sinceAt: lowerBoundAt,
+      cutoffAt,
+      maxPages: safeMaxPages,
+      instances: names,
+      results,
+      added: Number(after.messages) - Number(before.messages),
+      totalMessages: after.messages,
+      unresolved: results.reduce((sum, result) => sum + (Number(result.unresolved) || 0), 0),
+    };
+  }
+
+  return { syncInstance, syncAll, syncRecent };
 }

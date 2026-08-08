@@ -1,4 +1,4 @@
-import { approvedHumanFields, detectCrmConflict, stableCrmId } from "../domain/notion-crm-sync.mjs";
+import { approvedHumanFields, detectCrmConflict } from "../domain/notion-crm-sync.mjs";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -102,7 +102,13 @@ export function createNotionCrmSyncService({ notion, databaseIds = {}, outbox = 
       error.code = "NOTION_CRM_CUSTOMERS_NOT_CONFIGURED";
       throw error;
     }
-    const customerId = clean(customer?.customerId) || stableCrmId("CUS", customer?.contactKey || customer?.phone);
+    const customerId = clean(customer?.customerId);
+    if (!customerId) {
+      const error = new Error("Notion CRM sync 缺少稳定 customer_id；禁止从 phone/contact_key 临时生成。");
+      error.code = "CUSTOMER_IDENTITY_REQUIRED_FOR_NOTION_SYNC";
+      error.retryable = false;
+      throw error;
+    }
     try {
       const result = await notion("POST", `/databases/${databaseId}/query`, {
         filter: { property: "Customer ID", title: { equals: customerId } },

@@ -78,12 +78,14 @@ export function createConversationLogService({
   sqliteBinary = "",
   clock = () => new Date(),
   chunkSize = DEFAULT_CHUNK_SIZE,
+  identityRepository = null,
 } = {}) {
   const databasePath = path.join(dataDir, "mamba.sqlite");
   let cliPromise = null;
   let leadIndex = { phones: new Set(), loadedAt: 0 };
   let connectionIndex = { byNumber: new Map(), byInstance: new Map(), loadedAt: 0 };
   let messageCoreColumns = null;
+  let customerIdentityColumns = null;
 
   function cli() {
     if (!cliPromise) {
@@ -101,6 +103,21 @@ export function createConversationLogService({
     messageCoreColumns = ["connection_key", "external_message_id", "idempotency_key"]
       .every((column) => columns.has(column));
     return messageCoreColumns;
+  }
+
+  async function supportsCustomerIdentity(database) {
+    if (customerIdentityColumns !== null) return customerIdentityColumns;
+    const [contactColumns, conversationColumns, messageColumns] = await Promise.all([
+      database.query("PRAGMA table_info(contacts);"),
+      database.query("PRAGMA table_info(conversations);"),
+      database.query("PRAGMA table_info(messages);"),
+    ]);
+    customerIdentityColumns = {
+      contacts: contactColumns.some((row) => row.name === "customer_id"),
+      conversations: conversationColumns.some((row) => row.name === "customer_id"),
+      messages: ["customer_id", "remote_jid", "raw_payload_ref"].every((name) => messageColumns.some((row) => row.name === name)),
+    };
+    return customerIdentityColumns;
   }
 
   function messageIdempotencyKey(row) {
@@ -200,6 +217,8 @@ export function createConversationLogService({
       messageType: clean(event.mediaKind) || "text",
       senderNumber: digits(event.sender),
       instanceName: clean(event.instanceName),
+      remoteJid: clean(event.remoteJid),
+      lid: clean(event.lid),
       sentAt: isoOrNull(event.receivedAt),
       payload: inboundPayload(event),
       leadId: clean(event.leadId),
@@ -217,6 +236,8 @@ export function createConversationLogService({
     const initialDeliveryRank = deliveryStatusRank(initialDeliveryStatus);
     const payload = {
       instanceName: clean(message.instanceName),
+      remoteJid: clean(message.remoteJid) || `${contactKey}@s.whatsapp.net`,
+      lid: clean(message.lid),
       templateKey: clean(message.templateKey),
       runId: clean(message.runId),
       mediaKind: clean(message.mediaKind),
@@ -245,6 +266,8 @@ export function createConversationLogService({
       messageType: clean(message.mediaKind) || "text",
       senderNumber: digits(message.senderNumber),
       instanceName: clean(message.instanceName),
+      remoteJid: clean(message.remoteJid) || `${contactKey}@s.whatsapp.net`,
+      lid: clean(message.lid),
       sentAt,
       payload: JSON.stringify(payload),
       leadId: clean(message.leadId),
@@ -256,26 +279,38 @@ export function createConversationLogService({
   // contacts 的 reply_count / last_reply_* 是从 messages 重算的，不是 +1 累加 ——
   // 累加碰到重放就会灌水，重算怎么跑都对，而且以前算错的也会顺便修好。
   async function writeChunk(rows) {
-    if (!rows.length) return;
+    if (!rows.length) return { written: 0, identityConflicts: [] };
     const database = await cli();
     const hasCoreMessageIdentity = await supportsCoreMessageIdentity(database);
+    const identityColumns = await supportsCustomerIdentity(database);
     const index = await connections();
     const nowIso = clock().toISOString();
     // 先把每条讯息归到哪段对话算好，后面 conversations 和 messages 用的是同一个值。
-    const placed = rows.map((row) => {
+    let placed = rows.map((row) => {
       const connectionKey = resolveConnection(index, row.senderNumber, row.instanceName);
       return { ...row, connectionKey, conversationId: conversationIdFor(row.contactKey, connectionKey) };
     });
+    let identityConflicts = [];
+    if (identityRepository && identityColumns.contacts && identityColumns.conversations && identityColumns.messages) {
+      const resolved = await identityRepository.resolveRows(placed.map((row) => ({
+        ...row,
+        phone: row.contactKey,
+        externalMessageId: row.id,
+      })), { source: "conversation_log" });
+      identityConflicts = resolved.conflicts || [];
+      placed = resolved.rows.filter((row) => row.customerId && !row.identityConflict);
+    }
+    if (!placed.length) return { written: 0, identityConflicts };
     const contactKeys = [...new Set(placed.map((row) => row.contactKey))];
     const conversationIds = [...new Set(placed.map((row) => row.conversationId))];
 
-    const contactValues = contactKeys
-      .map((key) => `(${sqlValue(key)}, ${sqlValue(key)}, '', 0, '', NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)})`)
+    const contactValues = [...new Map(placed.map((row) => [row.contactKey, row])).values()]
+      .map((row) => `(${sqlValue(row.contactKey)}, ${sqlValue(row.contactKey)}, '', 0, '', NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)}${identityColumns.contacts ? `, ${sqlValue(row.customerId)}` : ""})`)
       .join(",\n  ");
 
     const conversationValues = [...new Map(placed.map((row) => [
       row.conversationId,
-      `(${sqlValue(row.conversationId)}, ${sqlValue(row.contactKey)}, ${sqlValue(row.connectionKey)}, ${sqlValue(row.contactKey)}, NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)})`,
+      `(${sqlValue(row.conversationId)}, ${sqlValue(row.contactKey)}, ${sqlValue(row.connectionKey)}, ${sqlValue(row.contactKey)}, NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)}${identityColumns.conversations ? `, ${sqlValue(row.customerId)}` : ""})`,
     ])).values()].join(",\n  ");
 
     const messageValues = placed.map((row) => `(${[
@@ -285,6 +320,11 @@ export function createConversationLogService({
         sqlValue(row.connectionKey),
         sqlValue(row.id),
         sqlValue(messageIdempotencyKey(row)),
+      ] : []),
+      ...(identityColumns.messages ? [
+        sqlValue(row.customerId),
+        sqlValue(row.remoteJid),
+        sqlValue(`evolution:${row.connectionKey || row.instanceName || "unknown"}:${row.id}`),
       ] : []),
       sqlValue(row.direction),
       sqlValue(row.text),
@@ -302,24 +342,42 @@ export function createConversationLogService({
       .map((row) => `UPDATE contacts SET display_name = ${sqlValue(row.name)}, updated_at = ${sqlValue(nowIso)} WHERE contact_key = ${sqlValue(row.contactKey)} AND display_name = '';`)
       .join("\n");
 
+    // Identity resolution has already checked these rows for conflicts. Persist the exact
+    // resolved customer instead of guessing through customers.primary_phone: an alias phone
+    // can legitimately belong to a customer whose primary phone is different.
+    const contactIdentityUpdates = identityColumns.contacts
+      ? [...new Map(placed.map((row) => [row.contactKey, row])).values()]
+        .map((row) => `UPDATE contacts SET customer_id=${sqlValue(row.customerId)} WHERE contact_key=${sqlValue(row.contactKey)};`)
+        .join("\n")
+      : "";
+    const conversationIdentityUpdates = identityColumns.conversations
+      ? [...new Map(placed.map((row) => [row.conversationId, row])).values()]
+        .map((row) => `UPDATE conversations SET customer_id=${sqlValue(row.customerId)} WHERE id=${sqlValue(row.conversationId)};`)
+        .join("\n")
+      : "";
+
     const contactList = contactKeys.map(sqlValue).join(", ");
     const conversationList = conversationIds.map(sqlValue).join(", ");
 
     await database.exec(`
 BEGIN IMMEDIATE;
 
-INSERT OR IGNORE INTO contacts (contact_key, phone, display_name, reply_count, last_reply_text, last_reply_at, created_at, updated_at)
+INSERT OR IGNORE INTO contacts (contact_key, phone, display_name, reply_count, last_reply_text, last_reply_at, created_at, updated_at${identityColumns.contacts ? ", customer_id" : ""})
 VALUES
   ${contactValues};
 
 ${nameUpdates}
 
-INSERT OR IGNORE INTO conversations (id, contact_key, connection_key, customer_phone, last_message_at, created_at, updated_at)
+${contactIdentityUpdates}
+
+INSERT OR IGNORE INTO conversations (id, contact_key, connection_key, customer_phone, last_message_at, created_at, updated_at${identityColumns.conversations ? ", customer_id" : ""})
 VALUES
   ${conversationValues};
 
+${conversationIdentityUpdates}
+
 INSERT OR IGNORE INTO messages (${hasCoreMessageIdentity
-    ? "id, conversation_id, connection_key, external_message_id, idempotency_key, direction, text, message_type, source, flow_topic, template_key, sent_at, payload_json, created_at"
+    ? `id, conversation_id, connection_key, external_message_id, idempotency_key${identityColumns.messages ? ", customer_id, remote_jid, raw_payload_ref" : ""}, direction, text, message_type, source, flow_topic, template_key, sent_at, payload_json, created_at`
     : "id, conversation_id, direction, text, message_type, source, flow_topic, template_key, sent_at, payload_json, created_at"})
 VALUES
   ${messageValues};
@@ -344,6 +402,7 @@ UPDATE contacts SET
 WHERE contact_key IN (${contactList});
 
 COMMIT;`);
+    return { written: placed.length, identityConflicts };
   }
 
   // 共用的批次入口。名单闸在这里统一挡，chunk 一批一批写，中途可以回报进度。
@@ -356,14 +415,16 @@ COMMIT;`);
       const batch = buffer;
       buffer = [];
       try {
-        await writeChunk(batch);
-        report.written += batch.length;
+        const result = await writeChunk(batch);
+        report.written += Number(result?.written ?? batch.length);
+        report.identityConflicts = Number(report.identityConflicts || 0) + Number(result?.identityConflicts?.length || 0);
       } catch (error) {
         // 整批失败就退回一条一条写，把坏的那几条隔离出来，不要因为一条坏资料丢掉一整批。
         for (const row of batch) {
           try {
-            await writeChunk([row]);
-            report.written += 1;
+            const result = await writeChunk([row]);
+            report.written += Number(result?.written ?? 1);
+            report.identityConflicts = Number(report.identityConflicts || 0) + Number(result?.identityConflicts?.length || 0);
           } catch (rowError) {
             report.failed.push({ id: row.id, error: rowError.message });
           }
@@ -431,26 +492,45 @@ WHERE contact_key=${sqlValue(contactKey)} LIMIT 1;`);
     }
     const conversationId = conversationIdFor(contactKey, connectionKey);
     const nowIso = clock().toISOString();
+    const identityColumns = await supportsCustomerIdentity(database);
+    let customerId = "";
+    if (identityRepository && identityColumns.contacts && identityColumns.conversations) {
+      const resolution = await identityRepository.resolveRows([{
+        phone: contactKey,
+        contactKey,
+        name: clean(name),
+        instanceName: instance,
+      }], { source: "manual_contact" });
+      if (resolution.conflicts?.length || !resolution.rows?.[0]?.customerId) {
+        const error = new Error("客户身份发生冲突，请先到 Customer Identity 后台处理。");
+        error.statusCode = 409;
+        error.conflictId = resolution.conflicts?.[0]?.conflictId || "";
+        throw error;
+      }
+      customerId = resolution.rows[0].customerId;
+    }
     await database.exec(`
 BEGIN IMMEDIATE;
 INSERT OR IGNORE INTO contacts(
-  contact_key, phone, display_name, reply_count, last_reply_text, last_reply_at, created_at, updated_at
+  contact_key, phone, display_name, reply_count, last_reply_text, last_reply_at, created_at, updated_at${identityColumns.contacts ? ", customer_id" : ""}
 ) VALUES (
   ${sqlValue(contactKey)}, ${sqlValue(contactKey)}, ${sqlValue(clean(name))}, 0, '', NULL,
-  ${sqlValue(nowIso)}, ${sqlValue(nowIso)}
+  ${sqlValue(nowIso)}, ${sqlValue(nowIso)}${identityColumns.contacts ? `, ${sqlValue(customerId)}` : ""}
 );
 UPDATE contacts SET
   display_name=CASE
     WHEN ${sqlValue(clean(name))}<>'' THEN ${sqlValue(clean(name))}
     ELSE display_name END,
-  updated_at=${sqlValue(nowIso)}
+  updated_at=${sqlValue(nowIso)}${identityColumns.contacts ? `,
+  customer_id=${sqlValue(customerId)}` : ""}
 WHERE contact_key=${sqlValue(contactKey)};
 INSERT OR IGNORE INTO conversations(
-  id, contact_key, connection_key, customer_phone, last_message_at, created_at, updated_at
+  id, contact_key, connection_key, customer_phone, last_message_at, created_at, updated_at${identityColumns.conversations ? ", customer_id" : ""}
 ) VALUES (
   ${sqlValue(conversationId)}, ${sqlValue(contactKey)}, ${sqlValue(connectionKey)},
-  ${sqlValue(contactKey)}, NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)}
+  ${sqlValue(contactKey)}, NULL, ${sqlValue(nowIso)}, ${sqlValue(nowIso)}${identityColumns.conversations ? `, ${sqlValue(customerId)}` : ""}
 );
+${identityColumns.conversations ? `UPDATE conversations SET customer_id=${sqlValue(customerId)} WHERE id=${sqlValue(conversationId)};` : ""}
 COMMIT;`);
     return {
       phone: contactKey,
@@ -469,8 +549,10 @@ COMMIT;`);
     const row = normalizeInbound(event);
     if (!row) return { saved: false, reason: "invalid_event" };
     if (!force && !await isKnownLead(row.contactKey, { leadId: row.leadId })) return { saved: false, reason: "not_a_lead" };
-    await writeChunk([row]);
-    return { saved: true, reason: "" };
+    const result = await writeChunk([row]);
+    return result?.identityConflicts?.length
+      ? { saved: false, reason: "identity_conflict", conflictId: result.identityConflicts[0].conflictId }
+      : { saved: true, reason: "" };
   }
 
   // requireExisting = 只记「已经在对话中」的号码。给「你手机的回复」用：
@@ -484,8 +566,10 @@ COMMIT;`);
     } else if (!await isKnownLead(row.contactKey, { leadId: row.leadId })) {
       return { saved: false, reason: "not_a_lead" };
     }
-    await writeChunk([row]);
-    return { saved: true, reason: "" };
+    const result = await writeChunk([row]);
+    return result?.identityConflicts?.length
+      ? { saved: false, reason: "identity_conflict", conflictId: result.identityConflicts[0].conflictId }
+      : { saved: true, reason: "" };
   }
 
   // Evolution 的投递回执没有客户号码，只有原发送 message id。Campaign 发送时已经
@@ -503,9 +587,10 @@ COMMIT;`);
         observedAt: isoOrNull(record?.observedAt) ?? clock().toISOString(),
         instanceName: clean(record?.instanceName),
       };
-      const current = normalized.get(messageId);
+      const observationKey = `${candidate.instanceName}\u0000${messageId}`;
+      const current = normalized.get(observationKey);
       if (!current || deliveryStatusRank(candidate.status) >= deliveryStatusRank(current.status)) {
-        normalized.set(messageId, candidate);
+        normalized.set(observationKey, candidate);
       }
     }
 
@@ -520,23 +605,40 @@ COMMIT;`);
     if (!normalized.size) return report;
 
     const database = await cli();
-    const ids = [...normalized.keys()];
+    const hasCoreMessageIdentity = await supportsCoreMessageIdentity(database);
+    const connectionIndex = await connections();
+    const ids = [...new Set([...normalized.values()].map((item) => item.messageId))];
     const existing = new Map();
     for (let offset = 0; offset < ids.length; offset += 400) {
       const slice = ids.slice(offset, offset + 400);
       const rows = await database.query(`
-SELECT id, payload_json AS payloadJson
+SELECT ${hasCoreMessageIdentity ? "row_id AS rowId,connection_key AS connectionKey,external_message_id AS externalMessageId," : ""}id, payload_json AS payloadJson
 FROM messages
-WHERE direction = 'outbound' AND id IN (${slice.map(sqlValue).join(", ")});`);
-      for (const row of rows) existing.set(String(row.id), row);
+WHERE direction = 'outbound' AND ${hasCoreMessageIdentity ? "external_message_id" : "id"} IN (${slice.map(sqlValue).join(", ")});`);
+      for (const row of rows) {
+        const messageId = String(hasCoreMessageIdentity ? row.externalMessageId : row.id);
+        if (!existing.has(messageId)) existing.set(messageId, []);
+        existing.get(messageId).push(row);
+      }
     }
-    report.matched = existing.size;
-    report.unmatched = normalized.size - existing.size;
 
     const statements = [];
     for (const update of normalized.values()) {
-      const row = existing.get(update.messageId);
-      if (!row) continue;
+      const candidates = existing.get(update.messageId) || [];
+      const expectedConnection = hasCoreMessageIdentity && update.instanceName
+        ? resolveConnection(connectionIndex, "", update.instanceName)
+        : "";
+      const matches = expectedConnection
+        ? candidates.filter((row) => clean(row.connectionKey) === expectedConnection)
+        : candidates;
+      // A receipt without connection context is safe only when the external ID has
+      // exactly one local row. Otherwise updating every sender would invent evidence.
+      if (matches.length !== 1) {
+        report.unmatched += 1;
+        continue;
+      }
+      const row = matches[0];
+      report.matched += 1;
       let payload = {};
       try {
         const parsed = JSON.parse(row.payloadJson || "{}");
@@ -580,7 +682,7 @@ WHERE direction = 'outbound' AND id IN (${slice.map(sqlValue).join(", ")});`);
 
       statements.push(`UPDATE messages
 SET payload_json = ${sqlValue(JSON.stringify(payload))}
-WHERE id = ${sqlValue(update.messageId)} AND direction = 'outbound';`);
+WHERE ${hasCoreMessageIdentity ? `row_id = ${Number(row.rowId)}` : `id = ${sqlValue(update.messageId)}`} AND direction = 'outbound';`);
       report.updated += 1;
     }
 

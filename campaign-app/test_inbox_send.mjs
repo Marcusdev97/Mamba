@@ -42,8 +42,11 @@ const conversationLog = {
   async prepareManualContact(contact) { prepared.push(contact); return { ...contact, conversationId: "conv-new", existed: false }; },
   async recordOutbound(m, options) { recorded.push(m); recordOptions.push(options); return { saved: true }; },
 };
+const sendEligibility = {
+  async withSendLock(_options, operation) { return operation(); },
+};
 
-const svc = createInboxSendService({ api: fakeApi, dataDir, conversationLog });
+const svc = createInboxSendService({ api: fakeApi, dataDir, conversationLog, sendEligibility });
 
 assert.equal(normalizeManualRecipientPhone("012-345 6789"), "60123456789");
 assert.equal(normalizeManualRecipientPhone("+60 12-345 6789"), "60123456789");
@@ -144,14 +147,14 @@ await assert.rejects(
 
 // 没有图讯息的客户 → available:false，不炸
 const emptyApi = async (p) => p.includes("findMessages") ? { messages: [] } : {};
-const svc2 = createInboxSendService({ api: emptyApi, dataDir, conversationLog });
+const svc2 = createInboxSendService({ api: emptyApi, dataDir, conversationLog, sendEligibility });
 const none = await svc2.fetchInboundMedia({ instance: "wa_01", phone: "60122" });
 assert.equal(none.available, false);
 assert.equal(none.reason, "not_found");
 
 // --- simulate 模式不真的打 api ---
 const simCalls = [];
-const simSvc = createInboxSendService({ api: async (p, o) => { simCalls.push(p); return {}; }, dataDir, conversationLog, simulate: true });
+const simSvc = createInboxSendService({ api: async (p, o) => { simCalls.push(p); return {}; }, dataDir, conversationLog, sendEligibility, simulate: true });
 await simSvc.sendText({ instance: "wa_01", phone: "60111000001", text: "sim" });
 assert.equal(simCalls.length, 0, "simulate 模式不可以真的呼叫 Evolution");
 

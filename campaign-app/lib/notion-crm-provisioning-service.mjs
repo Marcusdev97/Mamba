@@ -159,8 +159,9 @@ export function createNotionCrmProvisioningService({
   }
 
   async function apply({ parentPageId = "", confirmation = "" } = {}) {
-    if (confirmation !== "CREATE_NOTION_CRM_V1") {
-      const error = new Error("Apply 需要明确 confirmation=CREATE_NOTION_CRM_V1。");
+    const expectedConfirmation = `CREATE_NOTION_CRM_V${NOTION_CRM_SCHEMA_VERSION}`;
+    if (confirmation !== expectedConfirmation) {
+      const error = new Error(`Apply 需要明确 confirmation=${expectedConfirmation}。`);
       error.code = "NOTION_CRM_APPLY_CONFIRMATION_REQUIRED";
       throw error;
     }

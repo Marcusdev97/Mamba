@@ -76,8 +76,8 @@ async function blastStats() {
       seen.add(key);
       const s = perProject.get(project) ?? { sent: 0, skippedStop: 0, skippedReplied: 0, failed: 0 };
       if (sentDay === TODAY) s.sent += 1;
-      else if (job.status === "SKIPPED_SUPPRESSED") s.skippedStop += 1;
-      else if (job.status === "SKIPPED_REPLIED") s.skippedReplied += 1;
+      else if (["SKIPPED_SUPPRESSED", "SKIPPED_ELIGIBILITY_GLOBAL_STOP"].includes(job.status)) s.skippedStop += 1;
+      else if (["SKIPPED_REPLIED", "SKIPPED_ELIGIBILITY_CUSTOMER_REPLIED"].includes(job.status)) s.skippedReplied += 1;
       if (job.status === "FAILED" && sentDay === TODAY) s.failed += 1;
       perProject.set(project, s);
     });

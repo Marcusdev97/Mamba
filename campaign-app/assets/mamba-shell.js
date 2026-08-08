@@ -3,17 +3,20 @@
 
   const groups = [
     { title: "Overview", links: [
+      { code: "DB", label: "Action Dashboard", href: "/dashboard", paths: ["/dashboard"] },
       { code: "CC", label: "Control Center", href: "/control-center", paths: ["/control-center"] },
       { code: "TV", label: "Team View", href: "/team-view", paths: ["/team-view"] },
     ] },
     { title: "Customers", links: [
       { code: "IN", label: "Customer Inbox", href: "/conversations", paths: ["/conversations"] },
       { code: "CR", label: "Chat Room", href: "/inbox", paths: ["/inbox"] },
-      { code: "FU", label: "Follow-up & Appointments", href: "/follow-up", paths: ["/follow-up"] },
+      { code: "SP", label: "Sales Pipeline", href: "/sales", paths: ["/sales", "/follow-up"] },
       { code: "CS", label: "Customer Search", href: "/lookup", paths: ["/lookup"] },
+      { code: "CI", label: "Customer Identity", href: "/customer-identity", paths: ["/customer-identity"] },
       { code: "RF", label: "Refresh Customers", href: "/refresh", paths: ["/refresh"] },
     ] },
     { title: "Campaigns", links: [
+      { code: "CM", label: "Campaign Planning", href: "/campaigns", paths: ["/campaigns"] },
       { code: "CP", label: "Campaign Center", href: "/send", paths: ["/send", "/flow-1", "/next-flow"] },
       { code: "TF", label: "Templates & Flows", href: "/templates", paths: ["/templates"] },
       { code: "CA", label: "Campaign Automations", href: "/campaign-todo", paths: ["/campaign-todo"], wip: true },

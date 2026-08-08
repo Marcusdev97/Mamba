@@ -994,12 +994,20 @@ function renderPreview(r) {
   const scheduleChip = scheduleAuto
     ? '<div class="chip" style="border-color:#22c55e;color:#86efac">自动尽早完成 <b>约 ' + r.schedule.end + '</b>（约 ' + durationText + '）</div>'
     : '<div class="chip">指定时间窗 <b>' + r.schedule.start + " – " + r.schedule.end + "</b></div>";
+  const eligibility = s.eligibilityPreview || null;
+  const eligibilityChips = eligibility
+    ? '<div class="chip" style="border-color:#22c55e;color:#86efac">Eligible <b>' + eligibility.eligible + '</b></div>' +
+      '<div class="chip" style="border-color:' + (eligibility.blocked ? '#ef4444;color:#fca5a5' : '#334155;color:#cbd5e1') + '">Blocked <b>' + eligibility.blocked + '</b></div>' +
+      Object.entries(eligibility.byReason || {}).filter(([reason]) => reason !== 'ELIGIBLE').map(([reason,count]) =>
+        '<div class="chip">' + escapeAttr(reason) + ' <b>' + count + '</b></div>'
+      ).join('')
+    : '';
   $("previewChips").innerHTML =
     '<div class="chip">模式 <b>' + s.mode + "</b></div>" +
     scheduleChip +
     '<div class="chip">Leads <b>' + s.total + "</b></div>" +
     (s.leadGroupName ? '<div class="chip">客户群 <b>' + escapeAttr(s.leadGroupName) + "</b></div>" : "") +
-    senderChips + overflowChip +
+    senderChips + overflowChip + eligibilityChips +
     '<div class="chip">模板 <b>' + ((s.templateSource || templateSource) === "notion" ? "Notion" : "本地") + " · " + (s.templateFlow || templateFlow || "Flow 1") + "</b></div>" +
     (preparedCanQueue ? '<div class="chip" style="border-color:#f59e0b;color:#fbbf24">当前 Batch 正在发送 · 本预览可排下一批</div>' : "");
   $("previewBody").innerHTML = s.assignments.map((a) =>

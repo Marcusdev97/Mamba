@@ -39,8 +39,8 @@ assert.equal(resolvePhoneWithLid({ key: { remoteJid: "999@lid" } }), null, "没�
 // 长度闸：JID 是 "0" 时不能变成一个叫「60」的客户。
 assert.equal(normalizePhone("0"), null);
 assert.equal(normalizePhone("123"), null);
-assert.equal(normalizePhone("0168568756"), "60168568756");
-assert.equal(normalizePhone("60168568756"), "60168568756");
+assert.equal(normalizePhone("0100000000"), "60100000000");
+assert.equal(normalizePhone("60100000000"), "60100000000");
 
 // ---- service ----
 
@@ -50,26 +50,25 @@ await database.exec(LID_MAP_SCHEMA_SQL);
 const lidMap = createLidMapService({ dataDir });
 
 assert.equal(await lidMap.resolve("999"), null, "空表查无");
+await database.exec("INSERT INTO lid_map(lid,phone,source,confidence,evidence,created_at,updated_at) VALUES ('legacy-name','60100000000','profile_name',30,'old guess','2026-01-01','2026-01-01');");
+const legacyReader = createLidMapService({ dataDir });
+assert.equal(await legacyReader.resolve("legacy-name"), null, "历史 display-name 猜测也不能继续参与解析");
 
 await lidMap.learn([{ lid: "999", phone: "60111222333" }], { source: "outbound_match" });
 assert.equal(await lidMap.resolve("999"), "60111222333");
 
-// 低可信度不能盖掉高可信度，补回脚本才能随便重跑。
-await lidMap.learn([{ lid: "999", phone: "60000000000" }], { source: "profile_name" });
+// 名字来源完全禁用，不能写进 identity lookup。
+const nameOnly = await lidMap.learn([{ lid: "999", phone: "60000000000" }], { source: "profile_name" });
+assert.equal(nameOnly.reason, "NAME_ONLY_IDENTITY_FORBIDDEN");
 assert.equal(await lidMap.resolve("999"), "60111222333", "profile_name 不该盖掉 outbound_match");
 
-// message id 是精确比对，该赢过猜文字的。
-await lidMap.learn([{ lid: "999", phone: "60555555555" }], { source: "message_id" });
-assert.equal(await lidMap.resolve("999"), "60555555555", "message_id 应该赢过 outbound_match");
-
-// 高可信度可以修正低可信度。
-await lidMap.learn([{ lid: "999", phone: "60777777777" }], { source: "live" });
-assert.equal(await lidMap.resolve("999"), "60777777777", "live 应该修正得了");
-
-// 同可信度可以覆盖 —— 同一支来源重跑要能修正自己上次的结论。
-await lidMap.learn([{ lid: "999", phone: "60666666666" }], { source: "live" });
-assert.equal(await lidMap.resolve("999"), "60666666666");
-await lidMap.learn([{ lid: "999", phone: "60777777777" }], { source: "live" });
+// 一旦同一个 LID 指向不同号码，不论新证据 confidence 多高都不能自动搬家。
+const messageConflict = await lidMap.learn([{ lid: "999", phone: "60555555555" }], { source: "message_id" });
+assert.equal(messageConflict.conflicts.length, 1);
+assert.equal(await lidMap.resolve("999"), "60111222333");
+const liveConflict = await lidMap.learn([{ lid: "999", phone: "60777777777" }], { source: "live" });
+assert.equal(liveConflict.conflicts.length, 1);
+assert.equal(await lidMap.resolve("999"), "60111222333", "LID conflict 必须留给人工处理");
 
 // learn() 之后 resolveCached 必须马上看得到新的对照。
 // 之前 learn() 把整个快取清空，导致补回历史时每页 learn 一次、全程查无，
@@ -77,15 +76,15 @@ await lidMap.learn([{ lid: "999", phone: "60777777777" }], { source: "live" });
 await lidMap.warm();
 await lidMap.learn([{ lid: "888", phone: "60123123123" }], { source: "live" });
 assert.equal(lidMap.resolveCached("888"), "60123123123", "learn 之后快取要马上生效");
-assert.equal(lidMap.resolveCached("999"), "60777777777", "learn 不能把旧的冲掉");
+assert.equal(lidMap.resolveCached("999"), "60111222333", "learn 不能把旧的冲掉");
 
 // 垃圾进不去。
 await lidMap.learn([{ lid: "", phone: "60111222333" }, { lid: "777", phone: "" }], { source: "live" });
 assert.equal(await lidMap.resolve("777"), null);
 
 const stats = await lidMap.stats();
-assert.equal(stats.total, 2);
-assert.equal(stats.live, 2);
+assert.equal(stats.total, 3, "stats 保留历史审计 row，但 resolver 不采用 profile_name");
+assert.equal(stats.live, 1);
 
 await fs.rm(dataDir, { recursive: true, force: true });
 console.log("lid map tests passed.");

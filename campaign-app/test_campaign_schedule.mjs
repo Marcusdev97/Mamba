@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   buildAssignments,
-  CampaignRunner,
+  CampaignRunner as ProductionCampaignRunner,
   RecipientNotOnWhatsAppError,
   campaignHasActiveResumeSession,
   campaignOutcomeSummary,
@@ -25,6 +25,33 @@ import {
   randomGapSeconds,
   scheduleModeForEnd,
 } from "./lib/campaign-schedule.mjs";
+
+class CampaignRunner extends ProductionCampaignRunner {
+  constructor(options = {}) {
+    super(options);
+    if (options.sendEligibility) return;
+    this.sendEligibility = {
+      requestedActionForRunner: () => "FLOW_SEQUENCE",
+      withSendLock: async (request, operation) => {
+        const phone = String(request?.recipient?.phone || "").replace(/\D/g, "");
+        if (this.state?.mode !== "TEST" && this.suppression?.has(phone)) {
+          const decision = {
+            allowed: false,
+            reason_code: "GLOBAL_STOP",
+            reason: "Customer is globally suppressed from outbound contact.",
+            decision_id: "test-stop-decision",
+          };
+          const error = new Error(decision.reason);
+          error.code = "SEND_ELIGIBILITY_BLOCKED";
+          error.reasonCode = decision.reason_code;
+          error.decision = decision;
+          throw error;
+        }
+        return operation();
+      },
+    };
+  }
+}
 
 const config = {
   delivery: {
@@ -572,7 +599,7 @@ function queuedAssignments(count) {
   liveRunner.systemLog = async () => {};
   liveRunner.sendMediaWithRetry = async () => { throw new Error("LIVE suppression should stop before send"); };
   await liveRunner.processJob(liveJob);
-  assert.equal(liveJob.status, "SKIPPED_SUPPRESSED", "LIVE still honors the global STOP list");
+  assert.equal(liveJob.status, "SKIPPED_ELIGIBILITY_GLOBAL_STOP", "LIVE STOP is enforced by the central eligibility decision");
 
   const testRunner = new CampaignRunner({ config: { delivery: { replyLookbackDays: 0 } }, env: {} });
   const testJob = { ...liveJob, id: "suppressed-test", status: "QUEUED", part1: null, error: null };

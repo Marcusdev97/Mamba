@@ -147,6 +147,7 @@ export function createConversationDispositionService({
   history,
   systemLogs,
   addLocalStop,
+  propagateStop,
   updateLocalDisposition,
   clock = () => new Date(),
 } = {}) {
@@ -270,6 +271,24 @@ export function createConversationDispositionService({
 
     // DNC must also enter the global suppression overlay before any cloud mirror.
     if (disposition.stopFlag) {
+      if (!propagateStop) {
+        throw serviceError(500, "客户已在本机标记 STOP，但 Send Eligibility propagation 没有载入。", {
+          localApplied: true,
+        });
+      }
+      try {
+        await propagateStop({
+          phone,
+          source: "conversation_disposition",
+          reasonCode: disposition.stopReason || disposition.key || "AGENT_MANUAL_STOP",
+          reason: disposition.label || "",
+          idempotencyKey: `disposition-stop:${id || phone}:${disposition.key}`,
+        });
+      } catch (error) {
+        throw serviceError(500, `客户已在本机标记 STOP，但统一 STOP propagation 失败：${error.message}`, {
+          localApplied: true,
+        });
+      }
       if (!addLocalStop) {
         throw serviceError(500, "客户已在本机标记 STOP，但全局 STOP service 没有载入。请重启 Mamba server。", {
           localApplied: true,

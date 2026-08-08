@@ -19,6 +19,7 @@ import {
   messageMediaKind,
   resolvePhone,
   resolvePhoneWithLid,
+  resolveLid,
   lidPhonePair,
   collectMessages,
   collectMessageStatusUpdates,
@@ -39,6 +40,11 @@ import { selectLocalWebhookInstances } from "./lib/device-sender-policy.mjs";
 import { createSystemLogService } from "./lib/system-log-service.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
 import { createLidMapService } from "./lib/lid-map-service.mjs";
+import { createCustomerIdentityRepository } from "./lib/customer-identity-repository.mjs";
+import { createSendEligibilityRepository } from "./lib/send-eligibility-repository.mjs";
+import { createSendEligibilityService } from "./lib/send-eligibility-service.mjs";
+import { createSalesPipelineRepository } from "./lib/sales-pipeline-repository.mjs";
+import { createSalesPipelineService } from "./lib/sales-pipeline-service.mjs";
 
 const hub = makeHub();
 
@@ -79,8 +85,24 @@ let lastWebhookError = null;
 const pushedPhones = new Set(); // unknown numbers manually pushed to Notion this session
 const reliability = createTrackerReliabilityService({ trackerDir });
 const trackerSystemLogs = createSystemLogService({ rootDir: paths.rootDir });
-const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
-const lidMap = createLidMapService({ dataDir: paths.dataDir });
+const customerIdentity = createCustomerIdentityRepository({ dataDir: paths.dataDir });
+const salesPipeline = createSalesPipelineService({ repository: createSalesPipelineRepository({ dataDir: paths.dataDir }) });
+const sendEligibility = createSendEligibilityService({
+  repository: createSendEligibilityRepository({ dataDir: paths.dataDir }),
+  activityObserver: {
+    onMeaningfulReply: ({ input, result }) => salesPipeline.recordInbound({
+      customerId: result?.customerId,
+      phone: input.phone,
+      projectCode: input.projectCode,
+      sourceEvent: input.idempotencyKey,
+      category: input.category,
+      occurredAt: input.occurredAt,
+    }),
+    onError: ({ error }) => trackerSystemLogs.write({ level: "error", area: "sales_pipeline", event: "SALES_ACTIVITY_RECORD_FAILED", message: error.message, context: { code: error.code || "SALES_ACTIVITY_RECORD_FAILED" } }),
+  },
+});
+const conversationLog = createConversationLogService({ dataDir: paths.dataDir, identityRepository: customerIdentity });
+const lidMap = createLidMapService({ dataDir: paths.dataDir, identityRepository: customerIdentity });
 const notionReplyQueue = createNotionReplyQueueService({
   notion,
   reliability,
@@ -338,10 +360,35 @@ async function saveEvent(event) {
   if (event.stopFlag) {
     try {
       await addLocalStop(event.phone, event.route);
+      await sendEligibility.propagateStop({
+        phone: event.phone,
+        source: "reply_tracker",
+        reasonCode: event.route || "EXPLICIT_STOP",
+        reason: event.text,
+        idempotencyKey: event.id ? `tracker-stop:${event.id}` : "",
+      });
       console.log(`🔴 ${event.phone} added to global STOP list (${event.route}).`);
     } catch (error) {
       console.log(`Local STOP add failed for ${event.phone}: ${error.message}`);
     }
+  } else {
+    await sendEligibility.propagateReply({
+      phone: event.phone,
+      projectCode: event.project || event.projectCode,
+      source: "reply_tracker",
+      category: event.route || event.category || "OTHER",
+      text: event.text,
+      idempotencyKey: event.id ? `tracker-reply:${event.id}` : "",
+    }).catch((error) => {
+      console.log(`[reply-tracker] Eligibility pause failed phone=${event.phone}: ${error.message}`);
+      trackerSystemLogs.write({
+        level: "error",
+        area: "send_eligibility",
+        event: "REPLY_PROPAGATION_FAILED",
+        message: `客户回复已经落地，但自动序列暂停写入失败：${error.message}`,
+        context: { messageId: event.id, code: error.code || "" },
+      }).catch(() => {});
+    });
   }
 
   // Telegram Hub 统一收件箱: 全量转发 (SPAM 除外), 按盘进 topic。失败只记 log,
@@ -406,6 +453,8 @@ function outboundFromPhone(payload, message) {
     text,
     mediaKind: messageMediaKind(message),
     instanceName: senderFromPayload(payload),
+    remoteJid,
+    lid: resolveLid(message),
     messageId: key.id ?? "",
     sentAt: new Date(timestamp < 100000000000 ? timestamp * 1000 : timestamp).toISOString(),
     source: "phone",
@@ -438,6 +487,8 @@ function eventFromMessage(payload, message) {
     deviceId: deviceIdentity.id,
     deviceName: deviceIdentity.name,
     instanceName: senderFromPayload(payload),
+    remoteJid,
+    lid: resolveLid(message),
     name: lead.name ?? message.pushName ?? "Unknown",
     phone,
     leadId: lead.leadId ?? null,

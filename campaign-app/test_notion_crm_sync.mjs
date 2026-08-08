@@ -43,6 +43,7 @@ const notion = async (method, pathname, body) => {
 
 const service = createNotionCrmSyncService({ notion, databaseIds: { customers: "customers-db" } });
 const customer = {
+  customerId: "CUS-TEST00000000000000000001",
   contactKey: "contact-1",
   phone: "60120000001",
   displayName: "Alice",
@@ -113,7 +114,7 @@ const noPhoneService = createNotionCrmSyncService({
   databaseIds: { customers: "customers-db" },
 });
 await noPhoneService.upsertCustomer({
-  customer: { contactKey: "no-phone", displayName: "No Phone", updatedAt: "2026-08-05T04:00:00.000Z" },
+  customer: { customerId: "CUS-TEST00000000000000000002", contactKey: "no-phone", displayName: "No Phone", updatedAt: "2026-08-05T04:00:00.000Z" },
 });
 assert.equal(noPhoneCalls.find((call) => call.pathname === "/pages")
   .body.properties["Primary Phone"].phone_number, null, "Notion rejects an empty-string phone number");

@@ -646,6 +646,29 @@ export function registerCampaignRoutes(router) {
       const label = runner.state?.campaignType === "RECYCLE" ? campaign.refreshTemplateFlow : "Flow 1";
       throw httpError(502, `读取或套用 Notion ${label} 模板失败: ${error.message}`);
     }
+    if (runtime.sendEligibility) {
+      try {
+        runner.state.eligibilityPreview = await runtime.sendEligibility.previewAssignments(
+          runner.state.assignments,
+          {
+            campaign: {
+              campaignId: runner.state.campaignId,
+              runId: runner.state.runId,
+              projectId: runner.state.projectId,
+              mode: runner.state.mode,
+              flowTopic: runner.flowTopic?.() || runner.state.templateFlow || runner.state.flowLabel || "",
+              resendCooldownDays: runner.resendCooldownDays?.() || 0,
+              startAt: runner.state.startAt,
+              endAt: runner.state.endAt,
+            },
+          },
+        );
+      } catch (error) {
+        throw httpError(503, `Send Eligibility 预检失败；不会建立可发送预览：${error.message}`, {
+          code: error.code || "SEND_ELIGIBILITY_PREVIEW_FAILED",
+        });
+      }
+    }
     try {
       await runner.saveState();
     } catch (error) {

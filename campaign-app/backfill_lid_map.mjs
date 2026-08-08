@@ -4,7 +4,7 @@
 // key.remoteJid 变成 "257814068985957@lid"，电话号码不在讯息里。没有对照表的话
 // 历史补回会静静地写 0 条。
 //
-// 四个来源，由可信到不可信：
+// 三个来源，由可信到不可信：
 //   1. pair       讯息本身同时带 @lid 和真号码 —— 白拿的，直接信
 //   2. message_id 本机每条讯息都留着 Evolution 自己的 message id，而本机知道号码。
 //                 拿这个 id 回去对 Evolution，那条讯息的 remoteJid 就是这个人的 lid。
@@ -12,20 +12,18 @@
 //   3. outbound   我们自己发的 blast 文字 + 时间戳，跟本机发送纪录对得上 ——
 //                 本机纪录知道号码，反推这个 lid 是谁。只收「唯一命中」的，
 //                 同一句话对到两个人就整条丢掉。
-//   4. profile    fetchProfile 拿到 lid 的显示名，跟名单里的名字唯一对上 ——
-//                 最弱，预设不开，要 --with-profile-names 才跑
+// 显示名不属于 identity evidence；Customer Identity 禁止只凭名字自动合并。
 //
-// 幂等：高可信度不会被低可信度盖掉，随时可以重跑。
+// 幂等：同一 pair 可重跑；同一个 LID 出现不同 phone 时写 conflict，不自动覆盖。
 //
 //   node campaign-app/backfill_lid_map.mjs
 //   node campaign-app/backfill_lid_map.mjs --instance=wa_01
-//   node campaign-app/backfill_lid_map.mjs --with-profile-names
 //   node campaign-app/backfill_lid_map.mjs --dry-run
 
 import { paths, makeApi, loadEnv, listInstances } from "./campaign_core.mjs";
 import { createLidMapService } from "./lib/lid-map-service.mjs";
 import { createSqliteCli } from "./lib/sqlite-cli.mjs";
-import { lidPhonePair, resolveLid, normalizePhone } from "./reply_intake.mjs";
+import { lidPhonePair, resolveLid } from "./reply_intake.mjs";
 import path from "node:path";
 
 const PAGE_SIZE = 200;
@@ -35,12 +33,10 @@ const PAGE_DELAY_MS = 300;
 const TIME_WINDOW_SECONDS = 180;
 
 const dryRun = process.argv.includes("--dry-run");
-const withProfileNames = process.argv.includes("--with-profile-names");
 const onlyInstance = process.argv.find((a) => a.startsWith("--instance="))?.split("=")[1] || "";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const normText = (value) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 120).toLowerCase();
-const normName = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
 const env = await loadEnv();
 const api = makeApi(env);
@@ -187,38 +183,6 @@ WHERE m.direction = 'outbound' AND m.text <> '';`);
   return tallyToPairs(votes, `${instance}:outbound_text`);
 }
 
-// 来源 4：靠显示名对名单。名字重复的一律不要。
-async function pairsFromProfiles(instance, records, known) {
-  const leads = await database.query("SELECT contact_key AS phone, display_name AS name FROM contacts WHERE display_name <> '';");
-  const byName = new Map();
-  for (const row of leads) {
-    const key = normName(row.name);
-    if (!key) continue;
-    if (!byName.has(key)) byName.set(key, new Set());
-    byName.get(key).add(String(row.phone));
-  }
-
-  const lids = [...new Set(records.map(resolveLid).filter(Boolean))].filter((lid) => !known.has(lid));
-  const pairs = [];
-  let checked = 0;
-  for (const lid of lids) {
-    checked += 1;
-    process.stdout.write(`\r[${instance}] 查显示名… ${checked}/${lids.length}   `);
-    const profile = await api(`/chat/fetchProfile/${encodeURIComponent(instance)}`, {
-      method: "POST",
-      body: JSON.stringify({ number: `${lid}@lid` }),
-      timeoutMs: 30_000,
-    }).catch(() => null);
-    const matches = byName.get(normName(profile?.name));
-    if (matches?.size === 1) {
-      pairs.push({ lid, phone: [...matches][0], evidence: `${instance}:profile_name ${profile.name}` });
-    }
-    await wait(PAGE_DELAY_MS);
-  }
-  if (lids.length) process.stdout.write("\n");
-  return pairs;
-}
-
 const all = await listInstances(api);
 let names = all.filter((item) => String(item.status).toUpperCase() === "OPEN").map((item) => item.name);
 if (onlyInstance) names = names.filter((name) => name === onlyInstance);
@@ -251,14 +215,6 @@ for (const instance of names) {
   const { pairs: matched, conflicts } = await pairsFromOutbound(instance, privateRecords);
   if (!dryRun && matched.length) await lidMap.learn(matched, { source: "outbound_match" });
   console.log(`[${instance}] 发送文字比对：${matched.length} 个 lid${conflicts ? `（另有 ${conflicts} 个票数冲突）` : ""}`);
-
-  if (withProfileNames) {
-    await lidMap.warm();
-    const known = new Set([...direct, ...byId, ...matched].map((p) => p.lid));
-    const byName = await pairsFromProfiles(instance, privateRecords, known);
-    if (!dryRun && byName.length) await lidMap.learn(byName, { source: "profile_name" });
-    console.log(`[${instance}] 显示名比对：${byName.length} 个 lid`);
-  }
 
   const unresolvedLids = [...new Set(privateRecords.map(resolveLid).filter(Boolean))];
   await lidMap.warm();

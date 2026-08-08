@@ -1,6 +1,6 @@
 # Mamba Architecture
 
-> 状态：Current + Target · 更新日期：2026-08-05
+> 状态：Current + Target · 更新日期：2026-08-08
 >
 > 本文件说明 Mamba 现在如何运行，以及新增代码应该往哪里放。
 > 数据架构的正式决策见
@@ -161,6 +161,15 @@ Application Services
 
 ## 5. Campaign 生命周期
 
+### Campaign planning model（migration 308）
+
+Campaign 与 Run 已分离：`campaigns` 保存销售活动计划，`campaign_steps` 表示 Flow／人工动作，
+`campaign_members` 保存每位客户在该 Campaign 内的 pause／exit 生命周期，`campaign_runs`
+只代表一次 TEST／LIVE 执行，`send_jobs` 仍是最小发送证据，`campaign_outcomes` 保存可审计归因。
+同一 Campaign 可以执行多次 Run；TEST Run 不读取 LIVE Members。第一阶段只把旧 Flow 1–10
+投影到新模型，不改变实际发送、Scheduler 或恢复行为。完整规则见
+[`CAMPAIGN_MODEL.md`](CAMPAIGN_MODEL.md)。
+
 ```text
 Select Project / Lead Group
         ↓
@@ -293,6 +302,7 @@ TEST 与 LIVE 使用同一套 Campaign engine，差异只在收件人来源和�
 |---|---|---|
 | Campaign 运行结果 | SQLite | 每位客户发送后立即写入 |
 | Sync jobs | SQLite | 幂等、重试、冲突状态 |
+| Customer identity | SQLite `customers` + `customer_identities` | `customer_id` 稳定；phone／JID／LID 是 aliases |
 | Notion 展示资料 | Notion mirror | Campaign 完成后最终一致 |
 | 人工维护的模板／Knowledge | Notion | 拉入本机缓存后供运行读取 |
 | 当前 run state | `campaign-data/runs` + SQLite | 用于恢复和诊断 |
@@ -321,6 +331,12 @@ last-write-wins 覆盖。原始 messages、conversation payload、secret 与 rec
 进入 Notion。Dashboard 位于 `/notion-sync`；migration 304 应用后仍默认 paused，必须由
 操作员明确恢复。
 
+Customer Identity 由 migration 305 的 `customers`、`customer_identities`、
+`identity_conflicts`、`identity_unresolved_events` 与 `customer_merge_events` 支撑。
+Conversation／message／project lead 与 Notion Customer mapping 都引用稳定 `customer_id`；
+display name 永远不是 identity evidence，同一 LID 指向两个 customer 时必须暂停归档并由
+`/customer-identity` 人工处理。完整规则见 [`CUSTOMER_IDENTITY.md`](CUSTOMER_IDENTITY.md)。
+
 ### SQLite 启动与安全状态
 
 SQLite 启动顺序固定为：确认数据库文件 → `quick_check`／foreign key 检查 →
@@ -332,6 +348,9 @@ SQLite 启动顺序固定为：确认数据库文件 → `quick_check`／foreign
 Migration 304 使用独立的 default dry-run maintenance，并同时检查 run JSON 与
 `campaign_runs` ledger；任一活动／发送中 Campaign 都会阻止 apply。
 
+Migration 305 同样是独立 default dry-run maintenance，要求 304 已应用；它还会在建立
+`(connection_key, external_message_id)` 唯一索引前检查历史重复，并在 apply 前建立 backup。
+
 `metadata.database_id` 是数据库稳定身份，重启或重复 initialize 不得重建。Settings
 显示 database ID、最后健康检查、最后备份、WAL 和索引状态。任何 migration、checksum、
 `quick_check`、foreign key 或必要索引失败都会进入 safe mode；诊断与备份仍可使用，
@@ -341,14 +360,20 @@ Migration 304 使用独立的 default dry-run maintenance，并同时检查 run 
 `messages` 的业务幂等键由 connection scope 与 Evolution external message id 组成，
 相同 provider message id 出现在不同 sender connection 时必须保存为两份不同证据。
 
+Tracker 以 Evolution webhook 作为实时消息入口。每个新的 Tracker session ready 后，
+Server 会触发一次 24 小时、最多 3 页的 bounded catch-up，把监听器离线期间的缺口按
+相同 message id 幂等补进 SQLite；它不轮询、不发送，也不取代 Settings 中可人工启动的
+完整 History Sync。catch-up 失败只记录明确的 System Log，不得令实时 Tracker 下线。
+
 私人联系人名单与 Telegram Filter、STOP／Suppression 是三个不同规则：
 
 - Telegram Filter 只关闭 Telegram 通知，Tracker 与 Notion 行为不变。
 - 私人联系人仍保留本机消息证据，但不进入 ChatRoom、Sales Brain、STOP 判断或
   Notion 客户回复同步。
-- 一般 Flow Campaign 仍只由 STOP／Suppression 阻止；把朋友加入私人联系人不会
-  删除历史对话或加入全局 STOP。Refresh Campaign 例外：它会把私人联系人当成
-  本批 eligibility 排除项，避免旧客重联误发给朋友／家人。
+- 一般 Flow Campaign 由统一 Send Eligibility 的 identity、STOP、reply、snooze、
+  appointment／booking、membership、duplicate、connection 与 schedule 规则决定；
+  把朋友加入私人联系人不会删除历史对话或加入全局 STOP。Refresh Campaign 额外把
+  私人联系人当成本批排除项，避免旧客重联误发给朋友／家人。
 
 ChatRoom／Customer Desk 的人工 Quick Remark 属于操作员即时决定，不等待
 Campaign 收尾：先写 SQLite，再把相同的 Status、Sequence、Next Action 与
@@ -385,6 +410,45 @@ OPEN sender 与全局 suppression 检查；Notion 失败不得回滚已经建立
 活动 Campaign、STOP、私人联系人、无效号码和已有 Lead 来源，确认后才可归入 Others。
 
 ## 8. 状态与失败原则
+
+### Sales Stage 与 Follow-up（Migration 307）
+
+销售状态的唯一规则位于 `domain/sales-pipeline.mjs`，由
+`lib/sales-pipeline-service.mjs` 编排，SQLite 写入集中在
+`lib/sales-pipeline-repository.mjs`。`project_leads.sales_stage` 与 `temperature`
+是两个不同维度；导入号码和首次发送不会自动建立 `sales_opportunities`。
+
+`jobs/sales-followup-job.mjs` 每五分钟只从 SQLite evidence 幂等建立或调整
+`customer_follow_up_tasks`，不会自动联系客户。Stage 回退必须说明原因、Lost 必须有
+Lost Reason、Won 不由一般编辑流程重新打开。所有 profile、stage、task 与 commission
+改变写入 append-only `sales_activities`。完整规则见 [`SALES_PIPELINE.md`](SALES_PIPELINE.md)。
+
+### 统一发送许可（Migration 306）
+
+所有 WhatsApp 发送入口最终必须调用 `lib/send-eligibility-service.mjs`。纯规则只存在于
+`domain/send-eligibility.mjs`；SQLite snapshot、审计、STOP propagation 和原子 customer
+lock 由 `lib/send-eligibility-repository.mjs` 负责。固定顺序是 check → acquire lock →
+re-check → record dispatch → provider → record result → release。Route、UI、Notion View、
+Queue 和 AI draft 只可请求或显示决定，不可覆盖决定。
+
+Customer lock 以稳定 `customer_id` 为优先 key；TEST fixture 或尚未建立 CRM row 的安全预览
+使用不可逆 recipient digest。不同 sender／campaign 仍不能同时取得同一 customer 的 lock。
+完整状态、入口与 migration 说明见 [`SEND_ELIGIBILITY.md`](SEND_ELIGIBILITY.md)。
+
+### Action Dashboard 与 AI Auditor（Migration 309）
+
+Dashboard 的 operational metrics 只读取 SQLite。候选判断、隐私清理、cache key 与 AI output
+validation 位于 `domain/lead-auditor.mjs`；业务编排与资料存取分别位于专属 service／repository。
+AI 是 advisory sidecar，没有发送、STOP、stage、booking、merge、delete 或 commission mutation
+dependency。页面使用共享 `assets/mamba.css`；migration 308／309 未完成时只显示
+`Setup Required`，不得把缺表或 SQL 错误原文显示给操作员。完整边界见
+[`DASHBOARD_AI_AUDITOR.md`](DASHBOARD_AI_AUDITOR.md)。
+
+### AI Change Tracking（Migration 310）
+
+AI change Task Contract 与 step／file／test／event evidence 存在 SQLite。纯 scope／protected path／
+review rules 位于 `domain/ai-change-tracking.mjs`；Git inspector 只读 branch、HEAD 与 diff，不执行
+commit、merge 或 rollback。完整流程见 [`AI_CHANGE_TRACKING.md`](AI_CHANGE_TRACKING.md)。
 
 - 所有外部写入必须可重试或明确标记不可重试。
 - Sync 使用稳定 idempotency key。

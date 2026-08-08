@@ -39,6 +39,25 @@ assert.equal(safe.started.length, 1, "tracker-only mode must not start Sales Bra
 assert.ok(!safe.started[0].includes("--no-webhook"), "tracker must own the webhook when Brain is disabled");
 safe.manager.stopManaged();
 
+const readyEvents = [];
+let trackerStartedAt = "2026-08-08T11:00:00.000Z";
+const catchUpManager = createReplyServiceManager({
+  rootDir: "/tmp/mamba-test",
+  probe: async (url) => url.includes("8798"),
+  trackerInfoProbe: async () => ({ ok: true, service: "reply-tracker", startedAt: trackerStartedAt }),
+  onTrackerReady: async (details) => { readyEvents.push(details); },
+  onLog: () => {},
+  downConfirmDelayMs: 0,
+  brainEnabled: false,
+});
+await catchUpManager.ensureStarted();
+await catchUpManager.ensureStarted();
+assert.equal(readyEvents.length, 1, "the same Tracker session must trigger catch-up only once");
+trackerStartedAt = "2026-08-08T12:00:00.000Z";
+await catchUpManager.ensureStarted();
+assert.equal(readyEvents.length, 2, "a new Tracker session must trigger a new bounded catch-up");
+catchUpManager.stopManaged();
+
 const live = harness({ brainEnabled: true });
 const liveStatus = await live.manager.ensureStarted();
 assert.deepEqual({ tracker: liveStatus.tracker, brain: liveStatus.brain }, { tracker: true, brain: true });

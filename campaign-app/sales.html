@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mamba Sales Pipeline</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07110f;--panel:#0d1b18;--line:#203a34;--text:#edf8f4;--muted:#8eaaa1;--green:#45d99c;--amber:#f2b84b;--red:#ff6b73}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#07110f,#0b151b);color:var(--text);font:14px Inter,system-ui,sans-serif}.wrap{max-width:1450px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center}.top h1{margin:0;font-size:27px}.sub{color:var(--muted);margin-top:5px}.tabs{display:flex;gap:8px;margin:22px 0}.tabs button,.btn{border:1px solid var(--line);background:#10221e;color:var(--text);padding:9px 13px;border-radius:9px;cursor:pointer}.tabs button.active,.btn.primary{background:var(--green);color:#052018;border-color:var(--green);font-weight:700}.cards{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px}.card,.panel{background:rgba(13,27,24,.94);border:1px solid var(--line);border-radius:13px}.card{padding:15px}.card span{display:block;color:var(--muted);font-size:12px}.card b{display:block;font-size:25px;margin-top:8px}.panel{padding:17px;margin-top:14px}.toolbar{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:12px}input,select,textarea{background:#081411;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px;width:100%}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #173029;padding:10px 8px}th{color:var(--muted);font-size:11px;text-transform:uppercase}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#15342b;color:#8df0c5;font-size:11px}.late{color:var(--red)}.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}.form{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.form label{color:var(--muted);font-size:12px}.form label span{display:block;margin-bottom:5px}.wide{grid-column:1/-1}.timeline{max-height:520px;overflow:auto}.event{padding:11px 0;border-bottom:1px solid #173029}.event small{color:var(--muted)}.hidden{display:none!important}.empty{color:var(--muted);padding:20px;text-align:center}.status{color:var(--muted);min-height:20px}@media(max-width:950px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.form{grid-template-columns:1fr}.wrap{padding:18px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div class="top"><div><h1>Sales Pipeline</h1><div class="sub">One stage, one next action, one auditable follow-up queue.</div></div><button class="btn" id="refresh">Refresh tasks</button></div>
+  <div class="tabs"><button data-view="today" class="active">Today</button><button data-view="customers">Customers</button></div>
+  <div id="status" class="status"></div>
+
+  <section id="todayView">
+    <div class="cards" id="cards"></div>
+    <div class="panel"><h3>Priority queue</h3><div id="taskList"></div></div>
+  </section>
+
+  <section id="customersView" class="hidden">
+    <div class="panel">
+      <div class="toolbar"><input id="search" placeholder="Search name, phone or project" style="max-width:320px"><select id="stageFilter" style="max-width:190px"><option value="">All stages</option></select><select id="tempFilter" style="max-width:160px"><option value="">All temperatures</option><option>HOT</option><option>WARM</option><option>COLD</option><option>NURTURE</option><option>STOP</option></select><button class="btn" id="find">Search</button></div>
+      <div id="leadList"></div>
+    </div>
+    <div id="detail" class="grid hidden">
+      <div class="panel"><h3 id="customerTitle">Customer</h3><div class="form" id="leadForm"></div><div class="toolbar" style="margin-top:14px"><button class="btn primary" id="saveLead">Save profile</button><button class="btn" id="promote">Create opportunity</button></div><h3>Commission</h3><div id="commissionSummary" class="sub" style="margin-bottom:10px"></div><div class="form" id="commissionForm"></div><button class="btn" id="saveCommission" style="margin-top:12px">Update commission</button></div>
+      <div class="panel"><h3>Activity timeline</h3><div id="timeline" class="timeline"></div></div>
+    </div>
+  </section>
+</main>
+<script src="/assets/mamba-shell.js"></script>
+<script>
+const $=id=>document.getElementById(id), stages=["NEW","CONTACTED","REPLIED","QUALIFIED","WARM","APPOINTMENT","VIEWED","LOAN_PROCESSING","BOOKING","SPA_SIGNED","WON","LOST"];
+let selected=null;
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=v=>v?new Date(v).toLocaleString("en-MY",{timeZone:"Asia/Kuala_Lumpur"}):"-";
+async function api(url,options={}){const r=await fetch(url,{headers:{"content-type":"application/json"},...options});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||"Request failed");return d}
+function note(message,error=false){$("status").textContent=message;$("status").style.color=error?"var(--red)":"var(--muted)"}
+stages.forEach(s=>$("stageFilter").insertAdjacentHTML("beforeend",`<option>${s}</option>`));
+document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-view]").forEach(x=>x.classList.toggle("active",x===b));$("todayView").classList.toggle("hidden",b.dataset.view!=="today");$("customersView").classList.toggle("hidden",b.dataset.view!=="customers");if(b.dataset.view==="customers")loadLeads()});
+async function loadToday(){try{note("Refreshing Today queue…");const d=await api("/api/sales/today");const labels={waitingForReply:"Waiting for Reply",dueToday:"Due Today",overdue:"Overdue",warmOver7Days:"Warm > 7 Days",appointmentConfirmation:"Appointment Confirmation",bookingSpaAction:"Booking / SPA"};$("cards").innerHTML=Object.entries(labels).map(([k,l])=>`<div class="card"><span>${l}</span><b>${d.counts[k]||0}</b></div>`).join("");const all=[...new Map(Object.values(d.buckets).flat().map(t=>[t.taskId,t])).values()].sort((a,b)=>(b.priorityScore||0)-(a.priorityScore||0));$("taskList").innerHTML=all.length?`<table><thead><tr><th>Priority</th><th>Customer</th><th>Task</th><th>Due</th><th>Next action</th><th></th></tr></thead><tbody>${all.map(t=>`<tr><td><span class="pill">${esc(t.priority)} · ${t.priorityScore}</span></td><td>${esc(t.customerName)}<br><small>${esc(t.projectCode)}</small></td><td>${esc(t.taskType)}<br><small>${esc(t.reason)}</small></td><td class="${new Date(t.dueAt)<new Date()?"late":""}">${fmt(t.dueAt)}</td><td>${esc(t.nextAction)}</td><td><button class="btn" data-complete="${esc(t.taskId)}">Complete</button></td></tr>`).join("")}</tbody></table>`:`<div class="empty">No open follow-up tasks.</div>`;document.querySelectorAll("[data-complete]").forEach(b=>b.onclick=()=>completeTask(b.dataset.complete));note(`Generated ${fmt(d.generatedAt)}`)}catch(e){note(e.message,true)}}
+async function completeTask(taskId){const outcome=prompt("Record the task outcome:");if(!outcome)return;try{await api("/api/sales/tasks/complete",{method:"POST",body:JSON.stringify({taskId,outcome})});await loadToday()}catch(e){note(e.message,true)}}
+async function loadLeads(){try{const p=new URLSearchParams({q:$("search").value,stage:$("stageFilter").value,temperature:$("tempFilter").value});const d=await api(`/api/sales/leads?${p}`);$("leadList").innerHTML=d.leads.length?`<table><thead><tr><th>Customer</th><th>Project</th><th>Stage</th><th>Temperature</th><th>Next action</th><th>Follow-up</th><th>Tasks</th></tr></thead><tbody>${d.leads.map(l=>`<tr data-lead="${esc(l.projectLeadKey)}" style="cursor:pointer"><td>${esc(l.name)}<br><small>${esc(l.phone)}</small></td><td>${esc(l.projectCode)}</td><td><span class="pill">${esc(l.salesStage)}</span></td><td>${esc(l.temperature)}</td><td>${esc(l.nextAction||"-")}</td><td>${fmt(l.nextFollowUpAt)}</td><td>${l.openTaskCount}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">No project leads found.</div>`;document.querySelectorAll("[data-lead]").forEach(r=>r.onclick=()=>loadDetail(r.dataset.lead))}catch(e){note(e.message,true)}}
+const field=(label,key,value,type="text",options=[])=>`<label><span>${label}</span>${type==="select"?`<select data-field="${key}">${options.map(x=>`<option ${x===value?"selected":""}>${x}</option>`).join("")}</select>`:`<input data-field="${key}" type="${type}" value="${esc(value??"")}">`}</label>`;
+async function loadDetail(key){
+  try{
+    const d=await api(`/api/sales/customer?projectLeadKey=${encodeURIComponent(key)}`);
+    selected=d.lead;
+    $("detail").classList.remove("hidden");
+    $("customerTitle").textContent=`${selected.name||selected.customerName||selected.phone} · ${selected.projectCode}`;
+    $("leadForm").innerHTML=
+      field("Stage","salesStage",selected.salesStage,"select",stages)+
+      field("Temperature","temperature",selected.temperature,"select",["HOT","WARM","COLD","NURTURE","STOP"])+
+      field("Assigned Agent","assignedAgent",selected.assignedAgent)+
+      field("Next Action","nextAction",selected.nextAction)+
+      field("Next Follow-up","nextFollowUpAt",selected.nextFollowUpAt?selected.nextFollowUpAt.slice(0,16):"","datetime-local")+
+      field("Appointment At","appointmentAt",selected.appointmentAt?selected.appointmentAt.slice(0,16):"","datetime-local")+
+      field("Viewing Completed","viewingCompletedAt",selected.viewingCompletedAt?selected.viewingCompletedAt.slice(0,16):"","datetime-local")+
+      field("Loan Updated","loanUpdatedAt",selected.loanUpdatedAt?selected.loanUpdatedAt.slice(0,16):"","datetime-local")+
+      field("Buying Purpose","buyingPurpose",selected.buyingPurpose)+
+      field("Budget Min","budgetMin",selected.budgetMin,"number")+
+      field("Budget Max","budgetMax",selected.budgetMax,"number")+
+      field("Preferred Area","preferredArea",selected.preferredArea)+
+      field("Property Type","preferredPropertyType",selected.preferredPropertyType)+
+      field("Rooms","roomRequirement",selected.roomRequirement)+
+      field("Tenure","tenurePreference",selected.tenurePreference)+
+      field("Transport","transportRequirement",selected.transportRequirement)+
+      field("Timeline","buyingTimeline",selected.buyingTimeline)+
+      field("Decision Maker","decisionMaker",selected.decisionMaker)+
+      field("Loan Readiness","loanReadiness",selected.loanReadiness)+
+      field("Current Property","currentPropertyOwnership",selected.currentPropertyOwnership)+
+      field("Main Objection","mainObjection",selected.mainObjection)+
+      field("Lost Reason","lostReason",selected.lostReason);
+    const money=value=>Number(value||0).toLocaleString("en-MY",{style:"currency",currency:"MYR"});
+    $("commissionSummary").textContent=`Gross ${money(selected.grossCommission)} · Expected ${money(selected.expectedCommission)} · Actual ${money(selected.actualCommission)}`;
+    $("commissionForm").innerHTML=
+      field("Property Value","propertyValue",selected.propertyValue,"number")+
+      field("Commission Rate %","commissionRatePercent",selected.commissionRatePercent,"number")+
+      field("Team Split %","teamSplitPercent",selected.teamSplitPercent??100,"number")+
+      field("Probability %","probabilityPercent",selected.probabilityPercent??10,"number")+
+      field("Actual Commission","actualCommission",selected.actualCommission,"number")+
+      field("Expected Payment Date","expectedPaymentDate",selected.expectedPaymentDate?selected.expectedPaymentDate.slice(0,10):"","date")+
+      field("Paid At","paidAt",selected.paidAt?selected.paidAt.slice(0,16):"","datetime-local")+
+      field("Status","commissionStatus",selected.commissionStatus||"EXPECTED","select",["NOT_EXPECTED","EXPECTED","INVOICED","PARTIAL","PAID","CANCELLED"]);
+    $("timeline").innerHTML=d.activities.length
+      ?d.activities.map(a=>`<div class="event"><b>${esc(a.activityType)}</b><div>${esc(a.summary)}</div><small>${fmt(a.occurredAt)} · ${esc(a.actorType)} ${esc(a.actorId)}</small></div>`).join("")
+      :`<div class="empty">No activity yet.</div>`;
+  }catch(e){note(e.message,true)}
+}
+$("saveLead").onclick=async()=>{if(!selected)return;const fields=Object.fromEntries([...document.querySelectorAll("#leadForm [data-field]")].map(el=>[el.dataset.field,el.value]));const stageChanged=fields.salesStage!==selected.salesStage,tempStop=fields.temperature==="STOP"&&selected.temperature!=="STOP";let reason="";if(stageChanged||tempStop)reason=prompt(tempStop?"Reason for global STOP / Do Not Contact:":"Reason for stage change:")||"";fields.allowBackward=stageChanged&&stages.indexOf(fields.salesStage)<stages.indexOf(selected.salesStage)&&Boolean(reason);try{await api("/api/sales/lead",{method:"POST",body:JSON.stringify({projectLeadKey:selected.projectLeadKey,phone:selected.phone,customerId:selected.customerId,projectCode:selected.projectCode,fields,reason})});await loadDetail(selected.projectLeadKey);await loadLeads();note("Sales profile saved.")}catch(e){note(e.message,true)}};
+$("promote").onclick=async()=>{if(!selected)return;try{await api("/api/sales/opportunity",{method:"POST",body:JSON.stringify({projectLeadKey:selected.projectLeadKey,trigger:"MANUAL_PROMOTION"})});await loadDetail(selected.projectLeadKey);note("Opportunity is active.")}catch(e){note(e.message,true)}};
+$("saveCommission").onclick=async()=>{if(!selected)return;const values=Object.fromEntries([...document.querySelectorAll("#commissionForm [data-field]")].map(el=>[el.dataset.field,el.value]));try{await api("/api/sales/commission",{method:"POST",body:JSON.stringify({projectLeadKey:selected.projectLeadKey,...values})});await loadDetail(selected.projectLeadKey);note("Commission calculation saved.")}catch(e){note(e.message,true)}};
+$("find").onclick=loadLeads;$("search").onkeydown=e=>{if(e.key==="Enter")loadLeads()};$("refresh").onclick=async()=>{try{await api("/api/sales/tasks/refresh",{method:"POST",body:"{}"});await loadToday()}catch(e){note(e.message,true)}};loadToday();
+</script>
+</body>
+</html>

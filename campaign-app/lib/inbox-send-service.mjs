@@ -87,8 +87,23 @@ function parseImageInput(dataUrl) {
   return { base64, mime, ext };
 }
 
-export function createInboxSendService({ api, dataDir, conversationLog, simulate = false } = {}) {
+export function createInboxSendService({ api, dataDir, conversationLog, sendEligibility, simulate = false } = {}) {
   const mediaDir = path.join(dataDir, "inbox-media");
+
+  async function guardedManualSend({ instanceName, number, requestedAction = "MANUAL_INBOX_REPLY" }, operation) {
+    if (!sendEligibility) {
+      const error = new Error("Send Eligibility service 尚未载入；人工发送已安全停止。");
+      error.code = "SEND_ELIGIBILITY_UNAVAILABLE";
+      throw error;
+    }
+    return sendEligibility.withSendLock({
+      recipient: { phone: number },
+      campaign: { campaignId: "manual-inbox", runId: `manual:${Date.now()}`, mode: "LIVE" },
+      connection: { instanceName },
+      requestedAction,
+      jobId: `manual:${number}:${Date.now()}`,
+    }, operation);
+  }
 
   async function prepareContact({ instance, phone, name = "" }) {
     const instanceName = clean(instance);
@@ -116,23 +131,25 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     if (!number) throw badRequest("缺少客户电话。");
     if (!body) throw badRequest("讯息是空的。");
 
-    let messageId = "";
-    let apiStatus = "";
-    if (simulate) {
-      console.log(`[inbox:simulate] ${instanceName} -> ${number}: ${body}`);
-    } else {
-      const result = await api(`/message/sendText/${encodeURIComponent(instanceName)}`, {
-        method: "POST",
-        body: JSON.stringify({ number, text: body, delay: 800 }),
-      });
-      messageId = result?.key?.id ?? "";
-      apiStatus = result?.status ?? "";
-    }
-    await conversationLog?.recordOutbound({
-      phone: number, text: body, instanceName, messageId,
-      apiStatus, source: "manual", flowTopic: "manual_reply",
-    }, { requireExisting: true }).catch((error) => console.log(`[inbox] 对话纪录写入失败(讯息已发出) ${number}: ${error.message}`));
-    return { sent: true, messageId };
+    return guardedManualSend({ instanceName, number }, async () => {
+      let messageId = "";
+      let apiStatus = "";
+      if (simulate) {
+        console.log(`[inbox:simulate] ${instanceName} -> ${number}: ${body}`);
+      } else {
+        const result = await api(`/message/sendText/${encodeURIComponent(instanceName)}`, {
+          method: "POST",
+          body: JSON.stringify({ number, text: body, delay: 800 }),
+        });
+        messageId = result?.key?.id ?? "";
+        apiStatus = result?.status ?? "";
+      }
+      await conversationLog?.recordOutbound({
+        phone: number, text: body, instanceName, messageId,
+        apiStatus, source: "manual", flowTopic: "manual_reply",
+      }, { requireExisting: true }).catch((error) => console.log(`[inbox] 对话纪录写入失败(讯息已发出) ${number}: ${error.message}`));
+      return { sent: true, messageId };
+    });
   }
 
   // 手动发照片给客户（可带 caption）。图存本机一份，讯息记 outbound。
@@ -149,28 +166,30 @@ export function createInboxSendService({ api, dataDir, conversationLog, simulate
     const fileName = `out_${number}_${Date.now()}.${ext}`;
     await fs.writeFile(path.join(mediaDir, fileName), Buffer.from(base64, "base64"));
 
-    let messageId = "";
-    let apiStatus = "";
-    if (simulate) {
-      console.log(`[inbox:simulate] ${instanceName} -> ${number}: [image ${ext}] ${clean(caption)}`);
-    } else {
-      const result = await api(`/message/sendMedia/${encodeURIComponent(instanceName)}`, {
-        method: "POST",
-        body: JSON.stringify({
-          number, mediatype: "image", mimetype: mime,
-          caption: clean(caption), media: base64, fileName, delay: 1200,
-        }),
-        timeoutMs: 45000,
-      });
-      messageId = result?.key?.id ?? "";
-      apiStatus = result?.status ?? "";
-    }
-    await conversationLog?.recordOutbound({
-      phone: number, text: clean(caption) || "[已发送图片]", instanceName, messageId,
-      apiStatus, source: "manual", flowTopic: "manual_image",
-      mediaKind: "image", mediaFileName: fileName, mime,
-    }, { requireExisting: true }).catch((error) => console.log(`[inbox] 图片纪录写入失败(已发出) ${number}: ${error.message}`));
-    return { sent: true, messageId, fileName };
+    return guardedManualSend({ instanceName, number }, async () => {
+      let messageId = "";
+      let apiStatus = "";
+      if (simulate) {
+        console.log(`[inbox:simulate] ${instanceName} -> ${number}: [image ${ext}] ${clean(caption)}`);
+      } else {
+        const result = await api(`/message/sendMedia/${encodeURIComponent(instanceName)}`, {
+          method: "POST",
+          body: JSON.stringify({
+            number, mediatype: "image", mimetype: mime,
+            caption: clean(caption), media: base64, fileName, delay: 1200,
+          }),
+          timeoutMs: 45000,
+        });
+        messageId = result?.key?.id ?? "";
+        apiStatus = result?.status ?? "";
+      }
+      await conversationLog?.recordOutbound({
+        phone: number, text: clean(caption) || "[已发送图片]", instanceName, messageId,
+        apiStatus, source: "manual", flowTopic: "manual_image",
+        mediaKind: "image", mediaFileName: fileName, mime,
+      }, { requireExisting: true }).catch((error) => console.log(`[inbox] 图片纪录写入失败(已发出) ${number}: ${error.message}`));
+      return { sent: true, messageId, fileName };
+    });
   }
 
   async function cachedMedia(number, messageId) {

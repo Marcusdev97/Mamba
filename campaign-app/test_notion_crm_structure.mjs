@@ -5,11 +5,11 @@ import { approvedHumanFields, stableCrmId } from "./domain/notion-crm-sync.mjs";
 import { createNotionCrmProvisioningService } from "./lib/notion-crm-provisioning-service.mjs";
 
 const manifest = crmSchemaManifest();
-assert.equal(manifest.version, 1);
+assert.equal(manifest.version, 2);
 assert.equal(
   crypto.createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
-  "9b4efec167d4fa9b83c8f88f7c060f5510b5f9ea0f13a0bc736957e9020faa95",
-  "Notion CRM v1 property names/types/ownership are frozen; bump schema version for intentional changes",
+  "b6885e0fd699524644ce4f992c3a96448b9b352551f4054b859f40e0bc71da35",
+  "Notion CRM v2 property names/types/ownership are frozen; bump schema version for intentional changes",
 );
 assert.equal(Object.keys(manifest.databases).length, 8);
 assert.equal(new Set(Object.values(manifest.databases).map((item) => item.title)).size, 8);
@@ -24,8 +24,8 @@ for (const denied of manifest.privacyDenylist) {
     .map((name) => name.toLowerCase().replaceAll(" ", "_"));
   assert.equal(normalizedNames.includes(denied), false, `${denied} must not be copied to Notion CRM`);
 }
-assert.equal(stableCrmId("CUS", "contact-key"), stableCrmId("CUS", "contact-key"));
-assert.notEqual(stableCrmId("CUS", "contact-key"), stableCrmId("CUS", "other-contact"));
+assert.equal(stableCrmId("PLEAD", "project:contact-key"), stableCrmId("PLEAD", "project:contact-key"));
+assert.notEqual(stableCrmId("PLEAD", "project:contact-key"), stableCrmId("PLEAD", "project:other-contact"));
 assert.deepEqual(approvedHumanFields("customers", {
   "Display Name": "Approved",
   "Primary Phone": "not-human-owned",
@@ -93,7 +93,7 @@ await assert.rejects(
 
 const applied = await provisioner.apply({
   parentPageId: "a".repeat(32),
-  confirmation: "CREATE_NOTION_CRM_V1",
+  confirmation: "CREATE_NOTION_CRM_V2",
 });
 assert.deepEqual(applied.summary, { ready: 8, create: 0, update: 0, conflict: 0 });
 assert.equal(fake.calls.filter((call) => call.method === "POST" && call.pathname === "/databases").length, 8);
@@ -116,7 +116,7 @@ for (const [logicalKey, definition] of Object.entries(NOTION_CRM_DATABASES)) {
 }
 
 savedConfig.crm.viewsRequireManualSetup = false;
-await provisioner.apply({ parentPageId: "a".repeat(32), confirmation: "CREATE_NOTION_CRM_V1" });
+await provisioner.apply({ parentPageId: "a".repeat(32), confirmation: "CREATE_NOTION_CRM_V2" });
 assert.equal(fake.calls.filter((call) => call.method === "POST" && call.pathname === "/databases").length, 8, "Second apply must not duplicate databases");
 assert.equal(savedConfig.crm.viewsRequireManualSetup, false, "Verified views must remain complete on a repeated apply");
 
@@ -135,8 +135,8 @@ const conflictProvisioner = createNotionCrmProvisioningService({
 const conflictPlan = await conflictProvisioner.dryRun();
 assert.equal(conflictPlan.summary.conflict, 1);
 await assert.rejects(
-  conflictProvisioner.apply({ parentPageId: "a".repeat(32), confirmation: "CREATE_NOTION_CRM_V1" }),
+  conflictProvisioner.apply({ parentPageId: "a".repeat(32), confirmation: "CREATE_NOTION_CRM_V2" }),
   (error) => error.code === "NOTION_CRM_SCHEMA_CONFLICT",
 );
 
-console.log("✅ Notion CRM v1 schema, relations, privacy and provisioning tests passed");
+console.log("✅ Notion CRM v2 schema, relations, privacy and provisioning tests passed");

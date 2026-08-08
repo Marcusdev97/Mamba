@@ -2,10 +2,12 @@ import { createRouter, json, notFound } from "../lib/http.mjs";
 import { registerBotRulesRoutes } from "../routes/bot-rules.routes.mjs";
 import { registerBrainLearningRoutes } from "../routes/brain-learning.routes.mjs";
 import { registerCampaignRoutes } from "../routes/campaign.routes.mjs";
+import { registerCampaignModelRoutes } from "../routes/campaign-model.routes.mjs";
 import { registerCampaignSafetyRoutes } from "../routes/campaign-safety.routes.mjs";
 import { registerConversationsRoutes } from "../routes/conversations.routes.mjs";
 import { registerInboxRoutes } from "../routes/inbox.routes.mjs";
 import { registerControlCenterRoutes } from "../routes/control-center.routes.mjs";
+import { registerCustomerIdentityRoutes } from "../routes/customer-identity.routes.mjs";
 import { registerDailyCampaignRoutes } from "../routes/daily-campaign.routes.mjs";
 import { registerFollowUpRoutes } from "../routes/follow-up.routes.mjs";
 import { registerGoldenConversationRoutes } from "../routes/golden-conversations.routes.mjs";
@@ -20,10 +22,14 @@ import { registerProjectBrainRoutes } from "../routes/project-brain.routes.mjs";
 import { registerRemoteMambaRoutes } from "../routes/remote-mamba.routes.mjs";
 import { registerRefreshCampaignRoutes } from "../routes/refresh-campaign.routes.mjs";
 import { registerSettingsRoutes } from "../routes/settings.routes.mjs";
+import { registerSendEligibilityRoutes } from "../routes/send-eligibility.routes.mjs";
+import { registerSalesPipelineRoutes } from "../routes/sales-pipeline.routes.mjs";
 import { registerStaticRoutes } from "../routes/static.routes.mjs";
 import { registerSystemLogsRoutes } from "../routes/system-logs.routes.mjs";
 import { registerTemplatesRoutes } from "../routes/templates.routes.mjs";
 import { registerTeamViewRoutes } from "../routes/team-view.routes.mjs";
+import { registerDashboardAiAuditorRoutes } from "../routes/dashboard-ai-auditor.routes.mjs";
+import { registerAiChangeTrackingRoutes } from "../routes/ai-change-tracking.routes.mjs";
 
 export function createApp(runtime) {
   const router = createRouter(runtime);
@@ -34,6 +40,11 @@ export function createApp(runtime) {
   registerRemoteMambaRoutes(router);
   registerTeamViewRoutes(router);
   registerControlCenterRoutes(router);
+  registerCustomerIdentityRoutes(router);
+  registerSendEligibilityRoutes(router);
+  registerSalesPipelineRoutes(router);
+  registerDashboardAiAuditorRoutes(router);
+  registerAiChangeTrackingRoutes(router);
   registerDailyCampaignRoutes(router);
   registerInstancesRoutes(router);
   registerImportRoutes(router);
@@ -43,6 +54,7 @@ export function createApp(runtime) {
   registerBrainLearningRoutes(router);
   registerKnowledgeRoutes(router);
   registerCampaignRoutes(router);
+  registerCampaignModelRoutes(router);
   registerCampaignSafetyRoutes(router);
   registerRefreshCampaignRoutes(router);
   registerNextFlowRoutes(router);

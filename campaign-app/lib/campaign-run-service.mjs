@@ -26,7 +26,27 @@ export function createCampaignRunService({
   flowStateAfter,
   classifyFlowAdvanceState = () => "MISMATCH",
   execFileFn = execFile,
+  campaignModel = null,
 }) {
+  async function projectCampaignModel(state, job, flowLabel, occurredAt) {
+    if (!campaignModel) return;
+    try {
+      await campaignModel.recordLegacyCheckpoint({ runId: state.runId, projectCode: state.projectId || state.campaignId, phone: job.lead?.phone, flowLabel, occurredAt });
+    } catch (error) {
+      // The confirmed send and SQLite checkpoint are authoritative. Campaign
+      // modeling is reconcilable and must never turn that send into a retry.
+      runnerSafeLog(state, job, error);
+    }
+  }
+
+  function runnerSafeLog(state, job, error) {
+    const preview = cleanError(error);
+    console.log(`[campaign-model] projection failed run=${state?.runId || ""} job=${job?.id || ""}: ${preview}`);
+  }
+
+  function cleanError(error) {
+    return String(error?.message || error || "unknown error").replace(/[\r\n]+/g, " ").slice(0, 300);
+  }
   function klDateAfter(iso, days) {
     if (!Number.isFinite(Number(days))) return null;
     const date = new Date(iso || Date.now());
@@ -116,6 +136,7 @@ export function createCampaignRunService({
       error.code = "LOCAL_REFRESH_CHECKPOINT_INCOMPLETE";
       throw error;
     }
+    await projectCampaignModel(state, job, "Refresh - Reconnect", latestSentAt(job) || job.part1?.sentAt || new Date().toISOString());
     job.localCheckpoint = {
       status: "SUCCEEDED",
       flowLabel: "Refresh - Reconnect",
@@ -191,6 +212,7 @@ export function createCampaignRunService({
       error.code = "LOCAL_CUSTOMER_CHECKPOINT_INCOMPLETE";
       throw error;
     }
+    await projectCampaignModel(state, job, flow.label, sentAt);
     job.localCheckpoint = {
       status: "SUCCEEDED",
       flowLabel: flow.label,

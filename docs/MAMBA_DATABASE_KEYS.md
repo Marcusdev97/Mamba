@@ -1,6 +1,10 @@
 # Mamba Database Primary Key / Unique Key Map
 
-Updated: 2026-07-17
+Updated: 2026-08-08
+
+> Migration 305 supersedes phone-as-global-identity. `customers.customer_id` is the stable
+> person key; phone, JID, LID and legacy `contact_key` are aliases in `customer_identities`.
+> The older phone-key tables below remain compatibility and project-import structures.
 
 This document defines the stable keys for the full Mamba system. Notion page IDs are internal IDs; they are useful for code, but the business system should still keep readable key fields so humans and imports can deduplicate safely.
 
@@ -11,9 +15,10 @@ This document defines the stable keys for the full Mamba system. Notion page IDs
 | Primary display field | The Notion title field humans see. It does not guarantee uniqueness. |
 | Unique Key | The field or formula we use to prevent duplicate rows. |
 | Foreign Key | A value used to connect one database to another. |
-| Phone format | Always normalized digits only, e.g. `601133698121`. |
+| Phone format | Always normalized digits only, e.g. `60100000001`. |
+| Customer key | Stable `customers.customer_id`; never derived again from a mutable alias or display name. |
 | Project code | Use stable lower snake code internally, e.g. `gen_starz`, `binastra`. Display name can remain `Gen Starz`. |
-| Sender key | Use `device_key::normalized_phone`, e.g. `cici_macbook_pro::601133698121`. `wa_01` is only a local Evolution instance name. |
+| Sender key | Use `device_key::normalized_phone`, e.g. `office_mac::60100000001`. `wa_01` is only a local Evolution instance name. |
 | Device key | Use a stable computer/worker key, e.g. `cici_macbook_pro`, `office_pc_01`. |
 | Lock key | Use short-lived send locks to stop two PCs sending the same lead at the same time. |
 
@@ -128,14 +133,14 @@ This is the main customer state table.
 | Field | Role | Example |
 | --- | --- | --- |
 | `Name` | Primary display | `Marcus Chin` |
-| `Phone` | Global contact key | `601133698121` |
+| `Phone` | Global contact key | `60100000001` |
 | `Project` | Project FK | `Gen Starz` |
-| `Contact Key` | Recommended formula/text | `601133698121` |
-| `Project Lead Key` | Recommended unique key | `gen_starz:601133698121` |
+| `Contact Key` | Recommended formula/text | `60100000001` |
+| `Project Lead Key` | Recommended unique key | `sample_project:60100000001` |
 | `Sender Instance` | Legacy/current sender FK | `wa_01` |
-| `Assigned Sender Key` | Preferred sender FK | `cici_macbook_pro::601133698121` |
-| `Last Sender Key` | Actual last sender FK | `cici_macbook_pro::601133698121` |
-| `Last Sender Phone` | Actual sender phone | `601133698121` |
+| `Assigned Sender Key` | Preferred sender FK | `office_mac::60100000001` |
+| `Last Sender Key` | Actual last sender FK | `office_mac::60100000001` |
+| `Last Sender Phone` | Actual sender phone | `60100000001` |
 | `Last Sent By Device` | Device FK | `cici_macbook_pro` |
 | `Campaign Run` | Run FK | relation to Campaign Runs |
 | `Campaign Run ID` | Run FK text | `run_20260710_131500_gen_starz_flow01` |
@@ -175,9 +180,9 @@ Best fields to add in Notion:
 | --- | --- | --- |
 | `Contact Key` | Formula or Text | normalized `Phone` |
 | `Project Lead Key` | Formula or Text | `project_code + ":" + Phone` |
-| `Assigned Sender Key` | Select or Text | `cici_macbook_pro::601133698121` |
-| `Last Sender Key` | Select or Text | `cici_macbook_pro::601133698121` |
-| `Last Sender Phone` | Phone or Text | `601133698121` |
+| `Assigned Sender Key` | Select or Text | `office_mac::60100000001` |
+| `Last Sender Key` | Select or Text | `office_mac::60100000001` |
+| `Last Sender Phone` | Phone or Text | `60100000001` |
 | `Last Sent By Device` | Text or Select | `cici_macbook_pro` |
 | `Campaign Run ID` | Text | `run_20260710_131500_gen_starz_flow01` |
 | `Send Lock` | Checkbox | true while sending |
@@ -426,9 +431,9 @@ This currently lives in Evolution / Settings, not a Notion database.
 
 | Field | Role | Example |
 | --- | --- | --- |
-| `Connection Key` | Primary unique key | `cici_macbook_pro::601133698121` |
+| `Connection Key` | Primary unique key | `office_mac::60100000001` |
 | `Instance Name` | Local Evolution route/display | `wa_01` |
-| `WhatsApp Number` | Display / owner number | `+601133698121` |
+| `WhatsApp Number` | Display / owner number | `+60100000001` |
 | `Owner` | Human owner | `Marcus` |
 | `Team` | Team / branch | `Sales Team A` |
 | `Device Key` | PC/worker using it | `cici_macbook_pro` |
@@ -450,7 +455,7 @@ Recommended registry:
 
 | Connection Key | Instance Name | WhatsApp Number | Owner | Device Key | Status |
 | --- | --- | --- | --- | --- | --- |
-| `cici_macbook_pro::601133698121` | `wa_01` | `601133698121` | `Marcus` | `cici_macbook_pro` | `OPEN` |
+| `office_mac::60100000001` | `wa_01` | `60100000001` | `Sample Owner` | `office_mac` | `OPEN` |
 | `office_pc_01::60123456789` | `wa_01` | `60123456789` | `Sales 2` | `office_pc_01` | `OPEN` |
 
 If the same WhatsApp account is linked on a second computer later, it gets a second device-scoped connection row, but it must not create a new customer/contact identity.

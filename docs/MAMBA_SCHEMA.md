@@ -1,7 +1,7 @@
 # MAMBA 数据库表结构(SQLite)—— Systematic Schema
 
 > **配套文件**:`docs/mamba-schema.sql`(可直接运行的建表脚本)
-> **日期**:2026-07-17 · **Schema 版本**:v3
+> **日期**:2026-08-08 · **Schema 版本**:v3 base + migration 308
 > **原则来源**:`docs/MAMBA_ARCHITECTURE_ADR.md`(本地优先)+ `docs/MAMBA_DATABASE_KEYS.md`(键规则)
 
 这份文档回答"我的数据库要怎么写":把你现在 Notion 里的每个库,系统化地映射成一套干净的 SQLite 表。
@@ -10,12 +10,16 @@
 
 ## 0. 三条设计铁律
 
-1. **双键策略**(最重要的决定):
-   - `contact_key = 归一化电话` —— 回答"这是谁"。**STOP / 退订 / 对话历史**都按它走。
+1. **Customer Identity + Project Lead 策略**(migration 305):
+   - `customers.customer_id` —— 稳定回答"这是谁"；phone、JID、LID、旧 `contact_key` 都是 aliases。
+   - `contact_key = 归一化电话` —— v3 compatibility key；STOP 与旧 import 仍可按它查询。
    - `project_lead_key = project_code:phone` —— 回答"这个人在哪个盘"。**flow 序列状态**(下一轮、到期日)按它走。
    - 一个人可以同时在 Binastra 和 Gen Starz,互不覆盖。
 2. **路由只用稳定 key**:`project_code`(gen_starz)、`device_key`(cici_macbook_pro)、`connection_key = device_key::真实号码`。`wa_01` 只是本机 Evolution instance 名,两台电脑可以重复,**永远不当跨电脑唯一键**。
 3. **Notion 里驱动业务的字段全部提升为一等列**(`next_flow`、`follow_up_due`、`stop_flag`、`reply_count`…),不再塞进 `payload_json`。`payload_json` 只留"其它不常查的原始字段",做同步兜底。
+4. **Send Eligibility 只有一个来源**（migration 306）：`send_eligibility_decisions` 解释每次 allow／block，`send_eligibility_locks` 防止不同 sender 同时发送同一 customer；308 前的 `campaign_memberships` 会迁入正式 `campaign_members`。
+5. **Sales Pipeline 只有一个状态来源**（migration 307）：`project_leads.sales_stage` 与 `temperature` 分离，`sales_opportunities` 只保存已产生购买意图的机会，`customer_follow_up_tasks` 是统一待办，`sales_activities` 是 append-only timeline。
+6. **Campaign 与 Run 分离**（migration 308）：`campaigns` 是计划，`campaign_steps` 是步骤，`campaign_members` 是客户生命周期，`campaign_runs` 是执行，`send_jobs` 是最小发送，`campaign_outcomes` 是归因事实。
 
 ---
 
@@ -31,7 +35,12 @@
 | Chat Room 人工来源 | `lead_origins` | `origin_key` | 客户类型、Project、负责 sender 与 Notion 同步状态 |
 | Campaign Templates | `templates` | `template_key` | 话术,多 Active = 变体轮换 |
 | Images | `images` | `asset_key` = image_name | 素材 + 云端 URL |
-| Campaign Runs | `campaign_runs` | `run_id` | 一次群发一行 |
+| Campaigns | `campaigns` | `campaign_id` | 一次计划，可有多个 Runs |
+| Campaign Steps | `campaign_steps` | `campaign_step_id` | Flow／人工动作顺序 |
+| Campaign Members | `campaign_members` | `campaign_member_id` | 每位客户在 Campaign 内的状态 |
+| Campaign Runs | `campaign_runs` | `run_id` | 一次 TEST／LIVE 执行 |
+| Send Jobs | `send_jobs` | `id` | 最小发送动作 |
+| Campaign Outcomes | `campaign_outcomes` | `outcome_id` / `idempotency_key` | Reply 到 Commission 的归因事实 |
 | Project Knowledge | `project_knowledge` | `fact_key` | AI 只引用 `verified=1` |
 | Golden Conversations | `golden_conversations` | `golden_key` | 成功对话样本 |
 | Objection Bank | `objection_bank` | `objection_key` | 异议解码 |
@@ -40,6 +49,9 @@
 | Devices(本地配置) | `devices` | `device_key` | 送锁 + 审计 |
 | Projects(projects.json) | `projects` | `project_code` | 项目 registry |
 | 对话历史(jsonl) | `conversations` + `messages` | id | 按"人"归档 |
+| Sales Opportunities | `sales_opportunities` | `opportunity_id` | 只有 qualified intent 才建立 |
+| Follow-up Tasks | `customer_follow_up_tasks` | `task_id` / `idempotency_key` | Today、overdue、appointment、loan、booking |
+| Sales Activity Timeline | `sales_activities` | `activity_id` / `idempotency_key` | 谁在何时改变了什么 |
 
 另有系统表:`sync_jobs`、`operations`、`ownership_changes`、`import_runs`、`system_logs`、`sync_worker_state`、`metadata`、`schema_migrations`。
 
@@ -71,6 +83,11 @@
 | Stop Flag | (在 `contacts.stop_flag`,人级别) | |
 | Priority / Follow Up At / Assigned Sales / Sales Notes | 同名列 | 人工跟进 |
 | Appointment Date/Time/Place/Status | `appointment_*` | 约看 |
+| Sales Stage / Temperature | `sales_stage` / `temperature` | 机会阶段与热度分开 |
+| Buying Purpose / Budget / Area / Type | migration 307 同名列 | 客户需求 |
+| Next Action / Next Follow-up At / Assigned Agent | migration 307 同名列 | 人工销售执行 |
+| Main Objection / Decision Maker / Loan Readiness | migration 307 同名列 | 成交阻力与准备度 |
+| Lost Reason | `lost_reason` | 进入 Lost 必填 |
 | 其它零散字段 | `payload_json` | 同步兜底 |
 
 **为什么 Stop Flag / Reply Count 放 `contacts` 不放 `project_leads`**:退订和回复是"这个人"的属性,跨所有项目生效。一个人退订了,他在所有盘都不该再收。放人级别表天然做到这点。
@@ -175,3 +192,10 @@ node campaign-app/migrate_v2_to_v3.mjs --db campaign-data/mamba.sqlite --out cam
 脚本会处理这些情况:同一号码跨多个项目 → 1 个 contact + 多个 project_lead;`stop_flag` / `reply_count` 从 payload 提升到 `contacts`;`next_flow` / `follow_up_due` 等从 payload 提升到列;同 (项目, 号码) 多行 → 保留 `updated_at` 最新的一行并把其余记入冲突报告;无效电话 / 孤儿消息 → 跳过并计数。报告写在 `<out 目录>/migration-reports/`。
 
 > 自动化迁移测试覆盖:同一号码跨两个项目 → 1 个 contact + 2 个 project_lead、STOP 聚合、对话消息、`device::phone` Sender Key、`quick_check`、外键检查，以及原库保持不动。测试文件:`campaign-app/test_migrate_v2_to_v3.mjs`。
+
+## 8. 增量业务 Schema（304–310）
+
+`docs/mamba-schema.sql` 仍是新库基础结构，不会偷偷包含尚未 apply 的生产 migration。运行库按顺序
+使用 304 SQLite↔Notion、305 Customer Identity、306 Send Eligibility、307 Sales Pipeline、
+308 Campaign Model、309 Dashboard AI Auditor、310 AI Change Tracking。每个 runtime service 只验证
+自己需要的版本与表；启动不会自动执行 migration。最新表与 apply 方法见对应 feature 文档。

@@ -1,6 +1,6 @@
 # Notion CRM v1
 
-> Schema version: 1 · Source of truth: `campaign-app/domain/notion-crm-schema.mjs`
+> Schema version: 2 · Product structure remains CRM v1 · Source of truth: `campaign-app/domain/notion-crm-schema.mjs`
 
 Notion is Mamba's online CRM and human tracking interface. SQLite remains the runtime
 source for messages, send jobs, recovery state, idempotency, sync cursors and immediate
@@ -80,7 +80,7 @@ the page ID, and an explicit confirmation token:
 node scripts/maintenance/provision-notion-crm.mjs \
   --apply \
   --parent-page-id <CRM_HUB_PAGE_ID> \
-  --confirm CREATE_NOTION_CRM_V1
+  --confirm CREATE_NOTION_CRM_V2
 ```
 
 The maintenance provisioner creates database schemas and relations but does not create

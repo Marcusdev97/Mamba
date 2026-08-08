@@ -20,9 +20,9 @@
 //                   lid。精确对上，不用猜文字
 //   outbound_match  我们自己发出去的 blast 文字 + 时间戳，跟本机发送纪录对得上 ——
 //                   本机纪录知道号码，于是反推出这个 lid 是谁
-//   profile_name    fetchProfile 拿到 lid 的显示名，跟名单里的名字唯一对上
+//   profile_name    旧版曾用显示名猜测；Customer Identity 禁止只凭名字自动合并
 //
-// 高可信度不会被低可信度盖掉，所以补回脚本可以重复跑。
+// 同一个 LID 出现两个号码时一律建立 conflict，不自动覆盖，所以补回脚本可以重复跑。
 
 import path from "node:path";
 import { createSqliteCli, sqlValue } from "./sqlite-cli.mjs";
@@ -30,12 +30,12 @@ import { RUNTIME_REQUIRED_COLUMNS } from "./v3-runtime-schema.mjs";
 
 const CACHE_TTL_MS = 30_000;
 
-// 数字越大越可信。同一个 lid 只有在「新来源不比旧来源差」时才覆盖。
+// 数字越大越可信；confidence 只描述证据，不授权自动解决冲突。
 export const LID_SOURCE_CONFIDENCE = {
   live: 100,
   message_id: 90,
   outbound_match: 80,
-  profile_name: 50,
+  profile_name: 30,
 };
 
 const DIGITS_RE = /\D/g;
@@ -52,6 +52,7 @@ export function createLidMapService({
   dataDir,
   sqliteBinary = "",
   clock = () => new Date(),
+  identityRepository = null,
 } = {}) {
   const databasePath = path.join(dataDir, "mamba.sqlite");
   let cliPromise = null;
@@ -100,6 +101,7 @@ export function createLidMapService({
       for (const row of await database.query("SELECT lid, phone, source, confidence FROM lid_map;")) {
         const lid = clean(row.lid);
         const phone = digits(row.phone);
+        if (clean(row.source) === "profile_name") continue;
         if (lid && phone) byLid.set(lid, { phone, source: clean(row.source), confidence: Number(row.confidence) || 0 });
       }
     } catch { /* 读不到就当空表，绝不因此挡住回复流程 */ }
@@ -133,16 +135,47 @@ export function createLidMapService({
     for (const entry of entries ?? []) {
       const lid = clean(entry?.lid);
       const phone = digits(entry?.phone);
-      if (!lid || !phone || seen.has(lid)) continue;
-      seen.add(lid);
+      const pairKey = `${lid}:${phone}`;
+      if (!lid || !phone || seen.has(pairKey)) continue;
+      seen.add(pairKey);
       rows.push({ lid, phone, evidence: clean(entry?.evidence ?? evidence) });
     }
-    if (!rows.length) return { learned: 0 };
+    if (!rows.length) return { learned: 0, conflicts: [] };
+    // A display name is presentation data, not an identity. Keeping this explicit
+    // prevents an old maintenance flag from silently re-enabling name-only merges.
+    if (source === "profile_name") {
+      return { learned: 0, ignored: rows.length, conflicts: [], reason: "NAME_ONLY_IDENTITY_FORBIDDEN" };
+    }
 
     await ensureSchema();
     const database = await cli();
     const nowIso = clock().toISOString();
-    const values = rows
+    const currentRows = await database.query(`SELECT lid,phone FROM lid_map WHERE lid IN (${rows.map((row) => sqlValue(row.lid)).join(",")});`);
+    const currentByLid = new Map(currentRows.map((row) => [clean(row.lid), digits(row.phone)]));
+    const acceptedPhoneByLid = new Map(currentByLid);
+    const safeRows = [];
+    const conflicts = [];
+    for (const row of rows) {
+      const existingPhone = acceptedPhoneByLid.get(row.lid);
+      if (existingPhone && existingPhone !== row.phone) {
+        const conflict = identityRepository
+          ? await identityRepository.observeLidPhone({ lid: row.lid, phone: row.phone, source, observedAt: nowIso })
+          : null;
+        conflicts.push({ lid: row.lid, existingPhone, candidatePhone: row.phone, conflictId: conflict?.conflict?.conflictId || "" });
+        continue;
+      }
+      if (identityRepository) {
+        const observation = await identityRepository.observeLidPhone({ lid: row.lid, phone: row.phone, source, observedAt: nowIso });
+        if (observation?.conflict) {
+          conflicts.push({ lid: row.lid, existingPhone: existingPhone || "", candidatePhone: row.phone, conflictId: observation.conflict.conflictId });
+          continue;
+        }
+      }
+      safeRows.push(row);
+      acceptedPhoneByLid.set(row.lid, row.phone);
+    }
+    if (!safeRows.length) return { learned: 0, conflicts };
+    const values = safeRows
       .map((row) => `(${[
         sqlValue(row.lid),
         sqlValue(row.phone),
@@ -164,19 +197,19 @@ ON CONFLICT(lid) DO UPDATE SET
   confidence = excluded.confidence,
   evidence = excluded.evidence,
   updated_at = excluded.updated_at
-WHERE excluded.confidence >= lid_map.confidence;`);
+WHERE excluded.phone = lid_map.phone AND excluded.confidence >= lid_map.confidence;`);
 
     // 就地更新快取，不要整个清掉。清掉的话 resolveCached() 会在下一次 load()
     // 之前一路回传 null —— 补回历史时每页都会 learn 一次，等于全程查无对照，
     // 8000 条讯息只认得出 8 条。踩过一次了。
     if (cache.loadedAt) {
-      for (const row of rows) {
+      for (const row of safeRows) {
         const existing = cache.byLid.get(row.lid);
-        if (existing && existing.confidence > confidence) continue;
+        if (existing && (existing.phone !== row.phone || existing.confidence > confidence)) continue;
         cache.byLid.set(row.lid, { phone: row.phone, source, confidence });
       }
     }
-    return { learned: rows.length };
+    return { learned: safeRows.length, conflicts };
   }
 
   async function stats() {

@@ -37,6 +37,10 @@ async function defaultAnyServiceProbe(url, timeoutMs = 900) {
   }
 }
 
+async function defaultTrackerInfoProbe(url) {
+  return await fetchJson(`${url}api/status`, 1500);
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -51,6 +55,8 @@ export function createReplyServiceManager({
   downConfirmDelayMs = 500,
   brainEnabled = false,
   trackerPorts = TRACKER_PORTS,
+  trackerInfoProbe = defaultTrackerInfoProbe,
+  onTrackerReady = null,
 } = {}) {
   // Tests and callers may provide the legacy boolean probe. In production the
   // tracker probe validates /api/status and the explicit service marker.
@@ -70,6 +76,7 @@ export function createReplyServiceManager({
   };
   let ensurePromise = null;
   let monitor = null;
+  let lastTrackerSessionKey = "";
 
   function persistStructuredIssue(label, line) {
     const prefix = "[reply-tracker:issue] ";
@@ -195,8 +202,34 @@ export function createReplyServiceManager({
   async function trackerDetails() {
     const current = await status();
     if (!current.trackerUrl) return null;
-    const data = await fetchJson(`${current.trackerUrl}api/status`, 1500);
+    const data = await trackerInfoProbe(current.trackerUrl);
     return data?.ok === true && data?.service === "reply-tracker" ? data : null;
+  }
+
+  async function notifyTrackerReady(current) {
+    if (!current.trackerUrl || typeof onTrackerReady !== "function") return;
+    const details = await trackerInfoProbe(current.trackerUrl).catch(() => null);
+    const sessionKey = `${current.trackerUrl}|${String(details?.startedAt || "unknown")}`;
+    if (sessionKey === lastTrackerSessionKey) return;
+    lastTrackerSessionKey = sessionKey;
+
+    // Catch-up failures must never take the realtime webhook listener down.
+    // The operator can still run the full idempotent History Sync manually.
+    Promise.resolve(onTrackerReady({
+      trackerUrl: current.trackerUrl,
+      trackerPort: current.trackerPort,
+      startedAt: details?.startedAt || null,
+    })).catch((error) => {
+      const message = `Tracker 已启动，但近期消息补齐失败：${error.message}`;
+      onLog(`[reply-tracker:error] ${message}`);
+      systemLogs?.write({
+        level: "error",
+        area: "reply_tracker",
+        event: "TRACKER_CATCH_UP_FAILED",
+        message: `${message} 影响：Tracker 离线期间的消息可能暂未进入 ChatRoom。处理：在 Settings 手动运行 History Sync。`,
+        context: { trackerUrl: current.trackerUrl, startedAt: details?.startedAt || null },
+      }).catch(() => {});
+    });
   }
 
   async function confirmedTrackerOffline() {
@@ -244,7 +277,9 @@ export function createReplyServiceManager({
         if (!(await anyServiceProbe(BRAIN_URL))) onLog("[sales-brain:error] did not become ready on port 8799. Telegram reply alerts are offline.");
       }
     }
-    return status();
+    current = await status();
+    await notifyTrackerReady(current);
+    return current;
   }
 
   function ensureStarted() {

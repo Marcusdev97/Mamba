@@ -10,12 +10,26 @@ import { createApp } from "./app/createApp.mjs";
 import { loadRuntime } from "./app/loadRuntime.mjs";
 import { createBlastCacheService } from "./lib/blast-cache-service.mjs";
 import { createCampaignRunService } from "./lib/campaign-run-service.mjs";
+import { createCampaignModelRepository } from "./lib/campaign-model-repository.mjs";
+import { createCampaignModelService } from "./lib/campaign-model-service.mjs";
 import { createCampaignQueueService } from "./lib/campaign-queue-service.mjs";
 import { createCampaignRunnerRegistry } from "./lib/campaign-runner-registry.mjs";
 import { createConversationLogService } from "./lib/conversation-log-service.mjs";
+import { createCustomerIdentityRepository } from "./lib/customer-identity-repository.mjs";
 import { createLidMapService } from "./lib/lid-map-service.mjs";
 import { createInstanceIdentityService } from "./lib/instance-identity-service.mjs";
 import { createInboxSendService } from "./lib/inbox-send-service.mjs";
+import { createSendEligibilityRepository } from "./lib/send-eligibility-repository.mjs";
+import { createSendEligibilityService } from "./lib/send-eligibility-service.mjs";
+import { createSalesPipelineRepository } from "./lib/sales-pipeline-repository.mjs";
+import { createSalesPipelineService } from "./lib/sales-pipeline-service.mjs";
+import { createSalesFollowUpJob } from "./jobs/sales-followup-job.mjs";
+import { createDashboardAiAuditorRepository } from "./lib/dashboard-ai-auditor-repository.mjs";
+import { createDashboardAiAuditorService } from "./lib/dashboard-ai-auditor-service.mjs";
+import { createStructuredJsonClient } from "./integrations/ai/structured-json-client.mjs";
+import { createAiChangeTrackingRepository } from "./lib/ai-change-tracking-repository.mjs";
+import { createAiChangeTrackingService } from "./lib/ai-change-tracking-service.mjs";
+import { createGitInspectorService } from "./lib/git-inspector-service.mjs";
 import { createManualLeadSetupService } from "./lib/manual-lead-setup-service.mjs";
 import { createEvolutionHistorySync } from "./lib/evolution-history-sync.mjs";
 import { createCampaignModeService } from "./lib/campaign-mode-service.mjs";
@@ -147,14 +161,71 @@ const goldenLedgerService = createGoldenConversationLedgerService({
   dataDir: paths.dataDir,
 });
 const systemLogService = createSystemLogService({ rootDir: paths.rootDir });
-const conversationLog = createConversationLogService({ dataDir: paths.dataDir });
+const customerIdentity = createCustomerIdentityRepository({ dataDir: paths.dataDir });
+const campaignModelRepository = createCampaignModelRepository({ dataDir: paths.dataDir });
+const campaignModelService = createCampaignModelService({ repository: campaignModelRepository });
+const salesPipelineRepository = createSalesPipelineRepository({ dataDir: paths.dataDir });
+const salesPipelineService = createSalesPipelineService({
+  repository: salesPipelineRepository,
+  outcomeObserver: {
+    onStageChanged: ({ lead, sourceEvent, occurredAt }) => campaignModelService.recordStageOutcome({ customerId: lead.customerId, projectLeadId: lead.projectLeadKey, salesStage: lead.salesStage, sourceEvent, occurredAt }),
+    onCommissionUpdated: ({ lead, value, sourceEvent, occurredAt }) => campaignModelService.recordStageOutcome({ customerId: lead.customerId, projectLeadId: lead.projectLeadKey, salesStage: "WON", value, sourceEvent, occurredAt }),
+    onError: ({ operation, error }) => systemLogService.write({ level: "error", area: "campaign_model", event: "campaign_outcome_projection_failed", message: error.message, context: { operation, code: error.code || "CAMPAIGN_OUTCOME_PROJECTION_FAILED" } }),
+  },
+});
+const sendEligibilityRepository = createSendEligibilityRepository({ dataDir: paths.dataDir });
+const sendEligibilityService = createSendEligibilityService({
+  repository: sendEligibilityRepository,
+  activityObserver: {
+    onSendConfirmed: ({ options, result }) => salesPipelineService.recordOutbound({
+      customerId: options.recipient?.customerId,
+      phone: options.recipient?.phone,
+      projectCode: options.projectLead?.projectCode || options.campaign?.projectCode || options.campaign?.projectId,
+      sourceEvent: result?.messageId || options.jobId,
+      actorId: options.connection?.instanceName || "mamba",
+      occurredAt: result?.sentAt,
+    }).then(async (lead) => {
+      await campaignModelService.recordSendConfirmed({ runId: options.campaign?.runId, customerId: lead.customerId, projectLeadId: lead.projectLeadKey, occurredAt: result?.sentAt || new Date().toISOString() });
+      return lead;
+    }),
+    onMeaningfulReply: async ({ input, result }) => {
+      const lead = await salesPipelineService.recordInbound({
+        customerId: result?.customerId || input.customerId,
+        phone: input.phone,
+        projectCode: input.projectCode,
+        sourceEvent: input.idempotencyKey,
+        category: input.category,
+        occurredAt: input.occurredAt,
+      });
+      await campaignModelService.recordReply({ customerId: lead.customerId, projectLeadId: lead.projectLeadKey, sourceEvent: input.idempotencyKey, occurredAt: input.occurredAt });
+      return lead;
+    },
+    onError: ({ operation, error }) => systemLogService.write({
+      level: "error",
+      area: "sales_pipeline",
+      event: "sales_activity_projection_failed",
+      message: error.message,
+      context: { operation, code: error.code || "SALES_ACTIVITY_RECORD_FAILED" },
+    }),
+  },
+});
+const salesFollowUpJob = createSalesFollowUpJob({ salesPipeline: salesPipelineService, systemLogs: systemLogService });
+const dashboardAiAuditor = createDashboardAiAuditorService({
+  repository: createDashboardAiAuditorRepository({ dataDir: paths.dataDir }),
+  provider: createStructuredJsonClient({ env }),
+});
+const aiChangeTracking = createAiChangeTrackingService({
+  repository: createAiChangeTrackingRepository({ dataDir: paths.dataDir }),
+  gitInspector: createGitInspectorService({ rootDir: paths.rootDir }),
+});
+const conversationLog = createConversationLogService({ dataDir: paths.dataDir, identityRepository: customerIdentity });
 const campaignSafetyService = createCampaignSafetyService({
   dataDir: paths.dataDir,
   localDatabase: localDatabaseService,
   conversationLog,
   listInstances: deviceListInstances,
 });
-const lidMap = createLidMapService({ dataDir: paths.dataDir });
+const lidMap = createLidMapService({ dataDir: paths.dataDir, identityRepository: customerIdentity });
 const instanceIdentity = createInstanceIdentityService({ dataDir: paths.dataDir });
 const campaignModeService = createCampaignModeService({ dataDir: paths.dataDir });
 const campaignQueueService = createCampaignQueueService({ rootDir: paths.rootDir });
@@ -177,11 +248,13 @@ function setCurrentRunner(value, { latest = true } = {}) {
 function getCampaignRunner(runId = null) {
   return campaignRunnerRegistry.get(runId) || (!runId ? runner : null);
 }
+let trackerCatchUpHandler = null;
 const replyServiceManager = createReplyServiceManager({
   rootDir: paths.rootDir,
   onLog: (message) => console.log(message),
   systemLogs: systemLogService,
   brainEnabled,
+  onTrackerReady: (details) => trackerCatchUpHandler?.(details),
 });
 const conversationHistoryService = createConversationHistoryService({ rootDir: paths.rootDir });
 const blastCacheService = createBlastCacheService({
@@ -300,6 +373,7 @@ const conversationDispositionService = createConversationDispositionService({
   history: conversationHistoryService,
   systemLogs: systemLogService,
   addLocalStop,
+  propagateStop: (options) => sendEligibilityService.propagateStop(options),
   updateLocalDisposition: (options) => localDatabaseService.recordConversationDisposition(options),
 });
 const templateService = await createTemplateService({
@@ -341,6 +415,7 @@ const campaignRunService = createCampaignRunService({
   flowStateAfter,
   classifyFlowAdvanceState,
   deviceIdentity,
+  campaignModel: campaignModelService,
 });
 const {
   recordLocalFlowProgress,
@@ -697,7 +772,8 @@ const runtime = await loadRuntime({
     personalize,
     shortPause,
     openInstances: deviceOpenInstances,
-    createPreviewRunner: () => new CampaignRunner({ env, systemLogs: systemLogService, conversationLog }),
+    getTestLeads,
+    createPreviewRunner: () => new CampaignRunner({ env, systemLogs: systemLogService, conversationLog, sendEligibility: sendEligibilityService }),
     addProjectOption,
     setImageAlias,
   },
@@ -732,6 +808,7 @@ const runtime = await loadRuntime({
       config, env, systemLogs: systemLogService, conversationLog,
       customerCheckpoint: checkpointCompletedCustomer,
       transportPreflight: assertCampaignTransport,
+      sendEligibility: sendEligibilityService,
     }),
     restoreRunner: async ({ runId, projectId }) => {
       if (!/^run_[A-Za-z0-9_.-]+$/.test(String(runId || ""))) throw new Error("Queue runId 不合法。");
@@ -740,6 +817,7 @@ const runtime = await loadRuntime({
         config, env, systemLogs: systemLogService, conversationLog,
         customerCheckpoint: checkpointCompletedCustomer,
         transportPreflight: assertCampaignTransport,
+        sendEligibility: sendEligibilityService,
       });
       const expectedPath = path.join(paths.runsDir, `${runId}.json`);
       await restored.restore(expectedPath);
@@ -791,7 +869,27 @@ const runtime = await loadRuntime({
     recordLocalFlowProgress,
     readLocalLeadCache: () => localDatabaseService.readLeadCache(),
     setLocalLeadFlowState: (options) => localDatabaseService.setLeadFlowState(options),
-    recordLocalLeadReply: (options) => localDatabaseService.recordLeadReply(options),
+    recordLocalLeadReply: async (options) => {
+      const local = await localDatabaseService.recordLeadReply(options);
+      if (options?.reply?.stopFlag === true) {
+        await sendEligibilityService.propagateStop({
+          phone: options.phone,
+          source: "next_flow_reply_scan",
+          reasonCode: String(options.reply.route || "EXPLICIT_STOP"),
+          reason: options.text || "",
+          idempotencyKey: options.reply.messageId ? `reply-stop:${options.reply.messageId}` : "",
+        });
+      } else {
+        await sendEligibilityService.propagateReply({
+          phone: options.phone,
+          source: "next_flow_reply_scan",
+          category: options.reply?.route || "OTHER",
+          text: options.text || "",
+          idempotencyKey: options.reply?.messageId ? `reply:${options.reply.messageId}` : "",
+        });
+      }
+      return local;
+    },
     getProject,
     setLeadsCache: (value) => { leadsCache = value; },
     createLeadGroup: (options) => localDatabaseService.createLeadGroup(options),
@@ -808,6 +906,12 @@ const runtime = await loadRuntime({
 // WhatsApp 发送，只在晚上 22:00 或人工按「立即同步」时处理。
 runtime.campaignMode = campaignModeService;
 runtime.conversationLog = conversationLog;
+runtime.customerIdentity = customerIdentity;
+runtime.campaignModel = campaignModelService;
+runtime.sendEligibility = sendEligibilityService;
+runtime.salesPipeline = salesPipelineService;
+runtime.dashboardAiAuditor = dashboardAiAuditor;
+runtime.aiChangeTracking = aiChangeTracking;
 runtime.instanceIdentity = instanceIdentity;
 
 // 开机时把「现在连着的号码」跟它的 Evolution 标签钉在一起，
@@ -821,7 +925,7 @@ deviceListInstances()
     await instanceIdentity.linkConnections();
   })
   .catch((error) => console.log(`[instance-identity] 号码对照建立失败：${error.message}`));
-runtime.inboxSend = createInboxSendService({ api, dataDir: paths.dataDir, conversationLog });
+runtime.inboxSend = createInboxSendService({ api, dataDir: paths.dataDir, conversationLog, sendEligibility: sendEligibilityService });
 const manualLeadNotionSync = await createNotionSync({
   env,
   onLog: (message) => console.log(`[manual-lead] ${message}`),
@@ -835,10 +939,17 @@ runtime.inboxLeadSetup = createManualLeadSetupService({
 
 // 「一键同步 Evolution 历史」的背景任务。要几分钟，所以记状态让前端轮询进度。
 {
-  const historySync = createEvolutionHistorySync({ api, conversationLog, listInstances: deviceListInstances, lidMap });
+  const historySync = createEvolutionHistorySync({
+    api,
+    conversationLog,
+    listInstances: deviceListInstances,
+    lidMap,
+    identityRepository: customerIdentity,
+  });
   let job = { running: false, startedAt: null, finishedAt: null, progress: null, result: null, error: "" };
+  let catchUpJob = { running: false, reason: "", startedAt: null, finishedAt: null, progress: null, result: null, error: "" };
   runtime.historySync = {
-    state: () => ({ ...job }),
+    state: () => ({ ...job, catchUp: { ...catchUpJob } }),
     start() {
       if (job.running) return;
       job = { running: true, startedAt: new Date().toISOString(), finishedAt: null, progress: null, result: null, error: "" };
@@ -847,7 +958,26 @@ runtime.inboxLeadSetup = createManualLeadSetupService({
         .catch((error) => { job.error = error.message; })
         .finally(() => { job.running = false; job.finishedAt = new Date().toISOString(); });
     },
+    startRecent(reason = "tracker_ready") {
+      if (job.running || catchUpJob.running) return false;
+      catchUpJob = { running: true, reason, startedAt: new Date().toISOString(), finishedAt: null, progress: null, result: null, error: "" };
+      historySync.syncRecent({ onProgress: (progress) => { catchUpJob.progress = progress; } })
+        .then((result) => { catchUpJob.result = result; })
+        .catch(async (error) => {
+          catchUpJob.error = error.message;
+          await systemLogService.write({
+            level: "error",
+            area: "reply_tracker",
+            event: "TRACKER_CATCH_UP_FAILED",
+            message: "Tracker 已启动，但 bounded catch-up 未完成。影响：离线期间的消息可能暂未进入 ChatRoom。处理：在 Settings 手动运行 History Sync。",
+            context: { reason, error: error.message },
+          }).catch(() => {});
+        })
+        .finally(() => { catchUpJob.running = false; catchUpJob.finishedAt = new Date().toISOString(); });
+      return true;
+    },
   };
+  trackerCatchUpHandler = () => runtime.historySync.startRecent("tracker_ready");
 }
 runtime.notionOutbox = createNotionOutboxService({ dataDir: paths.dataDir });
 runtime.notionCrmSyncRepository = createNotionCrmSyncRepository({ dataDir: paths.dataDir });
@@ -1099,6 +1229,7 @@ server.listen(PORT, HOST, () => {
   dailyCampaignService.start();
   campaignTransportGuard.start();
   goldenLedgerService.start();
+  salesFollowUpJob.start();
   restoreActiveCampaign().catch((error) => console.log(`Campaign recovery failed: ${error.message}`));
   replyServiceManager.ensureStarted()
     .then((status) => console.log(
@@ -1118,6 +1249,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     campaignTransportGuard.stop();
     campaignAwakeService.stopAll();
     goldenLedgerService.stop();
+    salesFollowUpJob.stop();
     remoteMambaService.stop();
     server.close(() => process.exit(0));
   });
